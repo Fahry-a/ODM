@@ -24,8 +24,8 @@ import (
 // proving the cap is aggregate, not per-connection.
 func TestLimitRate_StableAggregate(t *testing.T) {
 	const chunk = 4 * 1024
-	const numChunks = 1024   // 4 MiB payload — small enough to keep the test fast, large enough that the limiter's ~1s initial burst amortizes into near-steady-state
-	const capStr = "1M"      // 1 MiB/s global cap
+	const numChunks = 1024 // 4 MiB payload — small enough to keep the test fast, large enough that the limiter's ~1s initial burst amortizes into near-steady-state
+	const capStr = "1M"    // 1 MiB/s global cap
 	capBps := int64(1 * 1024 * 1024)
 
 	// The global bucket's burst == 1s of cap (1 MiB here), so a 4 MiB transfer

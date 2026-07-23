@@ -17,10 +17,10 @@ import (
 // are admitted one-for-one as live slots become free. Each queued task inherits
 // the same per-file connection budget (Mode C: SF; Mode B: 1).
 type Scheduler struct {
-	plan    *Plan
-	maker   TaskMaker
-	slots   int // len(plan.Parallel)
-	prog    ProgressCB
+	plan  *Plan
+	maker TaskMaker
+	slots int // len(plan.Parallel)
+	prog  ProgressCB
 
 	// onComplete is fired once per task as it leaves the live set
 	// (handleComplete), carrying the task's final snapshot. The RPC Server wires
@@ -294,7 +294,7 @@ func (s *Scheduler) emitThrottled() {
 }
 
 // SucceededCount/FailedCount expose live tallies (used by getGlobalStat RPC).
-func (s *Scheduler) SucceededCount() int  { return int(atomic.LoadInt32(&s.succeeded)) }
-func (s *Scheduler) FailedCount() int     { return int(atomic.LoadInt32(&s.failed)) }
-func (s *Scheduler) LiveCount() int       { s.mu.Lock(); defer s.mu.Unlock(); return len(s.live) }
-func (s *Scheduler) QueuedCount() int     { s.mu.Lock(); defer s.mu.Unlock(); return len(s.queued) }
+func (s *Scheduler) SucceededCount() int { return int(atomic.LoadInt32(&s.succeeded)) }
+func (s *Scheduler) FailedCount() int    { return int(atomic.LoadInt32(&s.failed)) }
+func (s *Scheduler) LiveCount() int      { s.mu.Lock(); defer s.mu.Unlock(); return len(s.live) }
+func (s *Scheduler) QueuedCount() int    { s.mu.Lock(); defer s.mu.Unlock(); return len(s.queued) }

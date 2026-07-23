@@ -20,9 +20,9 @@ type Daemon struct {
 	pending []*scheduledTask // tasks added via AddURL waiting for a slot
 	started bool
 
-	stop    context.CancelFunc
-	done    chan struct{}
-	ondead  []func() // called once the scheduler has wound down (shutdown hooks)
+	stop   context.CancelFunc
+	done   chan struct{}
+	ondead []func() // called once the scheduler has wound down (shutdown hooks)
 }
 
 // NewDaemon builds a Daemon over an already-constructed Scheduler + Manager.

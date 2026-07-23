@@ -54,11 +54,11 @@ func (l Level) String() string {
 // Logger filters messages by level and writes to stderr (+ an optional mirror
 // file when --log is set). It is safe for concurrent use.
 type Logger struct {
-	mu    sync.Mutex
-	level Level
-	out   io.Writer // primary (stderr)
-	file  io.Writer // optional mirror (the --log file); nil ⇒ none
-	from  *log.Logger
+	mu      sync.Mutex
+	level   Level
+	out     io.Writer // primary (stderr)
+	file    io.Writer // optional mirror (the --log file); nil ⇒ none
+	from    *log.Logger
 	fileLog *log.Logger
 }
 
@@ -99,7 +99,7 @@ func (l *Logger) logf(lvl Level, format string, args ...any) {
 // Debugf / Infof / Warnf / Errorf are the level-tagged entry points.
 func (l *Logger) Debugf(format string, args ...any) { l.logf(LevelDebug, format, args...) }
 func (l *Logger) Infof(format string, args ...any)  { l.logf(LevelInfo, format, args...) }
-func (l *Logger) Warnf(format string, args ...any) { l.logf(LevelWarn, format, args...) }
+func (l *Logger) Warnf(format string, args ...any)  { l.logf(LevelWarn, format, args...) }
 func (l *Logger) Errorf(format string, args ...any) { l.logf(LevelError, format, args...) }
 
 // TaskLogFn adapts a Logger to the download.LogFn signature

@@ -9,18 +9,18 @@ package rpc
 
 // jsonRPCRequest is a JSON-RPC 2.0 request envelope.
 type jsonRPCRequest struct {
-	JSONRPC string        `json:"jsonrpc"`
-	Method  string         `json:"method"`
-	Params  []any `json:"params,omitempty"`
-	ID      any   `json:"id,omitempty"`
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  []any  `json:"params,omitempty"`
+	ID      any    `json:"id,omitempty"`
 }
 
 // jsonRPCResponse is a JSON-RPC 2.0 response (result XOR error).
 type jsonRPCResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Result  any `json:"result,omitempty"`
-	Error   *rpcError   `json:"error,omitempty"`
-	ID      any `json:"id"`
+	JSONRPC string    `json:"jsonrpc"`
+	Result  any       `json:"result,omitempty"`
+	Error   *rpcError `json:"error,omitempty"`
+	ID      any       `json:"id"`
 }
 
 // rpcError follows the JSON-RPC 2.0 error object.
@@ -41,6 +41,6 @@ const (
 
 // Event is a WebSocket notification pushed to subscribers (PRD §10.3).
 type Event struct {
-	Method string      `json:"method"`
-	Params any `json:"params"`
+	Method string `json:"method"`
+	Params any    `json:"params"`
 }
