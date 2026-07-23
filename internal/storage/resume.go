@@ -15,7 +15,7 @@ import (
 // indices already written. On a resume we re-queue only the missing chunks.
 type ControlFile struct {
 	URL       string  `json:"url"`
-	FinalURL  string  `json:"final_url"`     // post-redirect URL actually used
+	FinalURL  string  `json:"final_url"` // post-redirect URL actually used
 	TotalSize int64   `json:"total_size"`
 	ChunkSize int64   `json:"chunk_size"`
 	ETag      string  `json:"etag,omitempty"`

@@ -27,16 +27,16 @@ const Version = "odm/1.0.0"
 
 // Defaults mirrors the PRD §6.2 default column.
 const (
-	DefaultConnections   = 5
-	DefaultMaxConn       = 32
-	DefaultMaxRedirect   = 5
-	DefaultRetry         = 3
-	DefaultRetryWait     = 2
-	DefaultTimeout       = 30
-	DefaultRPCPort       = 6900
-	DefaultLogLevel      = "info"
-	DefaultConfigPath    = "/etc/odm/config.conf"
-	UserConfigRelPath    = "odm/config.conf" // under $XDG_CONFIG_HOME / ~/.config
+	DefaultConnections = 5
+	DefaultMaxConn     = 32
+	DefaultMaxRedirect = 5
+	DefaultRetry       = 3
+	DefaultRetryWait   = 2
+	DefaultTimeout     = 30
+	DefaultRPCPort     = 6900
+	DefaultLogLevel    = "info"
+	DefaultConfigPath  = "/etc/odm/config.conf"
+	UserConfigRelPath  = "odm/config.conf" // under $XDG_CONFIG_HOME / ~/.config
 )
 
 // UserConfigPath resolves ~/.config/odm/config.conf (following XDG_CONFIG_HOME).
@@ -53,21 +53,21 @@ func UserConfigPath() (string, error) {
 // are nil when unset so merge decisions stay explicit.
 type Options struct {
 	// Positional / derived.
-	URLs     []string // resolved from positional args + -i input file (post-merge)
-	OutFile  string   // --output/-o (single-file only); "" = derive from URL
-	Dir      string   // --dir/-d
-	InputFile string  // --input-file/-i (path to a URL list)
+	URLs      []string // resolved from positional args + -i input file (post-merge)
+	OutFile   string   // --output/-o (single-file only); "" = derive from URL
+	Dir       string   // --dir/-d
+	InputFile string   // --input-file/-i (path to a URL list)
 
 	// Balancer inputs (§5.1).
-	Connections   int  // -c
-	MaxConnection int  // --max-connections  (ceiling; >32 warned)
-	SplitFile     int  // --split-file/-sf  (0 = unset ⇒ Mode B)
+	Connections   int // -c
+	MaxConnection int // --max-connections  (ceiling; >32 warned)
+	SplitFile     int // --split-file/-sf  (0 = unset ⇒ Mode B)
 
 	// Retry / network.
-	MaxRedirect int    // --max-redirect
-	Retry       int    // --retry
-	RetryWait   int    // --retry-wait  (seconds)
-	Timeout     int    // --timeout      (seconds)
+	MaxRedirect int // --max-redirect
+	Retry       int // --retry
+	RetryWait   int // --retry-wait  (seconds)
+	Timeout     int // --timeout      (seconds)
 
 	// HTTP identity / headers.
 	UserAgent string   // --user-agent
@@ -77,14 +77,14 @@ type Options struct {
 
 	// TLS / integrity.
 	CheckCertificate bool   // --check-certificate
-	Checksum        string // --checksum "algo:hash"
-	LimitRate       string // --limit-rate "5M"/"500K"  ("" = unlimited)
-	ChunkSize       string // --chunk-size "4M"
+	Checksum         string // --checksum "algo:hash"
+	LimitRate        string // --limit-rate "5M"/"500K"  ("" = unlimited)
+	ChunkSize        string // --chunk-size "4M"
 
 	// Behaviour.
-	Yes       bool // --yes/-y
-	Quiet     bool // --quiet/-q
-	Continue  bool // --continue/-x  (resume via .odm control file)
+	Yes      bool // --yes/-y
+	Quiet    bool // --quiet/-q
+	Continue bool // --continue/-x  (resume via .odm control file)
 
 	// Paths / logging.
 	ConfigFile string // --config
@@ -131,7 +131,12 @@ func DefaultPtr() *Options {
 }
 
 // changedFlag records that the named CLI flag was explicitly provided.
-func (o *Options) changedFlag(name string) { if o.changed == nil { o.changed = map[string]bool{} }; o.changed[name] = true }
+func (o *Options) changedFlag(name string) {
+	if o.changed == nil {
+		o.changed = map[string]bool{}
+	}
+	o.changed[name] = true
+}
 
 // IsSet reports whether the named flag was explicitly set on the CLI.
 func (o *Options) IsSet(name string) bool { return o.changed != nil && o.changed[name] }

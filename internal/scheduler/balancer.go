@@ -30,20 +30,20 @@ type FileInput struct {
 // Allocation is the Balancer's decision for a single file: how many parallel
 // connections it gets, and whether it runs immediately or waits in the queue.
 type Allocation struct {
-	URL          string
-	Connections  int
+	URL           string
+	Connections   int
 	SupportsRange bool
-	Queued       bool // true → waits for a slot; false → runs right away
+	Queued        bool // true → waits for a slot; false → runs right away
 }
 
 // Plan is the complete output of the Balancer: the files that start in
 // parallel with their connection counts, the files that are queued, and any
 // validation warning/error text.
 type Plan struct {
-	Parallel []Allocation // running files, order matches distribution order
-	Queued   []Allocation // waiting files
-	MaxConnections int     // effective ceiling used
-	Warning  string        // non-fatal warning text (e.g. C above ceiling), "" if none
+	Parallel       []Allocation // running files, order matches distribution order
+	Queued         []Allocation // waiting files
+	MaxConnections int          // effective ceiling used
+	Warning        string       // non-fatal warning text (e.g. C above ceiling), "" if none
 }
 
 // BalancerError is returned for fatal validation failures (§5.5): C < 1, or
@@ -144,7 +144,7 @@ func modeB(C int, files []FileInput, max int) (parallel, queued []Allocation) {
 		a := Allocation{
 			URL: f.URL, Connections: 1,
 			SupportsRange: f.SupportsRange,
-			Queued:       i >= slot,
+			Queued:        i >= slot,
 		}
 		if i < slot {
 			parallel = append(parallel, a)
@@ -203,7 +203,7 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 		a := Allocation{
 			URL: files[i].URL, Connections: 1,
 			SupportsRange: files[i].SupportsRange,
-			Queued:       i >= parallelFiles,
+			Queued:        i >= parallelFiles,
 		}
 		if i < parallelFiles {
 			a.Connections = conns[i]

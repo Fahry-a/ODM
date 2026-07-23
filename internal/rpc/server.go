@@ -190,13 +190,13 @@ func (s *Server) dispatch(req jsonRPCRequest) jsonRPCResponse {
 		resp.Result = "OK"
 	case "odm.getGlobalStat":
 		resp.Result = map[string]any{
-			"active": len(s.daemon.TellActive()),
+			"active":  len(s.daemon.TellActive()),
 			"waiting": len(s.daemon.TellWaiting()),
 			"stopped": len(s.daemon.TellStopped()),
 		}
 	case "odm.getVersion":
 		resp.Result = map[string]any{
-			"version":     download.Version,
+			"version": download.Version,
 			"enabledFeatures": []string{"Multi-Connection", "Range-Download",
 				"Resume", "Batch", "Checksum", "RateLimit-Agent"},
 		}
@@ -384,18 +384,18 @@ func (s *Server) methodTellStatus(req *jsonRPCRequest, resp *jsonRPCResponse) js
 // easily).
 func dbSnapshot(v download.ProgressView) map[string]any {
 	return map[string]any{
-		"goid":        string(v.ID),
-		"url":         v.URL,
-		"finalUrl":    v.FinalURL,
-		"filename":    v.Filename,
-		"status":      v.State.String(),
-		"totalSize":   v.TotalSize,
-		"bytesDone":   v.BytesDone,
-		"speed":       v.Speed,
-		"connections": v.Connections,
-		"etaSeconds":  int(v.ETA.Seconds()),
-		"errors":      v.Errors,
-		"retries":     v.Retries,
+		"goid":         string(v.ID),
+		"url":          v.URL,
+		"finalUrl":     v.FinalURL,
+		"filename":     v.Filename,
+		"status":       v.State.String(),
+		"totalSize":    v.TotalSize,
+		"bytesDone":    v.BytesDone,
+		"speed":        v.Speed,
+		"connections":  v.Connections,
+		"etaSeconds":   int(v.ETA.Seconds()),
+		"errors":       v.Errors,
+		"retries":      v.Retries,
 		"singleStream": v.SingleStream,
 	}
 }

@@ -68,19 +68,19 @@ piece = odd#hash          # bare hash no space → preserved
 func TestApplyKnownKeys(t *testing.T) {
 	o := DefaultPtr()
 	kv := map[string]string{
-		"connections":     "12",
-		"max-connections": "64",
-		"split-file":      "4",
-		"dir":             "/d",
+		"connections":       "12",
+		"max-connections":   "64",
+		"split-file":        "4",
+		"dir":               "/d",
 		"check-certificate": "false",
-		"continue":        "false",
-		"quiet":           "true",
-		"limit-rate":      "1M",
-		"log-level":       "debug",
-		"rpc":             "true",
-		"rpc-listen-port": "9999",
-		"rpc-listen-all":  "true",
-		"rpc-secret":      "s3cr3t",
+		"continue":          "false",
+		"quiet":             "true",
+		"limit-rate":        "1M",
+		"log-level":         "debug",
+		"rpc":               "true",
+		"rpc-listen-port":   "9999",
+		"rpc-listen-all":    "true",
+		"rpc-secret":        "s3cr3t",
 	}
 	if err := o.Apply(kv); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -206,7 +206,7 @@ func TestApply_UserOverridesSystem(t *testing.T) {
 	sys := map[string]string{"connections": "4", "dir": "/sys"}
 	user := map[string]string{"connections": "20"}
 	o := DefaultPtr()
-	_ = o.Apply(sys) // system first
+	_ = o.Apply(sys)  // system first
 	_ = o.Apply(user) // user second
 	if o.Connections != 20 {
 		t.Fatalf("user must override system: got %d", o.Connections)
@@ -255,4 +255,3 @@ func TestCaptureChangedAndIsSet(t *testing.T) {
 		t.Fatalf("split-file (via -sf) should be marked changed")
 	}
 }
-

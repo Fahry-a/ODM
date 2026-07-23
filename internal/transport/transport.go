@@ -20,14 +20,14 @@ import (
 
 // ProbeResult is what the §5.2 probe decides about a URL.
 type ProbeResult struct {
-	FinalURL        string // URL after following redirects (up to maxRedirect)
-	SupportsRange   bool   // server accepts ranged GET (206)
-	TotalSize       int64  // file size in bytes; -1 if unknown (sizeless stream)
-	AcceptRanges    bool   // server advertised "Accept-Ranges: bytes"
-	ETag            string // optional, for resume validation
-	Filename        string // derived from URL/Content-Disposition (caller may refine)
-	StatusCode      int    // last response status used for the size decision
-	SingleStream    bool   // true → degrade to one plain sequential GET
+	FinalURL      string // URL after following redirects (up to maxRedirect)
+	SupportsRange bool   // server accepts ranged GET (206)
+	TotalSize     int64  // file size in bytes; -1 if unknown (sizeless stream)
+	AcceptRanges  bool   // server advertised "Accept-Ranges: bytes"
+	ETag          string // optional, for resume validation
+	Filename      string // derived from URL/Content-Disposition (caller may refine)
+	StatusCode    int    // last response status used for the size decision
+	SingleStream  bool   // true → degrade to one plain sequential GET
 }
 
 // ClientConfig maps the handful of Options that govern HTTP behaviour. Keeping
@@ -47,9 +47,9 @@ type ClientConfig struct {
 // NewClient. The underlying http.Client leaves Body handling to callers and is
 // reused across probes + chunk downloads (connection pooling).
 type Client struct {
-	HTTP     *http.Client
-	cfg      ClientConfig
-	baseHdr  http.Header // User-Agent, Referer, custom headers — applied to every request
+	HTTP    *http.Client
+	cfg     ClientConfig
+	baseHdr http.Header // User-Agent, Referer, custom headers — applied to every request
 }
 
 // NewClient builds an HTTP client honouring MaxRedirect, CheckCertificate and
@@ -326,7 +326,7 @@ func parseRangeTotal(cr string) int64 {
 // degeneration, §11.2).
 type RangeResult struct {
 	Resp          *http.Response
-	SupportsRange bool // 206?
+	SupportsRange bool  // 206?
 	Offset        int64 // byte offset the returned body corresponds to
 	TotalSize     int64
 }

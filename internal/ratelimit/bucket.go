@@ -26,8 +26,8 @@ import (
 // Limiter is the shared global rate limiter. A nil Limiter or one with lr==nil
 // means "unlimited": Acquire/Reader are cheap no-ops.
 type Limiter struct {
-	lr     *rate.Limiter // nil ⇒ unlimited
-	bytes  int64         // configured rate (bytes/sec), 0 = unlimited
+	lr    *rate.Limiter // nil ⇒ unlimited
+	bytes int64         // configured rate (bytes/sec), 0 = unlimited
 }
 
 // New builds a Limiter from a --limit-rate string ("5M", "500K", "0"/""/off =

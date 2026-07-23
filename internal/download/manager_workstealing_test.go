@@ -38,11 +38,11 @@ import (
 // scheduling/timing jitter on a loaded CI box cannot flip the verdict.
 func TestWorkStealing_BeatsStaticEqualSplit(t *testing.T) {
 	const (
-		chunk          = 16 * 1024 // per-chunk size (small → many chunks queue up)
-		numChunks      = 64        // total payload = 1 MiB across 64 chunks
-		S              = 4        // parallel workers/connections (also static-split parts)
-		slowCount      = 8         // last 8 chunks form the slow region (lives in one static slice)
-		perChunkDelay  = 120 * time.Millisecond
+		chunk         = 16 * 1024 // per-chunk size (small → many chunks queue up)
+		numChunks     = 64        // total payload = 1 MiB across 64 chunks
+		S             = 4         // parallel workers/connections (also static-split parts)
+		slowCount     = 8         // last 8 chunks form the slow region (lives in one static slice)
+		perChunkDelay = 120 * time.Millisecond
 	)
 
 	payload := make([]byte, int64(chunk)*numChunks)

@@ -345,4 +345,3 @@ func TestProgress_SinkFiresMidStream(t *testing.T) {
 		t.Fatalf("download didn't complete: maxBytes=%d want %d", gotMax, payloadSize)
 	}
 }
-
