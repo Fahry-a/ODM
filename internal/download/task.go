@@ -117,8 +117,8 @@ type LogFn = func(level string, format string, args ...any)
 // TaskOptions are the parts of *config.Options a Task needs. Decoupling the
 // engine from config keeps download tests buildable from scratch.
 type TaskOptions struct {
-	OutputName string // "" ⇒ derive from URL
-	Dir        string
+	OutputName  string // "" ⇒ derive from URL
+	Dir         string
 	Connections int
 	Retry       int
 	RetryWait   time.Duration
@@ -184,11 +184,11 @@ func NewTask(id TaskID, url string, opts TaskOptions, client *transport.Client, 
 		logf = func(level string, format string, args ...any) {}
 	}
 	return &Task{
-		id:    id,
-		url:   url,
-		opts:  opts,
+		id:     id,
+		url:    url,
+		opts:   opts,
 		client: client,
-		lim:   lim,
+		lim:    lim,
 		pauseC: make(chan struct{}, 1),
 		logf:   logf,
 	}
@@ -200,15 +200,15 @@ func (t *Task) ID() TaskID { return t.id }
 // Snapshot returns a ProgressView safe for UI/RPC use.
 func (t *Task) Snapshot() ProgressView {
 	v := ProgressView{
-		ID:           t.id,
-		URL:          t.url,
-		Filename:     t.filename(),
-		State:        TaskState(t.state.Load()),
-		BytesDone:    t.bytesDone.Load(),
-		Speed:        t.speed.Load(),
-		Connections:  int(t.conns.Load()),
-		Errors:       int(t.errors.Load()),
-		Retries:      int(t.retries.Load()),
+		ID:          t.id,
+		URL:         t.url,
+		Filename:    t.filename(),
+		State:       TaskState(t.state.Load()),
+		BytesDone:   t.bytesDone.Load(),
+		Speed:       t.speed.Load(),
+		Connections: int(t.conns.Load()),
+		Errors:      int(t.errors.Load()),
+		Retries:     int(t.retries.Load()),
 	}
 	if t.probe != nil {
 		v.FinalURL = t.probe.FinalURL
@@ -253,6 +253,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	pr, err := t.client.Probe(ctx, t.url)
 	if err != nil {
 		t.setState(StateError)
+		t.emitFinal(progressSink)
 		return fmt.Errorf("probe: %w", err)
 	}
 	t.probe = pr
@@ -288,6 +289,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	disk, err := storage.OpenForWrite(dir, outName, pr.TotalSize)
 	if err != nil {
 		t.setState(StateError)
+		t.emitFinal(progressSink)
 		return err
 	}
 	t.disk = disk
@@ -298,6 +300,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		// Already complete on disk (resume found everything done).
 		t.bytesDone.Store(pr.TotalSize)
 		t.setState(StateCompleted)
+		t.emitFinal(progressSink)
 		return t.finish()
 	}
 
@@ -319,9 +322,11 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 
 	if t.errors.Load() > 0 && t.bytesDone.Load() < t.totalOrDone() {
 		t.setState(StateError)
+		t.emitFinal(progressSink)
 		return fmt.Errorf("task failed: %d chunk errors, %d/%d bytes", t.errors.Load(), t.bytesDone.Load(), t.totalOrDone())
 	}
 	t.setState(StateCompleted)
+	t.emitFinal(progressSink)
 	return t.finish()
 }
 
@@ -532,6 +537,26 @@ func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 
 // getCurrent snapshots progress after a chunk.
 func (t *Task) getCurrent(_ Chunk) ProgressView { return t.Snapshot() }
+
+// emitFinal pushes one last snapshot carrying the terminal state (Completed
+// or Error) through the progressSink before Start returns. This is the root
+// cause fix for the §3.1 "Total: 0/0 / completed line vanishes" bug: the
+// scheduler's handleComplete deletes a finished task from its live map the
+// instant Start returns and never forwards the terminal snapshot on its own,
+// so without this final emit the last snapshot the UI cached is still Active
+// (or the task simply disappears). Firing here — while the task is still in
+// the scheduler's live map and before compl is signalled — guarantees a
+// frame with the real final state reaches the UI. The UI's Renderer also
+// retains the cached terminal state defensively (see internal/ui Frame's
+// vanish handling), so the two fixes are belt-and-suspenders. sink is nil on
+// the Manager.Run test path and the RPC single-task probe path; in that case
+// this call is a no-op.
+func (t *Task) emitFinal(sink func(ProgressView)) {
+	if sink == nil {
+		return
+	}
+	sink(t.Snapshot())
+}
 
 // estimateETA: bytes-left / speed.
 func (t *Task) estimateETA() time.Duration {
