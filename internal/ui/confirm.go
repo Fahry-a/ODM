@@ -10,24 +10,36 @@ import (
 )
 
 // ConfirmAsk reads a Y/n answer from stdin (used by the §9 prompt).
-// `in` and `out` are injected so the prompt is testable.
+// in and out are injected so the prompt is testable.
+//
+// On a typo ("sure", stray spaces, etc.) it re-prompts instead of erroring and
+// aborting the whole batch (bug §3.7): an empty answer or y/yes confirms, n/no
+// declines. End-of-file (Ctrl-D) with no answer at all is treated as a silent
+// cancel — (false, nil) — so a non-interactive stdin ending the stream never
+// surfaces a Go-level EOF as a raw error string. A genuine read error other
+// than EOF is still returned so a broken pipe propagates.
 func ConfirmAsk(in io.Reader, out io.Writer, prompt string) (bool, error) {
-	fmt.Fprint(out, prompt)
 	sc := bufio.NewScanner(in)
-	if !sc.Scan() {
-		if err := sc.Err(); err != nil {
-			return false, err
+	for {
+		fmt.Fprint(out, prompt)
+		if !sc.Scan() {
+			if err := sc.Err(); err != nil {
+				return false, err
+			}
+			// EOF reached with no more tokens: silent cancel rather than a raw
+			// io.EOF surfacing as "odm: EOF" to the user.
+			return false, nil
 		}
-		return false, io.EOF
+		switch strings.TrimSpace(strings.ToLower(sc.Text())) {
+		case "", "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		}
+		// Unrecognised: loop and re-ask. A short nudge so the re-prompt makes
+		// the expectation obvious without a noisy Go error.
+		fmt.Fprintln(out, "Please answer [Y/n] or press Ctrl-D to cancel.")
 	}
-	ans := strings.TrimSpace(strings.ToLower(sc.Text()))
-	switch ans {
-	case "", "y", "yes":
-		return true, nil
-	case "n", "no":
-		return false, nil
-	}
-	return false, fmt.Errorf("unrecognized answer %q", ans)
 }
 
 // ConfirmSingle renders the §9 single-file prompt and asks for confirmation.
