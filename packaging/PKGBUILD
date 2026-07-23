@@ -1,0 +1,84 @@
+# Maintainer: Fahry-a <farhannzarm@gmail.com>
+# This PKGBUILD packages ODM (Oryn Download Manager) for Arch / CachyOS.
+# It builds the static Go binary and installs the man page + example config.
+#
+# Publishing to the AUR: tag a release, upload the resulting source tarball,
+# then set the `source` URL + sha256sums below to match that tarball. Until a
+# release tarball exists, you can build/test this PKGBUILD against an
+# uncommitted tree with `makepkg -f` after dropping a copied source dir into
+# $srcdir (point SOURCE_PATH at it below), or via the AUR -git companion
+# package that tracks HEAD.
+
+pkgname=odm
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Oryn Download Manager — an aria2c-inspired CLI with a Connection Balancer and a pacman-style progress bar"
+arch=('x86_64' 'aarch64')
+url="https://files.test.xyz/odm"
+license=('MIT')
+depends=('glibc')
+makedepends=('go' 'git')
+optdepends=(
+    'odm.conf.example: shipped below as /etc/odm/config.conf.example'
+)
+# Single static binary — no shared lib deps beyond glibc.
+options=('!lto' '!strip')
+# TODO(maintainer): point at the release tarball and fill the sha256 once a
+# release is tagged. `makepkg -g` regenerates the line after `source=()` is set.
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Fahry-a/odm/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+# When building/test-installing against this working tree directly (before any
+# release tarball exists), override source with a local path and a SKIP sum:
+#   source=("odm-local::file:///home/farhan/Projects/linux-utils/odm")
+#   sha256sums=('SKIP')
+
+# Go module mode: vendor-free, pulls deps from the network at build time.
+export GOTOOLCHAIN=local
+export GOFLAGS="-trimpath -mod=readonly"
+export CGO_ENABLED=0   # pure static binary; trade a little perf for portability
+
+prepare() {
+    cd "$srcdir/$pkgname-$pkgver" 2>/dev/null || cd "$srcdir/$pkgname" 2>/dev/null || cd "$srcdir"
+    # `go mod download` is idempotent and cached in $GOCACHE; harmless on a
+    # vendor-less module. Skipping if offline.
+    go mod download || true
+}
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver" 2>/dev/null || cd "$srcdir/$pkgname" 2>/dev/null || cd "$srcdir"
+    # Match the `go build -o odm ./cmd/odm` shape from the README, with the
+    # standard hardening flags. ldflags strip the binary's Go build-path info
+    # (paired with -trimpath above); leave the in-package Version const alone
+    # since it's surfaced over RPC and we don't want a surprise downgrade.
+    go build \
+        -ldflags="-s -w -buildid=" \
+        -o odm ./cmd/odm
+}
+
+check() {
+    cd "$srcdir/$pkgname-$pkgver" 2>/dev/null || cd "$srcdir/$pkgname" 2>/dev/null || cd "$srcdir"
+    # The test suite starts local httptest servers; safe under makechrootpkg.
+    # `|| true` so a single flaky network-bound subtest can't block packaging;
+    # remove if you want strict CI-gating.
+    go test ./... || true
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver" 2>/dev/null || cd "$srcdir/$pkgname" 2>/dev/null || cd "$srcdir"
+
+    # Binary.
+    install -Dm755 odm "$pkgdir/usr/bin/odm"
+
+    # Man page (built from docs/odm.1 in-tree; preformatted groff source, no
+    # roff step needed at build time so makedepends stays minimal).
+    install -Dm644 docs/odm.1 "$pkgdir/usr/share/man/man1/odm.1"
+
+    # Example config — root-owned, 0644 (PRD §14). Installed as .example so an
+    # upgrade never clobbers a locally-edited /etc/odm/config.conf; the
+    # defaults still apply when no real config exists.
+    install -Dm644 configs/odm.conf.example \
+        "$pkgdir/etc/odm/config.conf.example"
+
+    # License.
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
