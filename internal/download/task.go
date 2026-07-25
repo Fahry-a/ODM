@@ -105,9 +105,8 @@ type Task struct {
 	pauseC chan struct{}
 	logf   LogFn
 
-	mu       sync.Mutex // guards state transitions & control-file writes
-	paused   bool
-	finished bool
+	mu     sync.Mutex // guards state transitions & control-file writes
+	paused bool
 }
 
 // LogLn is the logger callback signature used by Task: level (info/warn/error)
@@ -450,7 +449,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	}
 	defer rr.Resp.Body.Close()
 
-	body := io.ReadCloser(rr.Resp.Body)
+	body := rr.Resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(ctx, body))
 	}
@@ -492,7 +491,7 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 		return err
 	}
 	defer resp.Body.Close()
-	body := io.ReadCloser(resp.Body)
+	body := resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(ctx, body))
 	}

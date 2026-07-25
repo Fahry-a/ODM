@@ -144,30 +144,6 @@ func waitSubscribers(t *testing.T, srv *Server, n int) {
 	t.Fatalf("subscriber never registered on /ws (want %d)", n)
 }
 
-// readEvents drains WebSocket frames for up to timeout, returning every parsed
-// Event whose Method appears in want. Used by the §16 acceptance test to assert
-// which lifecycle events actually arrive over the socket.
-func readEvents(conn *websocket.Conn, want map[string]bool, timeout time.Duration) []Event {
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	var out []Event
-	for {
-		mt, raw, err := conn.ReadMessage()
-		if err != nil {
-			return out
-		}
-		if mt != websocket.TextMessage {
-			continue
-		}
-		var ev Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			continue
-		}
-		if want[ev.Method] {
-			out = append(out, ev)
-		}
-	}
-}
-
 func post(t *testing.T, url string, body any) (map[string]any, []any) {
 	t.Helper()
 	b, err := json.Marshal(body)

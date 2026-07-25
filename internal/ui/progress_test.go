@@ -303,12 +303,6 @@ func TestFrame_RetainsVanishedAndCountsBySet(t *testing.T) {
 	r.Frame(nil, nil)
 
 	got := out.String()
-	// Retention: all three filenames still present in the final flush.
-	for _, name := range []string{" a ", " b ", " c "} {
-		if !strings.Contains(got, name) {
-			// names are left-padded to width 20 in the line; tolerate either form
-		}
-	}
 	// The headline assertion: summary line must report 2 completed of 3, never
 	// 0/0 and never over-count.
 	if !strings.Contains(got, "Total: 2/3 completed") {

@@ -18,7 +18,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -66,16 +65,6 @@ func (l *Limiter) Acquire(ctx context.Context, n int) error {
 		return fmt.Errorf("rate: %w", err)
 	}
 	return nil
-}
-
-// allowN reports whether n tokens are available right now without blocking.
-// Used by the progress/UI ticker to estimate instantaneous rate without
-// contending on Wait. Not used for actual throttling.
-func (l *Limiter) allowN(n int) bool {
-	if l.Unlimited() || n <= 0 {
-		return true
-	}
-	return l.lr.AllowN(time.Now(), min(n, l.lr.Burst()))
 }
 
 // Reader wraps r so that reads acquire rate tokens proportional to the number
