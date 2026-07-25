@@ -12,9 +12,9 @@ go test -run TestName ./internal/ui/  # single test
 go test ./internal/download/        # single package
 ```
 
-CI (`.github/workflows/ci.yml`) runs: `go mod download` → `go build` → `go vet` → `go test -race -count=1`. All must pass on push to `main`.
+CI (`.github/workflows/ci.yml`) runs: `go mod download` → `go build` → `go vet` → `golangci-lint` → `go test -race -count=1`. All must pass on push to `main`.
 
-No linter config (golangci-lint not set up). No Makefile — use `go` directly.
+Linter: golangci-lint v2 with `.golangci.yml` config. `golangci-lint run --timeout=5m` must report 0 issues. ST1012 (error vars must be ErrFoo) is disabled — `NoControlFile` is intentionally readable. `errcheck` excludes `defer x.Close()` and `fmt.Fprint*` (best-effort CLI output). No Makefile — use `go` directly.
 
 ## Architecture
 
@@ -45,8 +45,10 @@ internal/logging → Leveled logger (--log / --log-level)
 
 ## Testing quirks
 
-- `internal/rpc` tests start real httptest servers and can be **flaky** under `-race`. If `TestServer_AddURIAndTellActive` fails, re-run before investigating.
+- `internal/rpc` tests start real httptest servers with real downloads; they take several seconds under `-race`. `TestServer_AddURIAndTellActive` was previously documented as flaky but passes consistently in recent runs (the test uses a 2 s tolerant poll loop + checks both `tellActive` and `tellWaiting`).
 - `internal/download` tests use httptest servers with real chunk downloads; they take several seconds under `-race`.
+- `internal/storage` tests use `t.TempDir()` and concurrent goroutines to stress `WriteAt` non-overlap.
+- `internal/logging` tests swap the unexported `from`/`file` fields to capture output in a buffer (same-package test access).
 - UI tests inject a fake clock (`nowFn` in `clock.go`) — restore `nowFn` in `t.Cleanup` if you change it.
 
 ## Cross-compiling

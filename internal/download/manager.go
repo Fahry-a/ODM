@@ -221,15 +221,6 @@ func (m *Manager) ResolveDest(url string) string {
 // ErrNoTasks is returned by bootstrap helpers when there's nothing to schedule.
 var ErrNoTasks = errors.New("no tasks to schedule")
 
-// formatDuration renders an ETA duration as MM:SS (the pacman bar's <ETA>).
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "--:--"
-	}
-	s := int(d.Seconds())
-	return fmt.Sprintf("%02d:%02d", s/60, s%60)
-}
-
 // Run is a convenience wrapper used by tests: it runs a single task directly
 // (Mode A path) on the given URL+conns and returns its error. The CLI flow
 // uses RunBatch for the full Balancer-driven scheduling; Run keeps the simple

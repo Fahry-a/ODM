@@ -16,11 +16,6 @@ import "time"
 // it through every signature — they don't use it; only Frame does.
 var nowFn = func() time.Time { return time.Now() }
 
-// tickRate is the redraw cadence the RunLoop hands Frame(); it's the period of
-// the pacman bounce animation and the non-TTY throttle floor is expressed as a
-// multiple of it. Kept exported-name-stable so tests reference one constant.
-const tickRate = 100 * time.Millisecond
-
 // bouncePosition maps a frame index to a back-and-forth slot in [0,width) so
 // the sizeless pacman travels left→right→left over the bar instead of sitting
 // still (bug §3.5). The motion is a triangle wave: slot rises 0→width-1 across

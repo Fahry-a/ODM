@@ -68,7 +68,7 @@ func run(argv []string) error {
 	// Leveled logger (§6.2 --log / --log-level). Default level info; a quiet
 	// session with no --log file degrades to a silent engine LogFn so the
 	// pacman bar is the only output.
-	var logLevel logging.Level = logging.LevelInfo
+	var logLevel = logging.LevelInfo
 	if o.LogLevel != "" {
 		lv, lerr := logging.ParseLevel(o.LogLevel)
 		if lerr == nil {
