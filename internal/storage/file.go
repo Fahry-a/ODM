@@ -73,12 +73,16 @@ func (w *File) Path() string { return w.path }
 // Sync flushes pending writes to disk (called once when a task completes).
 func (w *File) Sync() error { return w.f.Sync() }
 
-// Close closes the underlying file.
+// Close closes the underlying file. Idempotent: a second Close is a no-op,
+// so the engine can call it defensively on both a defer and an explicit
+// shutdown path without tripping os.File's "file already closed" error.
 func (w *File) Close() error {
 	if w.f == nil {
 		return nil
 	}
-	return w.f.Close()
+	f := w.f
+	w.f = nil
+	return f.Close()
 }
 
 // Reader returns a sequential reader over the on-disk file (for checksum).
