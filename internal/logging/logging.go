@@ -124,13 +124,16 @@ func (l *Logger) TaskLogFn() func(string, string, ...any) {
 	}
 }
 
-// Close releases the mirror file handle, if any.
+// Close releases the mirror file handle, if any. Idempotent: a second Close
+// is a no-op, matching the engine's defensive close-on-shutdown pattern.
 func (l *Logger) Close() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	if c, ok := l.file.(io.Closer); ok {
-		return c.Close()
+	c, ok := l.file.(io.Closer)
+	l.file = nil
+	if !ok {
+		return nil
 	}
-	return nil
+	return c.Close()
 }
