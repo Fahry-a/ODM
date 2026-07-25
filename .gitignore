@@ -1,0 +1,45 @@
+# Binary
+odm
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+*.prof
+
+# Dependency directories
+vendor/
+
+# Build output
+build/
+dist/
+bin/
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Debug
+*.dSYM/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
