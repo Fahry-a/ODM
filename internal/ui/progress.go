@@ -315,7 +315,7 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	lines := make([]string, 0, len(view)+1)
 	pos := bouncePosition(r.indeterminateTick, BarWidth)
 	for _, v := range view {
-		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos))
+		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick)
 		lines = append(lines, truncateToWidth(line, width))
 	}
 	lines = append(lines, truncateToWidth(RenderSummary(st.completed, st.total, st.speed, st.maxETA, r.useColor), width))
@@ -403,7 +403,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 	if full {
 		b.WriteString("---\n")
 		for _, v := range view {
-			b.WriteString(renderTaskLine(v, r.useColor, -1))
+			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick))
 			b.WriteByte('\n')
 		}
 		b.WriteString(summary)
