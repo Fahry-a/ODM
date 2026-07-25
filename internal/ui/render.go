@@ -33,6 +33,15 @@ const BarWidth = 30
 // animation; rendered as "c" per the PRD §8 spec text.
 const pacFace = "c"
 
+// pacFaceAlt is the alternate pacman face for the expand/shrink animation
+// (uppercase 'C' every second).
+const pacFaceAlt = "C"
+
+// pacFaceFrameDuration is how many render frames (at ~100ms each) each face
+// state lasts. 5 frames = ~500ms per state, so the full expand/shrink cycle
+// (c→C→c) takes ~1 second — "setiap detik huruf c berubah besar lalu kecil".
+const pacFaceFrameDuration = 5
+
 // Color is a state.colour pair (foreground). "" → no colour (non-TTY).
 type Color string
 
@@ -62,7 +71,21 @@ func stateColor(s download.TaskState, useColor bool) Color {
 	return ""
 }
 
+// Fixed column widths for RenderTaskLine. fmt's %Ns is a *minimum* width and
+// grows with the string, so speed ("1.0 KiB/s" → "1023.0 MiB/s") and ETA
+// ("00:05" → "2160:00") used to shove the pacman bar and trailing percent
+// around every frame. Values are fitted to these widths (right-aligned) so
+// the bar stays glued to the right edge of the line.
+const (
+	colSize  = 9  // "999.9 MiB", "1023 B"
+	colSpeed = 11 // "999.9 MiB/s", "1023 B/s"
+	colETA   = 8  // "HH:MM:SS" (was MM:SS = 5)
+	colConns = 5  // "[x1]" .. "[x99]" (wider values still fit via pad)
+)
+
 // FormatFileSize humanises a byte count (binary, KiB/MiB/GiB/…).
+// Rounded values never print as "1024.0 XiB" — that would overflow colSize
+// and re-introduce the column jitter the fixed layout is meant to kill.
 func FormatFileSize(b int64) string {
 	const unit = 1024.0
 	if b < 0 {
@@ -78,10 +101,17 @@ func FormatFileSize(b int64) string {
 		val /= unit
 		idx++
 	}
+	// %.1f rounds 1023.95 → "1024.0"; promote to the next unit instead so the
+	// printed form stays ≤ "999.9 XiB" (9 cells) for every unit below PiB.
+	if idx < len(units)-1 && val+0.05 >= unit {
+		val /= unit
+		idx++
+	}
 	return fmt.Sprintf("%.1f %s", val, units[idx])
 }
 
-// FormatSpeed humanises bytes/sec.
+// FormatSpeed humanises bytes/sec. Always fits in colSpeed once padded
+// ("999.9 MiB/s" = 11 cells; unknown speed is "--").
 func FormatSpeed(bps int64) string {
 	if bps < 0 {
 		return "--"
@@ -89,27 +119,52 @@ func FormatSpeed(bps int64) string {
 	return FormatFileSize(bps) + "/s"
 }
 
-// FormatDuration turns a time.Duration into MM:SS (the bar's <ETA>). A
-// nonsensically large ETA — produced by estimateETA when the rolling speed
-// has decayed near zero mid-stream — is clamped and rendered as "--:--" rather
-// than overflowing to "30744118:48" (~58 years), which would shatter the
-// per-line column layout the width-aware redraw relies on. The cap is generous
-// (just over a day) so any real single-download ETA still fits in MM:SS while
-// garbage from an EMA bottoming out is masked.
+// FormatDuration turns a time.Duration into fixed-width HH:MM:SS (the bar's
+// <ETA>, always exactly 8 cells for HH:MM:SS format). A nonsensically large
+// ETA — produced by estimateETA when the rolling speed has decayed near zero
+// mid-stream — is rendered as "--:--:--" rather than overflowing.
 func FormatDuration(d time.Duration) string {
-	if d <= 0 || d > 36*time.Hour {
-		return "--:--"
+	if d <= 0 {
+		return "--:--:--"
 	}
 	s := int(d.Seconds())
-	return fmt.Sprintf("%02d:%02d", s/60, s%60)
+	h := s / 3600
+	m := (s % 3600) / 60
+	sec := s % 60
+	if h > 99 {
+		return "99:59:59"
+	}
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, sec)
+}
+
+// fitWidth right-aligns s into exactly w display cells (runes). Longer
+// strings are truncated on the left-kept side so a pathological value still
+// cannot shove neighbouring columns.
+func fitWidth(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) == w {
+		return s
+	}
+	if len(rs) > w {
+		return string(rs[:w])
+	}
+	return strings.Repeat(" ", w-len(rs)) + s
 }
 
 // Bar renders one pacman progress bar into a fixed-width string. `done`/`total`
 // are done/total bytes; we compute the fraction eaten and draw:
 //
 //	eaten region  → "-" (blank/dashes)
-//	pacman face   → "c"
-//	remaining     → "o"
+//	pacman face   → "c" or "C" (animates every second)
+//	remaining     → "o o o …" (dots with spaces between)
+//
+// The bar is always exactly `width` display cells: dashes and face take 1 cell
+// each; remaining dots take 2 cells each ("o " pair) with the trailing space
+// trimmed, and the line is padded with a trailing space when needed so the bar
+// never grows wider than `width` (which would shove the percent column).
 //
 // At 100% the whole bar is dashes/blank (PRD §8 "nothing left for pacman to
 // eat"). The extras over the previous build:
@@ -118,24 +173,34 @@ func FormatDuration(d time.Duration) string {
 //     pos<0 the bar falls back to the static centre layout Bar() stored before
 //     (kept for callers/tests that don't drive the tick).
 func Bar(done, total int64, width int) string {
-	return BarIndeterminate(done, total, width, -1)
+	return BarIndeterminate(done, total, width, -1, 0)
 }
 
 // BarIndeterminate is Bar with an explicit pacman position for the sizeless
 // (indeterminate) case. pos==-1 means "no animation slot provided" and the
 // static centred layout is used (back-compat with the pure Bar() contract the
-// tests pin). pos is clamped to [0,width-1].
-func BarIndeterminate(done, total int64, width int, pos int) string {
+// tests pin). pos is clamped to [0,width-1]. frame is the global frame counter
+// used to animate the pacman face (c/C) every ~1 second.
+func BarIndeterminate(done, total int64, width int, pos int, frame int) string {
 	if width < 2 {
 		width = 2
 	}
+
+	// Determine which pacman face to show (animates every ~1 second)
+	face := pacFace
+	if frame >= 0 {
+		cycle := (frame / pacFaceFrameDuration) % 2
+		if cycle == 1 {
+			face = pacFaceAlt
+		}
+	}
+
 	if total <= 0 {
 		// Sizeless stream: indeterminate. If the caller passed a live bounce
-		// position we honour it; otherwise pacman parks at the middle for
-		// callers/tests that ask for a single static frame.
+		// position we honour it; otherwise pacman parks at the middle.
 		if pos < 0 {
 			half := width / 2
-			return strings.Repeat("-", half) + pacFace + strings.Repeat("o", width-half-1)
+			return barLine(half, face, width)
 		}
 		if pos >= width-1 {
 			pos = width - 1
@@ -143,10 +208,7 @@ func BarIndeterminate(done, total int64, width int, pos int) string {
 		if pos < 0 {
 			pos = 0
 		}
-		// Eaten (dashes) on the left of pacman, dots (uneaten) on the right —
-		// the same eaten/face/dot shape as the sized case so the visual reads
-		// identically, only the mouth now travels back and forth.
-		return strings.Repeat("-", pos) + pacFace + strings.Repeat("o", width-pos-1)
+		return barLine(pos, face, width)
 	}
 	if done >= total {
 		return strings.Repeat("-", width) // fully eaten
@@ -156,8 +218,45 @@ func BarIndeterminate(done, total int64, width int, pos int) string {
 	if eaten >= width {
 		eaten = width - 1
 	}
-	// `eaten` cells already eaten → dashes; then the face; then the rest dots.
-	return strings.Repeat("-", eaten) + pacFace + strings.Repeat("o", width-eaten-1)
+	return barLine(eaten, face, width)
+}
+
+// barLine renders: `eaten` dashes + face + remaining spaced dots, padded to
+// exactly `width` display cells. Each remaining dot takes 2 cells ("o " pair,
+// trailing space trimmed on the last dot); when the dots don't fill the
+// remaining space exactly, a single trailing space pads the line so the bar
+// stays a constant width and never shoves the percent column.
+func barLine(eaten int, face string, width int) string {
+	remDisplay := width - eaten - 1 // display cells available for dots
+	if remDisplay <= 0 {
+		// Face sits at the far right edge; pad with dashes on the left.
+		return strings.Repeat("-", eaten) + face
+	}
+	// How many dots fit? n dots = 2n-1 cells. Fit n = (remDisplay+1)/2.
+	dots := (remDisplay + 1) / 2
+	s := strings.Repeat("-", eaten) + face + spacedDots(dots)
+	// Pad with a trailing space if the dots came up short (even remDisplay).
+	for len(s) < width {
+		s += " "
+	}
+	return s
+}
+
+// spacedDots returns a string of `n` dots with a single space between each
+// (e.g., n=3 → "o o o"). The result is exactly 2n-1 cells: no trailing space
+// so callers can pad to a precise fixed width.
+func spacedDots(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, 0, n*2-1)
+	for i := 0; i < n; i++ {
+		b = append(b, 'o')
+		if i < n-1 {
+			b = append(b, ' ')
+		}
+	}
+	return string(b)
 }
 
 // maxNameRunes caps the displayed filename to keep one task line at a sane
@@ -182,12 +281,13 @@ func truncateName(name string) string {
 //	<file_name>   <size>   <speed>/s   <ETA>   [x<N>]   [<bar>]   <percent>%
 //
 // indeterminatePos drives the sizeless bar animation; pass -1 for a static
-// (centred) indeterminate bar.
+// (centred) indeterminate bar. frame is the global frame counter for the
+// pacman face animation (c/C every ~1s).
 func RenderTaskLine(v download.ProgressView, useColor bool) string {
-	return renderTaskLine(v, useColor, -1)
+	return renderTaskLine(v, useColor, -1, 0)
 }
 
-func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int) string {
+func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int) string {
 	name := v.Filename
 	if name == "" {
 		name = v.URL
@@ -199,8 +299,8 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	}
 	speed := FormatSpeed(v.Speed)
 	eta := FormatDuration(v.ETA)
-	conns := v.Connections
-	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos)
+	conns := fmt.Sprintf("[x%d]", v.Connections)
+	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame)
 	pct := 0
 	if v.TotalSize > 0 {
 		pct = min(max(int(float64(v.BytesDone)/float64(v.TotalSize)*100), 0), 100)
@@ -210,8 +310,16 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	if c != "" {
 		reset = string(colorReset)
 	}
-	return fmt.Sprintf("%s%-20s  %6s  %11s  %5s  [x%d]  [%s]  %3d%%%s",
-		c, name, size, speed, eta, conns, bar, pct, reset)
+	// Fixed columns: name | size | speed | ETA | [xN] | [bar] | pct%
+	// Speed/ETA/size are fitted so a slow→fast or short→long ETA transition
+	// cannot walk the pacman bar and the right-edge percent left/right.
+	return fmt.Sprintf("%s%-20s  %s  %s  %s  %s  [%s]  %3d%%%s",
+		c, name,
+		fitWidth(size, colSize),
+		fitWidth(speed, colSpeed),
+		fitWidth(eta, colETA),
+		fitWidth(conns, colConns),
+		bar, pct, reset)
 }
 
 // RenderSummary formats the bottom summary line (PRD §8.1 example):

@@ -337,6 +337,21 @@ func (t *Task) setState(s TaskState) { t.state.Store(int32(s)) }
 // positioning is safe without locks.
 func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(ProgressView)) {
 	defer wg.Done()
+	// Each worker represents one live connection. When it retires (queue empty,
+	// chunk error, or ctx cancel), decrement the live-connection counter so the
+	// UI's [xN] reflects the actual number of connections still downloading,
+	// not the number originally launched. Guard against underflow.
+	defer func() {
+		for {
+			old := t.conns.Load()
+			if old <= 0 {
+				return
+			}
+			if t.conns.CompareAndSwap(old, old-1) {
+				return
+			}
+		}
+	}()
 	for {
 		// Pause gate: if paused, block until unpause or ctx done.
 		select {
@@ -558,7 +573,11 @@ func (t *Task) emitFinal(sink func(ProgressView)) {
 	sink(t.Snapshot())
 }
 
-// estimateETA: bytes-left / speed.
+// estimateETA: bytes-left / speed. The inner expression produces nanoseconds
+// directly (remaining×1e9 / bytes-per-sec); converting to time.Duration yields
+// the correct duration. There is intentionally NO trailing * time.Second —
+// the previous code multiplied by time.Second a second time, inflating the
+// result by 1e9 and capping every ETA to 99:59:59.
 func (t *Task) estimateETA() time.Duration {
 	if t.probe == nil || t.probe.TotalSize <= 0 {
 		return 0
@@ -571,7 +590,7 @@ func (t *Task) estimateETA() time.Duration {
 	if sp <= 0 {
 		return 0
 	}
-	eta := time.Duration((t.probe.TotalSize-done)*int64(time.Second)/sp) * time.Second
+	eta := time.Duration((t.probe.TotalSize - done) * int64(time.Second) / sp)
 	if eta < 0 {
 		return 0
 	}

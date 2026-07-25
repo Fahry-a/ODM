@@ -23,12 +23,12 @@ func TestBar_FullEaten(t *testing.T) {
 }
 
 func TestBar_MidProgress(t *testing.T) {
-	// 50% of 10 cells → 5 eaten dashes, then face, then 4 dots.
+	// 50% of 10 display cells → 5 eaten dashes, then face, then dots filling
+	// the remaining 4 cells: 2 dots ("o o" = 3 cells) + 1 padding space = 4.
 	got := Bar(50, 100, 10)
-	want := "-----c0000"
-	wantR := strings.NewReplacer("0", "o")
-	if got != wantR.Replace(want) {
-		t.Fatalf("50%% want %q got %q", wantR.Replace(want), got)
+	want := "-----co o "
+	if got != want {
+		t.Fatalf("50%% want %q got %q", want, got)
 	}
 }
 
@@ -53,9 +53,106 @@ func TestRenderTaskLine_Format(t *testing.T) {
 	}
 }
 
+// TestRenderTaskLine_FixedColumns pins the ILoveCandy layout so speed/ETA
+// changes never shove the pacman bar or trailing percent left/right.
+func TestRenderTaskLine_FixedColumns(t *testing.T) {
+	base := download.ProgressView{
+		Filename: "linux-cachyos", TotalSize: 120 << 20, Speed: 1 << 10,
+		BytesDone: 86 << 20, Connections: 1, State: download.StateActive, ETA: 5 * time.Second,
+	}
+	// Vary the fields that used to grow/shrink the middle of the line.
+	variants := []download.ProgressView{
+		base,
+		{Filename: base.Filename, TotalSize: base.TotalSize, Speed: 25 << 20, BytesDone: base.BytesDone, Connections: 16, State: base.State, ETA: 5 * time.Second},
+		{Filename: base.Filename, TotalSize: base.TotalSize, Speed: 999 << 20, BytesDone: base.BytesDone, Connections: 32, State: base.State, ETA: 99*time.Minute + 59*time.Second},
+		{Filename: base.Filename, TotalSize: base.TotalSize, Speed: 0, BytesDone: base.BytesDone, Connections: 1, State: base.State, ETA: 10 * time.Hour}, // caps at 99:59
+		{Filename: base.Filename, TotalSize: 500, Speed: 50, BytesDone: 100, Connections: 1, State: base.State, ETA: time.Second},
+		{Filename: base.Filename, TotalSize: -1, Speed: -1, BytesDone: 0, Connections: 1, State: base.State, ETA: 0},
+	}
+
+	// Anchor: the '[' that opens the pacman bar and the trailing '%' must sit
+	// at the same index on every line regardless of speed/ETA length.
+	barIdx := func(line string) int {
+		i := strings.LastIndex(line, "[")
+		if i < 0 {
+			t.Fatalf("no bar bracket in %q", line)
+		}
+		return i
+	}
+	pctIdx := func(line string) int {
+		i := strings.LastIndex(line, "%")
+		if i < 0 {
+			t.Fatalf("no percent in %q", line)
+		}
+		return i
+	}
+
+	ref := RenderTaskLine(variants[0], false)
+	refBar, refPct, refLen := barIdx(ref), pctIdx(ref), len([]rune(ref))
+	for _, v := range variants {
+		line := RenderTaskLine(v, false)
+		if got := barIdx(line); got != refBar {
+			t.Fatalf("bar column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refBar, got, ref, line)
+		}
+		if got := pctIdx(line); got != refPct {
+			t.Fatalf("percent column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refPct, got, ref, line)
+		}
+		if got := len([]rune(line)); got != refLen {
+			t.Fatalf("line rune length changed: want %d got %d\n  ref: %q\n  got: %q", refLen, got, ref, line)
+		}
+	}
+}
+
+func TestFormatDuration_FixedWidth(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "--:--:--"},
+		{5 * time.Second, "00:00:05"},
+		{32 * time.Second, "00:00:32"},
+		{99*time.Minute + 59*time.Second, "01:39:59"},
+		{100 * time.Minute, "01:40:00"},
+		{10 * time.Hour, "10:00:00"},
+		{99*time.Hour + 59*time.Minute + 59*time.Second, "99:59:59"},
+		{100 * time.Hour, "99:59:59"}, // capped at 99:59:59
+	}
+	for _, tc := range cases {
+		got := FormatDuration(tc.d)
+		if got != tc.want {
+			t.Fatalf("FormatDuration(%v)=%q want %q", tc.d, got, tc.want)
+		}
+		if len(got) != colETA {
+			t.Fatalf("FormatDuration(%v)=%q len=%d want %d", tc.d, got, len(got), colETA)
+		}
+	}
+}
+
+func TestFormatFileSize_No1024Overflow(t *testing.T) {
+	// Just under 1 MiB used to print "1024.0 KiB" (10 cells) and shove columns.
+	got := FormatFileSize(1024*1024 - 1)
+	if strings.HasPrefix(got, "1024.0") {
+		t.Fatalf("must promote unit instead of printing 1024.0: %q", got)
+	}
+	if len([]rune(got)) > colSize {
+		t.Fatalf("size %q exceeds colSize %d", got, colSize)
+	}
+	// Spot-check a few magnitudes stay within the size/speed columns.
+	for _, b := range []int64{0, 999, 1023, 1024, 25 << 20, 120 << 20, 1 << 30, 999 << 20} {
+		s := FormatFileSize(b)
+		if n := len([]rune(s)); n > colSize {
+			t.Fatalf("FormatFileSize(%d)=%q len=%d > colSize %d", b, s, n, colSize)
+		}
+		sp := FormatSpeed(b)
+		if n := len([]rune(sp)); n > colSpeed {
+			t.Fatalf("FormatSpeed(%d)=%q len=%d > colSpeed %d", b, sp, n, colSpeed)
+		}
+	}
+}
+
 func TestRenderSummary(t *testing.T) {
 	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, false)
-	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:32") {
+	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:00:32") {
 		t.Fatalf("summary wrong: %s", s)
 	}
 }
@@ -267,7 +364,7 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 	width := 20
 	seen := map[string]bool{}
 	posAt := func(frame int) string {
-		return BarIndeterminate(0, -1, width, bouncePosition(frame, width))
+		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), frame)
 	}
 	// Collect a handful of distinct frames; the bounce position must change.
 	for i := range 8 {
@@ -278,7 +375,7 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 	}
 	// Boundaries: frame 0 → pacman at slot 0 (no leading dashes), peak frame
 	// (width-1) → pacman near the right edge (width-1 leading dashes).
-	if got := posAt(0); !strings.HasPrefix(got, "c") {
+	if got := posAt(0); !strings.HasPrefix(got, "c") && !strings.HasPrefix(got, "C") {
 		t.Fatalf("frame 0 should start pacman at slot 0, got %q", got)
 	}
 	peak := posAt(width - 1)
@@ -291,15 +388,54 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 		t.Fatalf("bounce must reverse direction at the turn: %q == %q", posAt(width-1), posAt(width))
 	}
 	// The bounce is a triangle wave of period 2*(width-1); one period later the
-	// slot repeats.
-	if got, want := posAt(2*(width-1)), posAt(0); got != want {
-		t.Fatalf("bounce should be periodic with period 2*(width-1): got %q want %q", got, want)
+	// slot repeats. The face animation has its own period (2*pacFaceFrameDuration);
+	// the combined period is LCM(2*(width-1), 2*pacFaceFrameDuration).
+	combinedPeriod := lcm(2*(width-1), 2*pacFaceFrameDuration)
+	if got, want := posAt(combinedPeriod), posAt(0); got != want {
+		t.Fatalf("bounce should be periodic with combined period %d: got %q want %q", combinedPeriod, got, want)
 	}
 	// Sanity: static (pos -1) still lands pacman in the middle (not leftmost)
 	// and contains both face and dots.
-	static := BarIndeterminate(0, -1, width, -1)
+	static := BarIndeterminate(0, -1, width, -1, 0)
 	if strings.HasPrefix(static, "c") || !strings.Contains(static, "c") || !strings.Contains(static, "o") {
 		t.Fatalf("static indeterminate layout malformed: %q", static)
+	}
+}
+
+// lcm computes the least common multiple of a and b.
+func lcm(a, b int) int {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	return a * b / gcd(a, b)
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// TestBarIndeterminate_FaceAnimation tests that the pacman face animates
+// between 'c' (lowercase) and 'C' (uppercase) every pacFaceFrameDuration frames
+// (~1 second at 100ms/frame).
+func TestBarIndeterminate_FaceAnimation(t *testing.T) {
+	width := 30
+	// Frame 0 → face should be 'c' (cycle 0)
+	bar0 := BarIndeterminate(0, -1, width, -1, 0)
+	if !strings.Contains(bar0, "c") {
+		t.Fatalf("frame 0 should contain lowercase 'c', got %q", bar0)
+	}
+	// Frame pacFaceFrameDuration → face should be 'C' (cycle 1)
+	bar10 := BarIndeterminate(0, -1, width, -1, pacFaceFrameDuration)
+	if !strings.Contains(bar10, "C") {
+		t.Fatalf("frame %d should contain uppercase 'C', got %q", pacFaceFrameDuration, bar10)
+	}
+	// Frame 2*pacFaceFrameDuration → face should be 'c' again (cycle 0)
+	bar20 := BarIndeterminate(0, -1, width, -1, 2*pacFaceFrameDuration)
+	if !strings.Contains(bar20, "c") {
+		t.Fatalf("frame %d should contain lowercase 'c' again, got %q", 2*pacFaceFrameDuration, bar20)
 	}
 }
 
@@ -450,5 +586,52 @@ func TestRowsFromPlan(t *testing.T) {
 	}
 	if rows[2].Size != -1 {
 		t.Fatalf("unknown-size row must report -1, got %d", rows[2].Size)
+	}
+}
+
+// TestTTYRedraw_CursorUpMatchesNewlines ensures each frame's cursor-up count
+// equals the previous frame's printed lines — a mismatch is what eats scrollback
+// (too many ups) or leaves orphans that force scroll (too few ups).
+func TestTTYRedraw_CursorUpMatchesNewlines(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf, false)
+	r.tty = true
+	r.useColor = false
+
+	// Pin width so truncation is deterministic regardless of host terminal.
+	// We can't inject width directly; rendererWidth reads the writer. Since
+	// buf isn't a *os.File, width falls back to MinTerminalWidth-1 = 79.
+	frames := [][]download.ProgressView{
+		{{ID: "a", Filename: "file-a", State: download.StateActive, TotalSize: 100, BytesDone: 10, Speed: 1 << 20, ETA: 5 * time.Second, Connections: 4}},
+		{{ID: "a", Filename: "file-a", State: download.StateActive, TotalSize: 100, BytesDone: 50, Speed: 25 << 20, ETA: 2 * time.Second, Connections: 16}},
+		{{ID: "a", Filename: "file-a", State: download.StateActive, TotalSize: 100, BytesDone: 50, Speed: 25 << 20, ETA: 2 * time.Second, Connections: 16},
+			{ID: "b", Filename: "file-b", State: download.StateActive, TotalSize: 200, BytesDone: 1, Speed: 100, ETA: time.Hour, Connections: 1}},
+		{{ID: "a", Filename: "file-a", State: download.StateCompleted, TotalSize: 100, BytesDone: 100, Connections: 0},
+			{ID: "b", Filename: "file-b", State: download.StateActive, TotalSize: 200, BytesDone: 50, Speed: 1 << 20, ETA: 30 * time.Second, Connections: 8}},
+		{{ID: "b", Filename: "file-b", State: download.StateActive, TotalSize: 200, BytesDone: 90, Speed: 1 << 10, ETA: 5 * time.Second, Connections: 8}},
+	}
+
+	prevLines := 0
+	for i, live := range frames {
+		before := buf.String()
+		r.Frame(live, nil)
+		chunk := buf.String()[len(before):]
+		ups := strings.Count(chunk, "\x1b[A")
+		// Count content newlines (Fprintln). Ignore none other.
+		newlines := strings.Count(chunk, "\n")
+		if ups != prevLines {
+			t.Fatalf("frame %d: cursor-up count %d != previous frame lines %d\nchunk=%q", i, ups, prevLines, chunk)
+		}
+		// After the ups/clears, we should print exactly the new frame's lines.
+		// lastLines after frame should equal newlines in this chunk.
+		if newlines != r.lastLines {
+			t.Fatalf("frame %d: newlines written %d != lastLines %d", i, newlines, r.lastLines)
+		}
+		// expected line count = len(live retained) + summary; at least 1 (summary)
+		if r.lastLines < 1 {
+			t.Fatalf("frame %d: lastLines < 1", i)
+		}
+		prevLines = r.lastLines
+		t.Logf("frame %d: ups=%d lines=%d ok", i, ups, r.lastLines)
 	}
 }
