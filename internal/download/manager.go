@@ -113,6 +113,8 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		ChunkSize:   m.opts.ChunkSize,
 		Timeout:     m.opts.Timeout,
 		MaxRedirect: m.opts.MaxRedirect,
+		UserAgent:   m.opts.UserAgent,
+		Checksum:    m.opts.Checksum,
 	}, m.client, m.lim, m.logf)
 	m.track(id, t)
 	return t, conns, nil
@@ -187,7 +189,7 @@ const (
 // Version is the ODM release string; surfaced over RPC (odm.getVersion) and used
 // in the default User-Agent. Defined here (not import cycling from config) so
 // the engine + RPC layer can read it without depending on config at runtime.
-const Version = "odm/0.1.0"
+const Version = "odm/0.2.0"
 
 // ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {
@@ -220,15 +222,6 @@ func (m *Manager) ResolveDest(url string) string {
 
 // ErrNoTasks is returned by bootstrap helpers when there's nothing to schedule.
 var ErrNoTasks = errors.New("no tasks to schedule")
-
-// formatDuration renders an ETA duration as MM:SS (the pacman bar's <ETA>).
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "--:--"
-	}
-	s := int(d.Seconds())
-	return fmt.Sprintf("%02d:%02d", s/60, s%60)
-}
 
 // Run is a convenience wrapper used by tests: it runs a single task directly
 // (Mode A path) on the given URL+conns and returns its error. The CLI flow

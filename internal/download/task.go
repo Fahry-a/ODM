@@ -27,6 +27,12 @@ const (
 	StateRetrying
 	StateCompleted
 	StateError
+
+	// persistCheckpointInterval controls how often the control file is written
+	// during an active download. Every N completed chunks the .odm file is
+	// flushed so a crash/kill leaves a usable resume point. aria2 uses a
+	// similar periodic-persist strategy.
+	persistCheckpointInterval = 5
 )
 
 func (s TaskState) String() string {
@@ -96,6 +102,10 @@ type Task struct {
 	retries   atomic.Int32
 	startAt   time.Time
 
+	// periodic control-file checkpoint
+	chunksSincePersist atomic.Int64
+	controlCreatedAt   time.Time // when the control file was first written
+
 	// rate measurement helper (rolling)
 	rm   rateMeasure
 	rmMu sync.Mutex
@@ -105,9 +115,8 @@ type Task struct {
 	pauseC chan struct{}
 	logf   LogFn
 
-	mu       sync.Mutex // guards state transitions & control-file writes
-	paused   bool
-	finished bool
+	mu     sync.Mutex // guards state transitions & control-file writes
+	paused bool
 }
 
 // LogLn is the logger callback signature used by Task: level (info/warn/error)
@@ -126,6 +135,8 @@ type TaskOptions struct {
 	ChunkSize   int64 // bytes; parsed from --chunk-size
 	Timeout     time.Duration
 	MaxRedirect int
+	UserAgent   string // for control file metadata
+	Checksum    string // "algo:hex" if --checksum was used
 }
 
 // rateMeasure keeps a short rolling window of bytes vs time to produce a stable
@@ -391,6 +402,13 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 		if sink != nil {
 			sink(t.getCurrent(c))
 		}
+		// Periodic checkpoint: flush the control file every N chunks so a
+		// crash/kill leaves a usable resume point (similar to aria2's
+		// periodic .aria2 persist). Without this the .odm file only appears
+		// after the entire task finishes or is cancelled.
+		if t.chunksSincePersist.Add(1)%persistCheckpointInterval == 0 {
+			t.persistControl()
+		}
 	}
 }
 
@@ -450,7 +468,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	}
 	defer rr.Resp.Body.Close()
 
-	body := io.ReadCloser(rr.Resp.Body)
+	body := rr.Resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(ctx, body))
 	}
@@ -492,7 +510,7 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 		return err
 	}
 	defer resp.Body.Close()
-	body := io.ReadCloser(resp.Body)
+	body := resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(ctx, body))
 	}
@@ -626,6 +644,10 @@ func (t *Task) persistControl() {
 	if t.probe == nil || t.queue == nil {
 		return
 	}
+	now := time.Now()
+	if t.controlCreatedAt.IsZero() {
+		t.controlCreatedAt = now
+	}
 	cf := &storage.ControlFile{
 		URL:       t.url,
 		FinalURL:  t.probe.FinalURL,
@@ -633,6 +655,13 @@ func (t *Task) persistControl() {
 		ChunkSize: t.opts.ChunkSize,
 		ETag:      t.probe.ETag,
 		Completed: t.queue.completedOffsetsLocked(),
+		// Extended metadata
+		CreatedAt:   t.controlCreatedAt,
+		UpdatedAt:   now,
+		Connections: int(t.conns.Load()),
+		UserAgent:   t.opts.UserAgent,
+		ODMVersion:  Version,
+		Checksum:    t.opts.Checksum,
 	}
 	_ = storage.SaveControl(t.outPath, cf)
 }

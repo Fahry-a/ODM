@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ControlFile is the JSON payload of `<filename>.odm` (PRD §11.3). It records
@@ -13,13 +14,29 @@ import (
 // shipped a different file via ETag/Content-Length drift — kept but not
 // enforced strictly in MVP), the total size, chunk size, and the set of chunk
 // indices already written. On a resume we re-queue only the missing chunks.
+//
+// Extended fields (v0.2.0+) provide richer diagnostics and validation:
+//   - CreatedAt / UpdatedAt: timestamps for age-of-control-file checks
+//   - Connections: how many parallel connections were used (informational)
+//   - UserAgent: the UA string sent to the server (consistency on resume)
+//   - ODMVersion: which ODM version created this file (compatibility)
+//   - Checksum: file hash if known from --checksum flag (integrity on resume)
 type ControlFile struct {
+	// Core fields (v0.1.0)
 	URL       string  `json:"url"`
 	FinalURL  string  `json:"final_url"` // post-redirect URL actually used
 	TotalSize int64   `json:"total_size"`
 	ChunkSize int64   `json:"chunk_size"`
 	ETag      string  `json:"etag,omitempty"`
 	Completed []int64 `json:"completed"` // sorted chunk-byte-offsets already written
+
+	// Extended fields (v0.2.0+) — all omitempty for backward compat with v0.1.0 files
+	CreatedAt   time.Time `json:"created_at,omitempty"`    // when this control file was first written
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`    // last checkpoint timestamp
+	Connections int       `json:"connections,omitempty"`   // parallel connections used
+	UserAgent   string    `json:"user_agent,omitempty"`    // UA sent to server
+	ODMVersion  string    `json:"odm_version,omitempty"`   // version that created this file
+	Checksum    string    `json:"checksum,omitempty"`      // "algo:hex" if --checksum was used
 }
 
 // NoControlFile is returned by LoadControl when the `.odm` file is absent.
@@ -87,3 +104,53 @@ func (cf *ControlFile) CompletedOffsets() map[int64]struct{} {
 
 // DirOf is a small helper used by callers that build destPath via filepath.Join.
 func DirOf(p string) string { return filepath.Dir(p) }
+
+// BytesDone returns the sum of completed chunk sizes. chunkSize and totalSize
+// are needed to compute partial-chunk bytes (the last chunk may be shorter).
+func (cf *ControlFile) BytesDone(chunkSize, totalSize int64) int64 {
+	if totalSize <= 0 {
+		return 0
+	}
+	var done int64
+	for _, off := range cf.Completed {
+		end := off + chunkSize - 1
+		if end >= totalSize {
+			end = totalSize - 1
+		}
+		done += end - off + 1
+	}
+	return done
+}
+
+// FractionDone returns completed bytes / totalSize as a float64 in [0, 1].
+func (cf *ControlFile) FractionDone(chunkSize, totalSize int64) float64 {
+	if totalSize <= 0 {
+		return 0
+	}
+	return float64(cf.BytesDone(chunkSize, totalSize)) / float64(totalSize)
+}
+
+// Age returns how long ago the control file was last updated. Returns 0 if
+// UpdatedAt is not set (v0.1.0 files).
+func (cf *ControlFile) Age() time.Duration {
+	if cf.UpdatedAt.IsZero() {
+		return 0
+	}
+	return time.Since(cf.UpdatedAt)
+}
+
+// Summary returns a one-line human-readable status string for logging, e.g.:
+// "42/100 chunks (42.0%) | 3 connections | updated 5s ago"
+func (cf *ControlFile) Summary(chunkSize, totalSize int64) string {
+	chunks := len(cf.Completed)
+	frac := cf.FractionDone(chunkSize, totalSize)
+	connStr := "n/a"
+	if cf.Connections > 0 {
+		connStr = fmt.Sprintf("%d connections", cf.Connections)
+	}
+	ageStr := "n/a"
+	if !cf.UpdatedAt.IsZero() {
+		ageStr = fmt.Sprintf("%s ago", cf.Age().Truncate(time.Second))
+	}
+	return fmt.Sprintf("%d chunks (%.1f%%) | %s | updated %s", chunks, frac*100, connStr, ageStr)
+}

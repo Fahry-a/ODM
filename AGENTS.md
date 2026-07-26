@@ -12,9 +12,9 @@ go test -run TestName ./internal/ui/  # single test
 go test ./internal/download/        # single package
 ```
 
-CI (`.github/workflows/ci.yml`) runs: `go mod download` → `go build` → `go vet` → `go test -race -count=1`. All must pass on push to `main`.
+CI (`.github/workflows/ci.yml`) runs: `go mod download` → `go build` → `go vet` → `golangci-lint` → `go test -race -count=1`. All must pass on push to `main`.
 
-No linter config (golangci-lint not set up). No Makefile — use `go` directly.
+Linter: golangci-lint v2 with `.golangci.yml` config. `golangci-lint run --timeout=5m` must report 0 issues. ST1012 (error vars must be ErrFoo) is disabled — `NoControlFile` is intentionally readable. `errcheck` excludes `defer x.Close()` and `fmt.Fprint*` (best-effort CLI output). No Makefile — use `go` directly.
 
 ## Architecture
 
@@ -45,8 +45,10 @@ internal/logging → Leveled logger (--log / --log-level)
 
 ## Testing quirks
 
-- `internal/rpc` tests start real httptest servers and can be **flaky** under `-race`. If `TestServer_AddURIAndTellActive` fails, re-run before investigating.
+- `internal/rpc` tests start real httptest servers with real downloads; they take several seconds under `-race`. `TestServer_AddURIAndTellActive` was previously documented as flaky but passes consistently in recent runs (the test uses a 2 s tolerant poll loop + checks both `tellActive` and `tellWaiting`).
 - `internal/download` tests use httptest servers with real chunk downloads; they take several seconds under `-race`.
+- `internal/storage` tests use `t.TempDir()` and concurrent goroutines to stress `WriteAt` non-overlap.
+- `internal/logging` tests swap the unexported `from`/`file` fields to capture output in a buffer (same-package test access).
 - UI tests inject a fake clock (`nowFn` in `clock.go`) — restore `nowFn` in `t.Cleanup` if you change it.
 
 ## Cross-compiling
@@ -62,8 +64,68 @@ GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o build/odm_0.1.0_linux_am
 
 ## Releases
 
+Automated via `.github/workflows/release.yml`. Push a `v*` tag → workflow verifies versions, cross-compiles, and creates a GitHub Release.
+
+**Release checklist (all 3 must match the tag):**
+
+1. `internal/config/config.go:26` — `const Version = "odm/X.Y.Z"`
+2. `internal/download/manager.go:190` — `const Version = "odm/X.Y.Z"`
+3. `packaging/PKGBUILD:10` — `pkgver=X.Y.Z`
+
+**Release steps:**
+
 ```bash
-gh release create v0.1.0 --prerelease build/odm_0.1.0_* --title "v0.1.0" --notes "..."
+# 1. Bump versions in all 3 locations above
+# 2. Move [Unreleased] section in CHANGELOG.md → new version header
+# 3. Commit
+git add -A && git commit -m "release: vX.Y.Z"
+
+# 4. Tag & push
+git tag vX.Y.Z
+git push origin main && git push origin vX.Y.Z
+```
+
+**What the workflow does:**
+
+1. Extracts version from git tag (strips `v` prefix)
+2. Extracts versions from `config.go`, `manager.go`, `PKGBUILD` — fails if any mismatch
+3. Cross-compiles 6 targets: `linux/{386,amd64,arm,arm64}`, `darwin/{amd64,arm64}`
+4. Parses `CHANGELOG.md` for the version section (Keep a Changelog format)
+5. Generates SHA-256 checksums
+6. Creates GitHub Release via `softprops/action-gh-release@v2`
+   - Pre-release auto-detected if version contains `-` (e.g. `v0.2.0-rc1`)
+
+**Binary naming:** `odm_X.Y.Z_<os>_<arch>` (e.g. `odm_0.2.0_linux_amd64`)
+
+**Manual fallback (if needed):**
+
+```bash
+gh release create vX.Y.Z --prerelease build/odm_X.Y.Z_* --title "vX.Y.Z" --notes "..."
 ```
 
 Tag format: `v<semver>`. Pre-releases use `--prerelease`.
+
+## Roadmap (PRD §15, not yet implemented)
+
+These are documented in the PRD but deferred — do NOT treat them as bugs:
+
+- **ETag validation on resume** — the `.odm` file stores the ETag from the
+  initial probe, but on resume the engine does NOT revalidate with the server.
+  If the file changed at the same URL between sessions, stale data is resumed.
+  Fix: on resume, send a HEAD with `If-None-Match: <etag>` and compare
+  `Content-Length` vs `total_size` from the control file.
+- **TLS for RPC server** — the RPC HTTP/WS listener is plain text. When
+  `--rpc-listen-all` is used on `0.0.0.0`, traffic is unencrypted. Fix: add
+  `--rpc-tls-cert` / `--rpc-tls-key` flags, or document reverse-proxy setup.
+- **systemd unit file** — daemon mode (`--rpc`) has no service unit. Fix:
+  add `packaging/odm.service` with `DynamicUser=`, `ProtectSystem=strict`,
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE` if needed.
+- **`changeOption` mid-flight** — currently an acknowledged no-op
+  (`server.go:187`). PRD §10.2 lists it but §15 defers real mutation.
+- **Multi-mirror download** — splitting chunks across duplicate URLs for the
+  same file. Out of scope for the connection-aggregation value proposition.
+- **BitTorrent / magnet links** — explicitly non-goal for MVP.
+- **HTTP/2 / HTTP/3 stream multiplexing** — deliberately excluded; the whole
+  point of ODM is multi-connection aggregation over HTTP/1.1.
+- **Per-task speed limits** — only the global `--limit-rate` exists today.
+- **Reference Web UI** — roadmap item built on the RPC + WebSocket layer.
