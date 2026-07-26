@@ -51,6 +51,8 @@ const (
 	colorYellow Color = "\x1b[33m"
 	colorRed    Color = "\x1b[31m"
 	colorGrey   Color = "\x1b[90m"
+	colorCyan   Color = "\x1b[36m"
+	colorMagenta Color = "\x1b[35m"
 )
 
 // stateColor maps a TaskState to its §8 colour.
@@ -259,6 +261,125 @@ func spacedDots(n int) string {
 	return string(b)
 }
 
+// colorizeBar applies ANSI colors to the pacman bar characters when useColor
+// is true: face (c/C) → yellow, dashes (eaten) → green, dots (remaining) → cyan.
+// When useColor is false, the bar is returned unchanged.
+func colorizeBar(bar string, useColor bool) string {
+	if !useColor {
+		return bar
+	}
+	var b strings.Builder
+	b.Grow(len(bar) + 20)
+	for _, r := range bar {
+		switch r {
+		case 'c', 'C':
+			b.WriteString(string(colorYellow))
+			b.WriteRune(r)
+			b.WriteString(string(colorReset))
+		case '-':
+			b.WriteString(string(colorGreen))
+			b.WriteRune(r)
+			b.WriteString(string(colorReset))
+		case 'o':
+			b.WriteString(string(colorCyan))
+			b.WriteRune(r)
+			b.WriteString(string(colorReset))
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// ansiVisibleWidth returns the number of visible (non-ANSI) runes in s. ANSI
+// escape sequences (\x1b[...m) contribute zero display width.
+func ansiVisibleWidth(s string) int {
+	w := 0
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			// Skip ANSI escape sequence: \x1b[<params>m
+			j := i + 2
+			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3f {
+				j++
+			}
+			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
+				i = j + 1
+				continue
+			}
+		}
+		// Count as visible rune.
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			i++
+			continue
+		}
+		w++
+		i += size
+	}
+	return w
+}
+
+// truncateVisibleWidth cuts s so that only the first `width` visible cells are
+// kept, preserving all ANSI escape sequences intact. Sequences that span the
+// cut point are dropped cleanly (the cut happens on a visible character
+// boundary, and the reset code is appended only if an escape sequence was
+// active at the cut point).
+func truncateVisibleWidth(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	type segment struct {
+		text   string
+		visible bool
+	}
+	var segs []segment
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3f {
+				j++
+			}
+			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
+				segs = append(segs, segment{text: s[i : j+1], visible: false})
+				i = j + 1
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			segs = append(segs, segment{text: s[i : i+1], visible: true})
+			i++
+			continue
+		}
+		segs = append(segs, segment{text: s[i : i+size], visible: true})
+		i += size
+	}
+	var b strings.Builder
+	remaining := width
+	wasColorActive := false
+	for _, seg := range segs {
+		if !seg.visible {
+			b.WriteString(seg.text)
+			// Track whether we're inside a non-reset escape sequence.
+			wasColorActive = !strings.Contains(seg.text, string(colorReset))
+			continue
+		}
+		if remaining <= 0 {
+			break
+		}
+		b.WriteString(seg.text)
+		remaining--
+		wasColorActive = false
+	}
+	// Append a reset only if we truncated while color was active.
+	if remaining <= 0 && wasColorActive {
+		b.WriteString(string(colorReset))
+	}
+	return b.String()
+}
+
 // maxNameRunes caps the displayed filename to keep one task line at a sane
 // width. The limit is in runes (display width), not bytes — see truncateName.
 const maxNameRunes = 20
@@ -301,6 +422,7 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	eta := FormatDuration(v.ETA)
 	conns := fmt.Sprintf("[x%d]", v.Connections)
 	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame)
+	bar = colorizeBar(bar, useColor)
 	pct := 0
 	if v.TotalSize > 0 {
 		pct = min(max(int(float64(v.BytesDone)/float64(v.TotalSize)*100), 0), 100)
@@ -313,13 +435,67 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	// Fixed columns: name | size | speed | ETA | [xN] | [bar] | pct%
 	// Speed/ETA/size are fitted so a slow→fast or short→long ETA transition
 	// cannot walk the pacman bar and the right-edge percent left/right.
-	return fmt.Sprintf("%s%-20s  %s  %s  %s  %s  [%s]  %3d%%%s",
+	line := fmt.Sprintf("%s%-20s  %s  %s  %s  %s  [%s]  %3d%%%s",
 		c, name,
 		fitWidth(size, colSize),
 		fitWidth(speed, colSpeed),
 		fitWidth(eta, colETA),
 		fitWidth(conns, colConns),
 		bar, pct, reset)
+	if !useColor {
+		return line
+	}
+	// Apply component-level colors on top of the state-colored line.
+	// Order matters: replace connections/pct first (plain text), then colorize bar.
+	// Color the connections count: magenta for active, green for completed.
+	switch v.State {
+	case download.StateActive, download.StateRetrying:
+		line = colorReplace(line, conns, string(colorMagenta)+conns+string(colorReset))
+	case download.StateCompleted:
+		line = colorReplace(line, conns, string(colorGreen)+conns+string(colorReset))
+	case download.StateQueued, download.StatePaused:
+		line = colorReplace(line, conns, string(colorGrey)+conns+string(colorReset))
+	}
+	// Color the percentage.
+	pctStr := fmt.Sprintf("%3d%%", pct)
+	switch v.State {
+	case download.StateActive, download.StateRetrying:
+		line = colorReplace(line, pctStr, string(colorYellow)+pctStr+string(colorReset))
+	case download.StateCompleted:
+		line = colorReplace(line, pctStr, string(colorGreen)+pctStr+string(colorReset))
+	case download.StateError:
+		line = colorReplace(line, pctStr, string(colorRed)+pctStr+string(colorReset))
+	}
+	// Finally colorize the pacman bar (face→yellow, dashes→green, dots→cyan).
+	line = colorizeBarInLine(line)
+	return line
+}
+
+// colorReplace does a simple single-replacement of old with new in s.
+func colorReplace(s, old, new string) string {
+	i := strings.Index(s, old)
+	if i < 0 {
+		return s
+	}
+	return s[:i] + new + s[i+len(old):]
+}
+
+// colorizeBarInLine finds the bar portion inside [...] brackets in a rendered
+// line and applies color to its face/dash/dot characters. This is a post-pass
+// so the column padding remains correct (ANSI codes don't affect fitWidth).
+func colorizeBarInLine(line string) string {
+	// Find the last '[' before a ']' — the bar bracket pair.
+	open := strings.LastIndex(line, "[")
+	if open < 0 {
+		return line
+	}
+	close := strings.Index(line[open:], "]")
+	if close < 0 {
+		return line
+	}
+	close += open
+	bar := line[open+1 : close]
+	return line[:open+1] + colorizeBar(bar, true) + line[close:]
 }
 
 // RenderSummary formats the bottom summary line (PRD §8.1 example):
@@ -327,5 +503,11 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 //	Total: X/Y completed  |  <speed>/s  |  ETA HH:MM:SS
 func RenderSummary(completed, total int, speedBps int64, eta time.Duration, useColor bool) string {
 	sp := FormatSpeed(speedBps)
+	if useColor {
+		return fmt.Sprintf("%sTotal: %d/%d completed%s  |  %s%s%s  |  ETA %s",
+			string(colorGreen), completed, total, string(colorReset),
+			string(colorYellow), sp, string(colorReset),
+			FormatDuration(eta))
+	}
 	return fmt.Sprintf("Total: %d/%d completed  |  %s  |  ETA %s", completed, total, sp, FormatDuration(eta))
 }

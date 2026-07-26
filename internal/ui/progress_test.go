@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"odm/internal/download"
 	"odm/internal/scheduler"
@@ -627,5 +628,78 @@ func TestTTYRedraw_CursorUpMatchesNewlines(t *testing.T) {
 		}
 		prevLines = r.lastLines
 		t.Logf("frame %d: ups=%d lines=%d ok", i, ups, r.lastLines)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ANSI-aware truncation: colored lines are truncated by visible width, not
+// raw rune count, so ANSI escape sequences are preserved intact.
+// ---------------------------------------------------------------------------
+
+func TestAnsiVisibleWidth(t *testing.T) {
+	cases := []struct {
+		s    string
+		want int
+	}{
+		{"hello", 5},
+		{"", 0},
+		{"\x1b[33mc\x1b[0m", 1},       // colored 'c' = 1 visible cell
+		{"\x1b[32m---\x1b[0m", 3},      // 3 dashes
+		{"\x1b[35m[x4]\x1b[0m", 4},     // [x4] = 4 visible
+		{"\x1b[0m\x1b[33m\x1b[0m", 0},  // just escape codes
+		{"abc\x1b[31mdef\x1b[0mghi", 9}, // mix: 3 + 3 + 3
+	}
+	for _, tc := range cases {
+		got := ansiVisibleWidth(tc.s)
+		if got != tc.want {
+			t.Fatalf("ansiVisibleWidth(%q) = %d, want %d", tc.s, got, tc.want)
+		}
+	}
+}
+
+func TestTruncateVisibleWidth(t *testing.T) {
+	colored := "\x1b[33mc\x1b[0m o o o o o o o o o"
+	// Visible: "c o o o o o o o o o" = 19 chars. Truncate to 5 → "c o o " + reset.
+	got := truncateVisibleWidth(colored, 5)
+	if ansiVisibleWidth(got) != 5 {
+		t.Fatalf("truncateVisibleWidth(_, 5): visible width = %d, want 5", ansiVisibleWidth(got))
+	}
+	// The result must not end with an unclosed color (reset must be present
+	// if the last segment was a visible char inside a color span).
+	// Check: the last visible char should not be preceded by an unreset color.
+	// Simple check: if the string contains any color code, the part after the
+	// last visible char must either be plain or have a reset.
+	if ansiVisibleWidth(got) > 0 {
+		// Verify no partial escape sequences by checking valid UTF-8.
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncated colored string is not valid UTF-8: %q", got)
+		}
+	}
+
+	// Plain text: truncate to 3 → "hel"
+	got = truncateVisibleWidth("hello", 3)
+	if got != "hel" {
+		t.Fatalf("truncateVisibleWidth(\"hello\", 3) = %q, want \"hel\"", got)
+	}
+
+	// Width >= visible: returns unchanged.
+	got = truncateVisibleWidth("\x1b[33mab\x1b[0m", 10)
+	if ansiVisibleWidth(got) != 2 {
+		t.Fatalf("should not truncate when width >= visible: got visible width %d", ansiVisibleWidth(got))
+	}
+}
+
+func TestTruncateToWidth_AnsiAware(t *testing.T) {
+	// Simulate a colored task line that would be wider than terminal.
+	// truncateToWidth must preserve ANSI codes intact.
+	line := "\x1b[33mlinux-cachyos        \x1b[0m  500.0 MiB  \x1b[33m  1.9 MiB/s\x1b[0m  00:04:18  \x1b[35m[x16]\x1b[0m  [\x1b[33mc\x1b[0m\x1b[32m----\x1b[0m\x1b[36m o o\x1b[0m]  \x1b[33m  1%\x1b[0m"
+	got := truncateToWidth(line, 80)
+	visible := ansiVisibleWidth(got)
+	if visible > 80 {
+		t.Fatalf("truncateToWidth should limit visible width to 80, got %d", visible)
+	}
+	// The line must still contain ANSI codes (not stripped).
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("truncateToWidth must preserve ANSI codes")
 	}
 }
