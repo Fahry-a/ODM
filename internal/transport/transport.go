@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -68,7 +69,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		InsecureSkipVerify: !cfg.CheckCertificate,
 	}
 	tr := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   cfg.Timeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
 		TLSClientConfig:    tlsConf,
+		TLSHandshakeTimeout: cfg.Timeout,
 		ForceAttemptHTTP2:  true, // degrade gracefully against HTTP/2-only servers (PRD §15)
 		DisableCompression: false,
 		// Generous pooling for multi-connection downloads.

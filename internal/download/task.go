@@ -450,16 +450,11 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress.
 func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView)) error {
-	// Connection-phase timeout: bounded dial + TLS + headers only. Once the
-	// response arrives, the body is streamed to disk under the parent context
-	// via a goroutine pipe so a slow transfer is not killed by the setup
-	// deadline (aria2c-class behaviour).
-	reqCtx := ctx
-	if t.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		reqCtx, cancel = context.WithTimeout(ctx, t.opts.Timeout)
-		defer cancel()
-	}
+	// No per-request timeout here — dial + TLS + handshake timeouts are
+	// handled by the Transport's DialContext and TLSHandshakeTimeout. The
+	// body read runs under the task-level ctx so a slow-but-alive stream
+	// survives indefinitely (aria2c-class behaviour). The task ctx is
+	// cancelled only on explicit Cancel or when the Manager shuts down.
 
 	// Sizeless single-stream chunk: plain GET, no Range.
 	if t.probe.TotalSize < 0 || (t.probe.SingleStream && c.Start == 0 && c.Index == 0) {
@@ -470,26 +465,15 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	if end < 0 {
 		end = -1
 	}
-	rr, err := t.client.GetRange(reqCtx, t.probe.FinalURL, c.Start, end)
+	rr, err := t.client.GetRange(ctx, t.probe.FinalURL, c.Start, end)
 	if err != nil {
 		return err
 	}
 	defer rr.Resp.Body.Close()
 
-	// Detach the body read from the request timeout context. resp.Body is
-	// tied to reqCtx — when the timeout fires the body is closed. We pipe
-	// through a goroutine so the read side uses ctx (parent, no timeout)
-	// while the write side drains resp.Body under reqCtx. This lets a slow
-	// chunk stream for as long as the task is alive, not just 30s.
-	pr, pw := io.Pipe()
-	go func() {
-		_, copyErr := io.Copy(pw, rr.Resp.Body)
-		pw.CloseWithError(copyErr)
-	}()
-
-	body := io.Reader(pr)
+	body := rr.Resp.Body
 	if !t.lim.Unlimited() {
-		body = t.lim.Reader(ctx, body)
+		body = io.NopCloser(t.lim.Reader(ctx, body))
 	}
 
 	// Copy chunk to disk at offset Start using a small buffer; the WriteAt
@@ -514,13 +498,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
 func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView)) error {
-	reqCtx := ctx
-	if t.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		reqCtx, cancel = context.WithTimeout(ctx, t.opts.Timeout)
-		defer cancel()
-	}
-	req, err := t.client.NewGetRequest(reqCtx, t.probe.FinalURL)
+	req, err := t.client.NewGetRequest(ctx, t.probe.FinalURL)
 	if err != nil {
 		return err
 	}
@@ -529,17 +507,9 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 		return err
 	}
 	defer resp.Body.Close()
-
-	// Detach body from request timeout (same pipe pattern as fetchAndWrite).
-	pr, pw := io.Pipe()
-	go func() {
-		_, copyErr := io.Copy(pw, resp.Body)
-		pw.CloseWithError(copyErr)
-	}()
-
-	body := io.Reader(pr)
+	body := resp.Body
 	if !t.lim.Unlimited() {
-		body = t.lim.Reader(ctx, body)
+		body = io.NopCloser(t.lim.Reader(ctx, body))
 	}
 	buf := make([]byte, 64*1024)
 	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), func(delta int64) {
