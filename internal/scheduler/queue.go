@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -178,6 +179,11 @@ func (s *Scheduler) releaseIdle() {
 // startOne launches a task with its allocated conns. When it finishes it posts
 // itself to s.compl and decrements the WaitGroup.
 func (s *Scheduler) startOne(ctx context.Context, st *scheduledTask) {
+	// Override the task's connection count with the Balancer's per-file
+	// allocation. The TaskMaker returns the global -c default; the Balancer
+	// may have redistributed the budget (Mode B: 1/file, Mode C: SF/file).
+	st.task.SetConns(st.conns)
+
 	s.mu.Lock()
 	s.live[st.task.ID()] = st
 	s.mu.Unlock()
@@ -227,6 +233,9 @@ func (s *Scheduler) LiveViews() []download.ProgressView {
 	for _, st := range s.live {
 		out = append(out, st.task.Snapshot())
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
@@ -283,6 +292,11 @@ func (s *Scheduler) emit() {
 		queued = append(queued, st.task.Snapshot())
 	}
 	s.mu.Unlock()
+	// Sort live by TaskID for deterministic ordering (Go map iteration is
+	// random, so without this the task lines shuffle between frames).
+	sort.Slice(live, func(i, j int) bool {
+		return live[i].ID < live[j].ID
+	})
 	s.prog(live, queued)
 }
 
