@@ -114,12 +114,12 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 
 	// Build the queue (everything starts as "waiting" until a slot is granted).
 	for _, a := range s.plan.Queued {
-		t, conns, mErr := s.maker(a.URL, -1)
+		t, _, mErr := s.maker(a.URL, -1)
 		if mErr != nil {
 			atomic.AddInt32(&s.failed, 1)
 			continue
 		}
-		s.queued = append(s.queued, &scheduledTask{task: t, conns: conns})
+		s.queued = append(s.queued, &scheduledTask{task: t, conns: a.Connections})
 	}
 
 	// Admit up to `slots` initial tasks.
@@ -128,13 +128,14 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 	s.mu.Unlock()
 	admitted := 0
 	for i := 0; i < len(initial) && admitted < s.slots; i++ {
-		t, conns, mErr := s.maker(initial[i].URL, i)
+		t, _, mErr := s.maker(initial[i].URL, i)
 		if mErr != nil {
 			atomic.AddInt32(&s.failed, 1)
 			continue
 		}
 		s.wg.Add(1)
-		s.startOne(ctx, &scheduledTask{task: t, conns: conns})
+		// Use the Balancer's per-file allocation, not the TaskMaker's global default.
+		s.startOne(ctx, &scheduledTask{task: t, conns: initial[i].Connections})
 		admitted++
 	}
 
