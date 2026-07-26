@@ -43,7 +43,17 @@ func ConfirmAsk(in io.Reader, out io.Writer, prompt string) (bool, error) {
 }
 
 // ConfirmSingle renders the §9 single-file prompt and asks for confirmation.
-func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int64, conns int) (bool, error) {
+// When useColor is true, labels are yellow, the filename is cyan, size is
+// green, and the "Continue?" prompt is bold yellow.
+func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int64, conns int, useColor bool) (bool, error) {
+	if useColor {
+		fmt.Fprintf(out, "  %sFile       :%s %s%s%s\n", colorYellow, colorReset, colorCyan, filename, colorReset)
+		fmt.Fprintf(out, "  %sSize       :%s %s%s%s\n", colorYellow, colorReset, colorGreen, FormatFileSize(size), colorReset)
+		fmt.Fprintf(out, "  %sConnections:%s %s%d parallel%s\n", colorYellow, colorReset, colorMagenta, conns, colorReset)
+		fmt.Fprintf(out, "  %sDestination:%s %s\n", colorYellow, colorReset, dest)
+		fmt.Fprintln(out)
+		return ConfirmAsk(in, out, fmt.Sprintf("%sContinue?%s [Y/n] ", colorYellow, colorReset))
+	}
 	fmt.Fprintln(out, "File       :", filename)
 	fmt.Fprintln(out, "Size       :", FormatFileSize(size))
 	fmt.Fprintln(out, "Connections:", conns, "parallel")
@@ -54,10 +64,34 @@ func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int6
 
 // ConfirmBatch renders the §9 batch prompt. `rows` are the per-file summaries
 // (name, size). `connsPerFile` and `parallelFiles` describe the allocation.
-func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, parallelFiles, totalFiles int) (bool, error) {
+func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, parallelFiles, totalFiles int, useColor bool) (bool, error) {
 	var totalSize int64
 	for _, r := range rows {
 		totalSize += r.Size
+	}
+	if useColor {
+		fmt.Fprintf(out, "  %sODM will download%s %s%d files%s (total ~%s%s%s)\n",
+			colorGreen, colorReset,
+			colorYellow, totalFiles, colorReset,
+			colorCyan, FormatFileSize(totalSize), colorReset)
+		if connsPerFile <= 1 {
+			fmt.Fprintf(out, "  %sAllocation:%s 1 connection/file, %s%d files%s running in parallel (rest queued)\n",
+				colorYellow, colorReset, colorMagenta, parallelFiles, colorReset)
+		} else {
+			fmt.Fprintf(out, "  %sAllocation:%s %s%d connections/file%s, %s%d files%s running in parallel (rest queued)\n",
+				colorYellow, colorReset,
+				colorMagenta, connsPerFile, colorReset,
+				colorMagenta, parallelFiles, colorReset)
+		}
+		fmt.Fprintln(out)
+		for i, r := range rows {
+			fmt.Fprintf(out, "    %s[%d]%s %-26s %s%s%s\n",
+				colorGreen, i+1, colorReset,
+				r.Name,
+				colorCyan, FormatFileSize(r.Size), colorReset)
+		}
+		fmt.Fprintln(out)
+		return ConfirmAsk(in, out, fmt.Sprintf("%sContinue?%s [Y/n] ", colorYellow, colorReset))
 	}
 	fmt.Fprintf(out, "ODM will download %d files (total ~%s)\n", totalFiles, FormatFileSize(totalSize))
 	if connsPerFile <= 1 {

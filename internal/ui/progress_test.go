@@ -180,12 +180,27 @@ func TestConfirmAsk(t *testing.T) {
 
 func TestConfirmSingle(t *testing.T) {
 	var out bytes.Buffer
-	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16)
+	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, false)
 	if err != nil || !ok {
 		t.Fatalf("should confirm yes, got ok=%v err=%v", ok, err)
 	}
 	if !strings.Contains(out.String(), "linux") && !strings.Contains(out.String(), "file.tar.zst") {
 		t.Fatalf("prompt missing details: %s", out.String())
+	}
+}
+
+func TestConfirmSingle_Color(t *testing.T) {
+	var out bytes.Buffer
+	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, true)
+	if err != nil || !ok {
+		t.Fatalf("should confirm yes, got ok=%v err=%v", ok, err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "\x1b[") {
+		t.Fatalf("colored prompt must contain ANSI codes: %s", s)
+	}
+	if !strings.Contains(s, "file.tar.zst") {
+		t.Fatalf("prompt missing filename: %s", s)
 	}
 }
 
@@ -545,12 +560,33 @@ func TestConfirmBatch_Layout(t *testing.T) {
 		{Name: "a.tar.zst", Size: 120 << 20},
 		{Name: "b.tar.xz", Size: 80 << 20},
 	}
-	_, err := ConfirmBatch(strings.NewReader("n\n"), &out, rows, 4, 4, 2)
+	_, err := ConfirmBatch(strings.NewReader("n\n"), &out, rows, 4, 4, 2, false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	s := out.String()
 	for _, want := range []string{"2 files", "4 connections/file", "4 files running in parallel", "[1]", "[2]", "MiB"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("batch prompt missing %q: %s", want, s)
+		}
+	}
+}
+
+func TestConfirmBatch_Color(t *testing.T) {
+	var out bytes.Buffer
+	rows := []FileRow{
+		{Name: "a.tar.zst", Size: 120 << 20},
+		{Name: "b.tar.xz", Size: 80 << 20},
+	}
+	_, err := ConfirmBatch(strings.NewReader("n\n"), &out, rows, 4, 4, 2, true)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "\x1b[") {
+		t.Fatalf("colored batch prompt must contain ANSI codes: %s", s)
+	}
+	for _, want := range []string{"2 files", "[1]", "[2]", "a.tar.zst", "b.tar.xz"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("batch prompt missing %q: %s", want, s)
 		}
