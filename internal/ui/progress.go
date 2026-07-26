@@ -340,21 +340,18 @@ func sizelessPos(v download.ProgressView, pos int) int {
 	return -1
 }
 
-// truncateToWidth cuts s to at most width runes so it fits on one terminal row
-// without wrapping. Runes are a coarse proxy for display width (combining
-// marks/wide CJK aren't perfectly 1:1) but it's correct for the bar's ASCII
-// payload — the names/paths are the only variable-width field and those are
-// already rune-truncated by truncateName. A width<=0 means "unbounded" and
-// returns s unchanged.
+// truncateToWidth cuts s to at most width visible display cells so it fits on
+// one terminal row without wrapping. ANSI escape sequences are preserved
+// intact — only visible characters are counted toward the width limit. A
+// width<=0 means "unbounded" and returns s unchanged.
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	rs := []rune(s)
-	if len(rs) <= width {
+	if ansiVisibleWidth(s) <= width {
 		return s
 	}
-	return string(rs[:width])
+	return truncateVisibleWidth(s, width)
 }
 
 // emitNonTTY prints the non-TTY snapshot subject to the milestone+interval

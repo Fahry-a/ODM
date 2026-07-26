@@ -30,9 +30,11 @@ const (
 
 	// persistCheckpointInterval controls how often the control file is written
 	// during an active download. Every N completed chunks the .odm file is
-	// flushed so a crash/kill leaves a usable resume point. aria2 uses a
-	// similar periodic-persist strategy.
-	persistCheckpointInterval = 5
+	// flushed so a crash/kill leaves a usable resume point (similar to aria2's
+	// periodic-persist strategy). Set to 1 so the .odm file is persisted on
+	// every chunk completion — this ensures the resume file is always up to
+	// date with the latest progress.
+	persistCheckpointInterval = 1
 )
 
 func (s TaskState) String() string {
@@ -322,6 +324,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		conns = 1
 		t.conns.Store(1)
 	}
+
+	// Write the control file immediately so it's visible on disk from the
+	// start (like aria2's .aria2), not only after the first checkpoint.
+	t.persistControl()
 
 	var wg sync.WaitGroup
 	for i := range conns {
