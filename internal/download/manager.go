@@ -189,7 +189,7 @@ const (
 // Version is the ODM release string; surfaced over RPC (odm.getVersion) and used
 // in the default User-Agent. Defined here (not import cycling from config) so
 // the engine + RPC layer can read it without depending on config at runtime.
-const Version = "odm/0.2.0"
+const Version = "odm/0.3.0"
 
 // ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {

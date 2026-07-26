@@ -18,6 +18,53 @@ The PRD section references below point at `PRD.md`.
 
 ---
 
+## [0.3.0] - 2026-07-26
+
+Colored ILoveCandy UI, transport-level timeout, and connection allocation fixes.
+
+### Added
+- ANSI colors to pacman bar: face (`c`/`C`) → yellow, dashes → green, dots →
+  cyan. Connections `[xN]` → magenta (active), green (completed), grey (queued).
+  Percentage → state-colored. Summary line: green total, yellow speed.
+  (`internal/ui/render.go`)
+- Colorized confirmation prompt: labels yellow, filename cyan, size green,
+  connections magenta, "Continue?" highlighted. Auto-detects TTY.
+  (`internal/ui/confirm.go`)
+- ANSI-aware truncation (`ansiVisibleWidth`, `truncateVisibleWidth`) so colored
+  strings survive terminal width limits without garbled escape sequences.
+  (`internal/ui/render.go`)
+- Progress bar in summary line with fixed-width columns.
+  (`internal/ui/render.go` `RenderSummary`)
+- Probe timeout: 15 seconds per URL so a slow/unresponsive server can't block
+  the whole batch. (`cmd/odm/main.go`)
+- `.odm` control file persisted on every chunk completion (interval 5→1) for
+  maximum resume safety. (`internal/download/task.go`)
+
+### Fixed
+- Connection allocation: scheduler now uses the Balancer's per-file allocation
+  (`a.Connections`) instead of the TaskMaker's global `-c` value. Mode B
+  correctly gives 1 conn/file; Mode C distributes remainder correctly.
+  (`internal/scheduler/queue.go`)
+- Task list ordering race: `emit()` and `LiveViews()` now sort the live slice
+  by `TaskID` so task lines don't shuffle between frames.
+  (`internal/scheduler/queue.go`)
+- Zombie tasks: `isActive()` hides tasks with 0 bytes and 0 speed from the
+  display. (`internal/ui/progress.go`)
+- Confirmation prompt shows actual balancer allocation, not just the `-sf` flag
+  value (which can differ due to remainder distribution).
+  (`cmd/odm/main.go`)
+- Transport-level timeout: `DialContext` + `TLSHandshakeTimeout` on the
+  `http.Transport` instead of per-request `context.WithTimeout`. Body reads
+  now run under the task-level context so slow-but-alive streams survive
+  indefinitely (aria2c-class behaviour). (`internal/transport/transport.go`,
+  `internal/download/task.go`)
+- "Total: 0/0" no longer shown before any snapshots arrive.
+  (`internal/ui/progress.go`)
+
+### Changed
+- PKGBUILD converted to `-bin` package: downloads pre-built binary from
+  GitHub Releases instead of building from source. (`packaging/PKGBUILD`)
+
 ## [0.2.0] - 2026-07-26 (pre-release)
 
 Enhanced control file, periodic resume checkpoints, CI lint, and test coverage.
@@ -207,6 +254,7 @@ JSON-RPC + WebSocket control surface.
   emit path is exercised via `odm.pause`, but not received-end-to-end in
   a test).
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Fahry-a/ODM/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Fahry-a/ODM/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Fahry-a/ODM/releases/tag/v0.1.0
