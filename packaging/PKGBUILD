@@ -1,71 +1,31 @@
 # Maintainer: Fahry-a <farhannzarm@gmail.com>
 # PKGBUILD for ODM (Oryn Download Manager) — Arch / CachyOS.
-# Builds the static Go binary and installs the man page + example config.
+# Pre-built binary package (downloads from GitHub Releases).
 #
 # AUR publishing: tag a release (git tag v$pkgver), then update sha256sums:
 #   updpkgsums   # or: makepkg -g >> PKGBUILD
 #   makepkg --printsrcinfo > .SRCINFO
 
-pkgname=odm
-pkgver=0.2.0
+pkgname=odm-bin
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="Oryn Download Manager — an aria2c-inspired CLI with a Connection Balancer and a pacman-style progress bar"
 arch=('x86_64' 'aarch64')
 url="https://github.com/Fahry-a/odm"
 license=('MIT')
 depends=('glibc')
-makedepends=('go' 'git')
-# Don't clobber a user-edited config on upgrade.
 backup=('etc/odm/config.conf.example')
-options=('!lto' '!strip')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/Fahry-a/odm/archive/refs/tags/v$pkgver.tar.gz")
+options=('!strip')
+
+_arch_x86_64="linux_amd64"
+_arch_aarch64="linux_arm64"
+_arch="arch_${CARCH}"
+_source_arch="${!_arch}"
+
+source=("${pkgname}-${pkgver}-${_source_arch}::https://github.com/Fahry-a/odm/releases/download/v${pkgver}/odm_${pkgver}_${_source_arch}")
 sha256sums=('SKIP')
 
-export GOTOOLCHAIN=local
-export GOFLAGS="-trimpath -mod=readonly"
-export CGO_ENABLED=0
-
-# Resilient cd: GitHub tag archives unpack as $pkgname-$pkgver, local test
-# trees may use $pkgname or the bare srcdir. Try them in order.
-_cd_srcdir() {
-    cd "$srcdir/$pkgname-$pkgver" 2>/dev/null || \
-    cd "$srcdir/$pkgname"         2>/dev/null || \
-    cd "$srcdir"
-}
-
-prepare() {
-    _cd_srcdir
-    go mod download
-}
-
-build() {
-    _cd_srcdir
-    # -s -w strip debug info/DWARF (paired with -trimpath); -buildid removes
-    # the build-id so makepkg doesn't need to strip. Leave the Version const
-    # alone — it's surfaced over RPC.
-    go build \
-        -ldflags="-s -w -buildid=" \
-        -o odm ./cmd/odm
-}
-
-check() {
-    _cd_srcdir
-    go test ./...
-}
-
 package() {
-    _cd_srcdir
-
     # Binary.
-    install -Dm755 odm "$pkgdir/usr/bin/odm"
-
-    # Man page — preformatted groff, no roff step needed.
-    install -Dm644 docs/odm.1 "$pkgdir/usr/share/man/man1/odm.1"
-
-    # Example config — .example suffix so upgrades never clobber real config.
-    install -Dm644 configs/odm.conf.example \
-        "$pkgdir/etc/odm/config.conf.example"
-
-    # License.
-    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm755 "$srcdir/${pkgname}-${pkgver}-${_source_arch}" "$pkgdir/usr/bin/odm"
 }

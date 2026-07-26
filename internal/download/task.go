@@ -30,9 +30,11 @@ const (
 
 	// persistCheckpointInterval controls how often the control file is written
 	// during an active download. Every N completed chunks the .odm file is
-	// flushed so a crash/kill leaves a usable resume point. aria2 uses a
-	// similar periodic-persist strategy.
-	persistCheckpointInterval = 5
+	// flushed so a crash/kill leaves a usable resume point (similar to aria2's
+	// periodic-persist strategy). Set to 1 so the .odm file is persisted on
+	// every chunk completion — this ensures the resume file is always up to
+	// date with the latest progress.
+	persistCheckpointInterval = 1
 )
 
 func (s TaskState) String() string {
@@ -249,6 +251,11 @@ func (t *Task) SupportsRange() bool { return t.probe != nil && t.probe.SupportsR
 // State reports the current lifecycle state (snapshot through the atomic).
 func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
 
+// SetConns overrides the task's connection count. Used by the Scheduler to
+// apply the Balancer's per-file allocation, which may differ from the global
+// default returned by the TaskMaker.
+func (t *Task) SetConns(n int) { t.conns.Store(int32(n)) }
+
 // Start runs Probe → open file → start workers. Blocks until the task finishes
 // (completed or errored) or ctx is cancelled. progressSink receives periodic
 // snapshots for the UI/RPC aggregator; pass nil to opt out.
@@ -322,6 +329,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		conns = 1
 		t.conns.Store(1)
 	}
+
+	// Write the control file immediately so it's visible on disk from the
+	// start (like aria2's .aria2), not only after the first checkpoint.
+	t.persistControl()
 
 	var wg sync.WaitGroup
 	for i := range conns {
@@ -444,14 +455,11 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress.
 func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView)) error {
-	// Per-op timeout: bounded request setup; the stream may take longer but the
-	// dial/headers must come back within opts.Timeout.
-	reqCtx := ctx
-	if t.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		reqCtx, cancel = context.WithTimeout(ctx, t.opts.Timeout)
-		defer cancel()
-	}
+	// No per-request timeout here — dial + TLS + handshake timeouts are
+	// handled by the Transport's DialContext and TLSHandshakeTimeout. The
+	// body read runs under the task-level ctx so a slow-but-alive stream
+	// survives indefinitely (aria2c-class behaviour). The task ctx is
+	// cancelled only on explicit Cancel or when the Manager shuts down.
 
 	// Sizeless single-stream chunk: plain GET, no Range.
 	if t.probe.TotalSize < 0 || (t.probe.SingleStream && c.Start == 0 && c.Index == 0) {
@@ -462,7 +470,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	if end < 0 {
 		end = -1
 	}
-	rr, err := t.client.GetRange(reqCtx, t.probe.FinalURL, c.Start, end)
+	rr, err := t.client.GetRange(ctx, t.probe.FinalURL, c.Start, end)
 	if err != nil {
 		return err
 	}
@@ -495,13 +503,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
 func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView)) error {
-	reqCtx := ctx
-	if t.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		reqCtx, cancel = context.WithTimeout(ctx, t.opts.Timeout)
-		defer cancel()
-	}
-	req, err := t.client.NewGetRequest(reqCtx, t.probe.FinalURL)
+	req, err := t.client.NewGetRequest(ctx, t.probe.FinalURL)
 	if err != nil {
 		return err
 	}

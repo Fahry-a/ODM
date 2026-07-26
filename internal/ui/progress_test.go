@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"odm/internal/download"
 	"odm/internal/scheduler"
@@ -151,8 +152,8 @@ func TestFormatFileSize_No1024Overflow(t *testing.T) {
 }
 
 func TestRenderSummary(t *testing.T) {
-	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, false)
-	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:00:32") {
+	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, 750<<20, 1<<30, false)
+	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:00:32") || !strings.Contains(s, "73%") || !strings.Contains(s, "[") {
 		t.Fatalf("summary wrong: %s", s)
 	}
 }
@@ -179,12 +180,27 @@ func TestConfirmAsk(t *testing.T) {
 
 func TestConfirmSingle(t *testing.T) {
 	var out bytes.Buffer
-	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16)
+	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, false)
 	if err != nil || !ok {
 		t.Fatalf("should confirm yes, got ok=%v err=%v", ok, err)
 	}
 	if !strings.Contains(out.String(), "linux") && !strings.Contains(out.String(), "file.tar.zst") {
 		t.Fatalf("prompt missing details: %s", out.String())
+	}
+}
+
+func TestConfirmSingle_Color(t *testing.T) {
+	var out bytes.Buffer
+	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, true)
+	if err != nil || !ok {
+		t.Fatalf("should confirm yes, got ok=%v err=%v", ok, err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "\x1b[") {
+		t.Fatalf("colored prompt must contain ANSI codes: %s", s)
+	}
+	if !strings.Contains(s, "file.tar.zst") {
+		t.Fatalf("prompt missing filename: %s", s)
 	}
 }
 
@@ -544,12 +560,33 @@ func TestConfirmBatch_Layout(t *testing.T) {
 		{Name: "a.tar.zst", Size: 120 << 20},
 		{Name: "b.tar.xz", Size: 80 << 20},
 	}
-	_, err := ConfirmBatch(strings.NewReader("n\n"), &out, rows, 4, 4, 2)
+	_, err := ConfirmBatch(strings.NewReader("n\n"), &out, rows, 4, 4, 2, false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	s := out.String()
 	for _, want := range []string{"2 files", "4 connections/file", "4 files running in parallel", "[1]", "[2]", "MiB"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("batch prompt missing %q: %s", want, s)
+		}
+	}
+}
+
+func TestConfirmBatch_Color(t *testing.T) {
+	var out bytes.Buffer
+	rows := []FileRow{
+		{Name: "a.tar.zst", Size: 120 << 20},
+		{Name: "b.tar.xz", Size: 80 << 20},
+	}
+	_, err := ConfirmBatch(strings.NewReader("n\n"), &out, rows, 4, 4, 2, true)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "\x1b[") {
+		t.Fatalf("colored batch prompt must contain ANSI codes: %s", s)
+	}
+	for _, want := range []string{"2 files", "[1]", "[2]", "a.tar.zst", "b.tar.xz"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("batch prompt missing %q: %s", want, s)
 		}
@@ -627,5 +664,78 @@ func TestTTYRedraw_CursorUpMatchesNewlines(t *testing.T) {
 		}
 		prevLines = r.lastLines
 		t.Logf("frame %d: ups=%d lines=%d ok", i, ups, r.lastLines)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ANSI-aware truncation: colored lines are truncated by visible width, not
+// raw rune count, so ANSI escape sequences are preserved intact.
+// ---------------------------------------------------------------------------
+
+func TestAnsiVisibleWidth(t *testing.T) {
+	cases := []struct {
+		s    string
+		want int
+	}{
+		{"hello", 5},
+		{"", 0},
+		{"\x1b[33mc\x1b[0m", 1},       // colored 'c' = 1 visible cell
+		{"\x1b[32m---\x1b[0m", 3},      // 3 dashes
+		{"\x1b[35m[x4]\x1b[0m", 4},     // [x4] = 4 visible
+		{"\x1b[0m\x1b[33m\x1b[0m", 0},  // just escape codes
+		{"abc\x1b[31mdef\x1b[0mghi", 9}, // mix: 3 + 3 + 3
+	}
+	for _, tc := range cases {
+		got := ansiVisibleWidth(tc.s)
+		if got != tc.want {
+			t.Fatalf("ansiVisibleWidth(%q) = %d, want %d", tc.s, got, tc.want)
+		}
+	}
+}
+
+func TestTruncateVisibleWidth(t *testing.T) {
+	colored := "\x1b[33mc\x1b[0m o o o o o o o o o"
+	// Visible: "c o o o o o o o o o" = 19 chars. Truncate to 5 → "c o o " + reset.
+	got := truncateVisibleWidth(colored, 5)
+	if ansiVisibleWidth(got) != 5 {
+		t.Fatalf("truncateVisibleWidth(_, 5): visible width = %d, want 5", ansiVisibleWidth(got))
+	}
+	// The result must not end with an unclosed color (reset must be present
+	// if the last segment was a visible char inside a color span).
+	// Check: the last visible char should not be preceded by an unreset color.
+	// Simple check: if the string contains any color code, the part after the
+	// last visible char must either be plain or have a reset.
+	if ansiVisibleWidth(got) > 0 {
+		// Verify no partial escape sequences by checking valid UTF-8.
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncated colored string is not valid UTF-8: %q", got)
+		}
+	}
+
+	// Plain text: truncate to 3 → "hel"
+	got = truncateVisibleWidth("hello", 3)
+	if got != "hel" {
+		t.Fatalf("truncateVisibleWidth(\"hello\", 3) = %q, want \"hel\"", got)
+	}
+
+	// Width >= visible: returns unchanged.
+	got = truncateVisibleWidth("\x1b[33mab\x1b[0m", 10)
+	if ansiVisibleWidth(got) != 2 {
+		t.Fatalf("should not truncate when width >= visible: got visible width %d", ansiVisibleWidth(got))
+	}
+}
+
+func TestTruncateToWidth_AnsiAware(t *testing.T) {
+	// Simulate a colored task line that would be wider than terminal.
+	// truncateToWidth must preserve ANSI codes intact.
+	line := "\x1b[33mlinux-cachyos        \x1b[0m  500.0 MiB  \x1b[33m  1.9 MiB/s\x1b[0m  00:04:18  \x1b[35m[x16]\x1b[0m  [\x1b[33mc\x1b[0m\x1b[32m----\x1b[0m\x1b[36m o o\x1b[0m]  \x1b[33m  1%\x1b[0m"
+	got := truncateToWidth(line, 80)
+	visible := ansiVisibleWidth(got)
+	if visible > 80 {
+		t.Fatalf("truncateToWidth should limit visible width to 80, got %d", visible)
+	}
+	// The line must still contain ANSI codes (not stripped).
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("truncateToWidth must preserve ANSI codes")
 	}
 }

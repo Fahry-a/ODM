@@ -118,7 +118,12 @@ func run(argv []string) error {
 	sizes := make(map[string]int64, len(o.URLs))
 	probeClient := mgr.Client()
 	for _, u := range o.URLs {
-		pr, perr := probeClient.Probe(ctx, u)
+		// Each probe gets its own timeout so a slow/unresponsive server can't
+		// block the whole batch. If the probe fails (timeout or otherwise) we
+		// fall back to sizeless single-stream.
+		probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
+		pr, perr := probeClient.Probe(probeCtx, u)
+		probeCancel()
 		if perr != nil {
 			logger.Warnf("probe failed for %s: %v", u, perr)
 			// Treat an unprobeable URL as range-unsupported and sizeless; the
@@ -274,6 +279,7 @@ func parseChunkSize(s string) (int64, error) {
 // confirmPlan renders the §9 prompt for the appropriate mode (single-file vs
 // batch) and returns the user's Y/n answer.
 func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64, mgr *download.Manager) (bool, error) {
+	useColor := ui.IsTTY(os.Stdout)
 	if len(o.URLs) == 1 {
 		url := o.URLs[0]
 		conns := 1
@@ -287,14 +293,14 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 		if i := strings.LastIndexByte(name, '/'); i >= 0 {
 			disp = name[i+1:]
 		}
-		return ui.ConfirmSingle(os.Stdin, os.Stdout, disp, name, size, conns)
+		return ui.ConfirmSingle(os.Stdin, os.Stdout, disp, name, size, conns, useColor)
 	}
 	rows := ui.RowsFromPlan(plan, sizes)
 	connsPerFile := 1
-	if o.SplitFile > 0 {
-		connsPerFile = o.SplitFile
+	if len(plan.Parallel) > 0 {
+		connsPerFile = plan.Parallel[0].Connections
 	}
-	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs))
+	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
 }
 
 // printSummary writes the final outcome line (§12 step 9).
