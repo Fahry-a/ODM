@@ -257,6 +257,8 @@ type viewStats struct {
 	completed, total int
 	speed            int64
 	maxETA           time.Duration
+	bytesDone        int64
+	totalSize        int64
 }
 
 // aggregate computes the bottom summary from the ordered view, counting by
@@ -272,6 +274,10 @@ func aggregate(view []download.ProgressView) viewStats {
 		}
 		ids[v.ID] = struct{}{}
 		st.total++
+		st.bytesDone += v.BytesDone
+		if v.TotalSize > 0 {
+			st.totalSize += v.TotalSize
+		}
 		if v.State == download.StateCompleted {
 			st.completed++
 		}
@@ -284,6 +290,16 @@ func aggregate(view []download.ProgressView) viewStats {
 		}
 	}
 	return st
+}
+
+// isActive reports whether a task should be rendered in the per-file list.
+// Tasks that haven't started producing data yet (0 bytes, 0 speed) are hidden
+// to avoid cluttering the display with zombie lines that flash briefly.
+func isActive(v download.ProgressView) bool {
+	if v.BytesDone == 0 && v.Speed == 0 {
+		return false
+	}
+	return true
 }
 
 // Frame renders the full set of task lines + summary, overwriting the previous
@@ -315,10 +331,17 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	lines := make([]string, 0, len(view)+1)
 	pos := bouncePosition(r.indeterminateTick, BarWidth)
 	for _, v := range view {
+		if !isActive(v) {
+			continue
+		}
 		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick)
 		lines = append(lines, truncateToWidth(line, width))
 	}
-	lines = append(lines, truncateToWidth(RenderSummary(st.completed, st.total, st.speed, st.maxETA, r.useColor), width))
+	// Only show summary when there are tasks — avoids the misleading
+	// "Total: 0/0" before any snapshots arrive.
+	if st.total > 0 {
+		lines = append(lines, truncateToWidth(RenderSummary(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor), width))
+	}
 
 	// Move cursor up over the previous frame, clearing each row.
 	for i := 0; i < r.lastLines; i++ {
@@ -395,11 +418,14 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 		r.lastLoggedPct = min(int(float64(st.completed)/float64(st.total)*100), 100)
 	}
 
-	summary := RenderSummary(st.completed, st.total, st.speed, st.maxETA, r.useColor)
+	summary := RenderSummary(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor)
 	var b strings.Builder
 	if full {
 		b.WriteString("---\n")
 		for _, v := range view {
+			if !isActive(v) {
+				continue
+			}
 			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick))
 			b.WriteByte('\n')
 		}
