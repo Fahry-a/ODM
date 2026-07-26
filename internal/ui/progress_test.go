@@ -152,8 +152,8 @@ func TestFormatFileSize_No1024Overflow(t *testing.T) {
 }
 
 func TestRenderSummary(t *testing.T) {
-	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, false)
-	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:00:32") {
+	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, 750<<20, 1<<30, false)
+	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:00:32") || !strings.Contains(s, "73%") || !strings.Contains(s, "[") {
 		t.Fatalf("summary wrong: %s", s)
 	}
 }

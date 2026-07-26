@@ -500,14 +500,23 @@ func colorizeBarInLine(line string) string {
 
 // RenderSummary formats the bottom summary line (PRD §8.1 example):
 //
-//	Total: X/Y completed  |  <speed>/s  |  ETA HH:MM:SS
-func RenderSummary(completed, total int, speedBps int64, eta time.Duration, useColor bool) string {
-	sp := FormatSpeed(speedBps)
+//	Total: X/Y completed  |  <speed>/s  |  ETA HH:MM:SS  [====--]  ZZ%
+func RenderSummary(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool) string {
+	sp := fitWidth(FormatSpeed(speedBps), colSpeed)
+	etaStr := fitWidth(FormatDuration(eta), colETA)
+	pct := 0
+	if totalSize > 0 {
+		pct = min(max(int(float64(bytesDone)/float64(totalSize)*100), 0), 100)
+	}
+	pctStr := fmt.Sprintf("%3d%%", pct)
+	bar := Bar(bytesDone, totalSize, 20)
 	if useColor {
-		return fmt.Sprintf("%sTotal: %d/%d completed%s  |  %s%s%s  |  ETA %s",
+		bar = colorizeBar(bar, true)
+		return fmt.Sprintf("%sTotal: %d/%d completed%s  |  %s%s%s  |  ETA %s  [%s]  %s%s%s",
 			string(colorGreen), completed, total, string(colorReset),
 			string(colorYellow), sp, string(colorReset),
-			FormatDuration(eta))
+			etaStr, bar,
+			string(colorGreen), pctStr, string(colorReset))
 	}
-	return fmt.Sprintf("Total: %d/%d completed  |  %s  |  ETA %s", completed, total, sp, FormatDuration(eta))
+	return fmt.Sprintf("Total: %d/%d completed  |  %s  |  ETA %s  [%s]  %s", completed, total, sp, etaStr, bar, pctStr)
 }
