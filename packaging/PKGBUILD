@@ -38,4 +38,6 @@ package() {
 
     # Example config.
     install -Dm644 "$srcdir/${pkgname}.conf.example" "$pkgdir/etc/odm/config.conf.example"
+
+    install -Dm644 "$srcdir/${pkgname}.conf.example" "$pkgdir/etc/odm/config.conf"
 }
