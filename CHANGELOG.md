@@ -11,6 +11,18 @@ The PRD section references below point at `PRD.md`.
 ## [Unreleased]
 
 ### Added
+
+### Fixed
+
+### Removed
+
+---
+
+## [0.2.0] - 2026-07-26 (pre-release)
+
+Enhanced control file, periodic resume checkpoints, CI lint, and test coverage.
+
+### Added
 - Tests for `internal/storage` (previously 0): concurrent `WriteAt` non-overlap
   stress, pre-allocation, sizeless stream, resume control file round-trip,
   missing/corrupt control file, atomic save, idempotent remove, stray `.tmp`
@@ -23,12 +35,22 @@ The PRD section references below point at `PRD.md`.
   CI now runs `golangci-lint` between vet and test. (`.golangci.yml`,
   `.github/workflows/ci.yml`)
 - `CHANGELOG.md`.
+- Enhanced `.odm` control file with richer metadata: `created_at`/`updated_at`
+  timestamps, `connections` count, `user_agent`, `odm_version`, and `checksum`
+  (if `--checksum` was used). New helper methods `BytesDone()`, `FractionDone()`,
+  `Age()`, and `Summary()` on `ControlFile` for diagnostics. All new fields are
+  `omitempty` for backward compatibility with v0.1.0 files.
+  (`internal/storage/resume.go`)
 
 ### Fixed
 - `storage.File.Close()` is now idempotent (previously returned
   "file already closed" on a second call). `logging.Logger.Close()` likewise.
 - Removed unnecessary `io.ReadCloser()` conversions in `task.go`
   (`rr.Resp.Body` and `resp.Body` are already `io.ReadCloser`).
+- Control file (`.odm`) is now persisted periodically during download
+  (every 5 completed chunks) instead of only at task finish. A crashed or
+  killed process now leaves a usable resume point, matching aria2's
+  `.aria2` checkpoint behaviour. (`internal/download/task.go`)
 
 ### Removed
 - Dead code: `ChunkQueue.taskDone` field, `Task.finished` field,
@@ -185,5 +207,6 @@ JSON-RPC + WebSocket control surface.
   emit path is exercised via `odm.pause`, but not received-end-to-end in
   a test).
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Fahry-a/ODM/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Fahry-a/ODM/releases/tag/v0.1.0

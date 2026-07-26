@@ -104,3 +104,28 @@ gh release create vX.Y.Z --prerelease build/odm_X.Y.Z_* --title "vX.Y.Z" --notes
 ```
 
 Tag format: `v<semver>`. Pre-releases use `--prerelease`.
+
+## Roadmap (PRD §15, not yet implemented)
+
+These are documented in the PRD but deferred — do NOT treat them as bugs:
+
+- **ETag validation on resume** — the `.odm` file stores the ETag from the
+  initial probe, but on resume the engine does NOT revalidate with the server.
+  If the file changed at the same URL between sessions, stale data is resumed.
+  Fix: on resume, send a HEAD with `If-None-Match: <etag>` and compare
+  `Content-Length` vs `total_size` from the control file.
+- **TLS for RPC server** — the RPC HTTP/WS listener is plain text. When
+  `--rpc-listen-all` is used on `0.0.0.0`, traffic is unencrypted. Fix: add
+  `--rpc-tls-cert` / `--rpc-tls-key` flags, or document reverse-proxy setup.
+- **systemd unit file** — daemon mode (`--rpc`) has no service unit. Fix:
+  add `packaging/odm.service` with `DynamicUser=`, `ProtectSystem=strict`,
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE` if needed.
+- **`changeOption` mid-flight** — currently an acknowledged no-op
+  (`server.go:187`). PRD §10.2 lists it but §15 defers real mutation.
+- **Multi-mirror download** — splitting chunks across duplicate URLs for the
+  same file. Out of scope for the connection-aggregation value proposition.
+- **BitTorrent / magnet links** — explicitly non-goal for MVP.
+- **HTTP/2 / HTTP/3 stream multiplexing** — deliberately excluded; the whole
+  point of ODM is multi-connection aggregation over HTTP/1.1.
+- **Per-task speed limits** — only the global `--limit-rate` exists today.
+- **Reference Web UI** — roadmap item built on the RPC + WebSocket layer.
