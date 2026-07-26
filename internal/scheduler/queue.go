@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -113,12 +114,12 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 
 	// Build the queue (everything starts as "waiting" until a slot is granted).
 	for _, a := range s.plan.Queued {
-		t, conns, mErr := s.maker(a.URL, -1)
+		t, _, mErr := s.maker(a.URL, -1)
 		if mErr != nil {
 			atomic.AddInt32(&s.failed, 1)
 			continue
 		}
-		s.queued = append(s.queued, &scheduledTask{task: t, conns: conns})
+		s.queued = append(s.queued, &scheduledTask{task: t, conns: a.Connections})
 	}
 
 	// Admit up to `slots` initial tasks.
@@ -127,13 +128,14 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 	s.mu.Unlock()
 	admitted := 0
 	for i := 0; i < len(initial) && admitted < s.slots; i++ {
-		t, conns, mErr := s.maker(initial[i].URL, i)
+		t, _, mErr := s.maker(initial[i].URL, i)
 		if mErr != nil {
 			atomic.AddInt32(&s.failed, 1)
 			continue
 		}
 		s.wg.Add(1)
-		s.startOne(ctx, &scheduledTask{task: t, conns: conns})
+		// Use the Balancer's per-file allocation, not the TaskMaker's global default.
+		s.startOne(ctx, &scheduledTask{task: t, conns: initial[i].Connections})
 		admitted++
 	}
 
@@ -178,6 +180,11 @@ func (s *Scheduler) releaseIdle() {
 // startOne launches a task with its allocated conns. When it finishes it posts
 // itself to s.compl and decrements the WaitGroup.
 func (s *Scheduler) startOne(ctx context.Context, st *scheduledTask) {
+	// Override the task's connection count with the Balancer's per-file
+	// allocation. The TaskMaker returns the global -c default; the Balancer
+	// may have redistributed the budget (Mode B: 1/file, Mode C: SF/file).
+	st.task.SetConns(st.conns)
+
 	s.mu.Lock()
 	s.live[st.task.ID()] = st
 	s.mu.Unlock()
@@ -227,6 +234,9 @@ func (s *Scheduler) LiveViews() []download.ProgressView {
 	for _, st := range s.live {
 		out = append(out, st.task.Snapshot())
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
@@ -283,6 +293,11 @@ func (s *Scheduler) emit() {
 		queued = append(queued, st.task.Snapshot())
 	}
 	s.mu.Unlock()
+	// Sort live by TaskID for deterministic ordering (Go map iteration is
+	// random, so without this the task lines shuffle between frames).
+	sort.Slice(live, func(i, j int) bool {
+		return live[i].ID < live[j].ID
+	})
 	s.prog(live, queued)
 }
 
