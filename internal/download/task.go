@@ -251,6 +251,11 @@ func (t *Task) SupportsRange() bool { return t.probe != nil && t.probe.SupportsR
 // State reports the current lifecycle state (snapshot through the atomic).
 func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
 
+// SetConns overrides the task's connection count. Used by the Scheduler to
+// apply the Balancer's per-file allocation, which may differ from the global
+// default returned by the TaskMaker.
+func (t *Task) SetConns(n int) { t.conns.Store(int32(n)) }
+
 // Start runs Probe → open file → start workers. Blocks until the task finishes
 // (completed or errored) or ctx is cancelled. progressSink receives periodic
 // snapshots for the UI/RPC aggregator; pass nil to opt out.
