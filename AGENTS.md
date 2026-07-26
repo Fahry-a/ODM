@@ -64,8 +64,43 @@ GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o build/odm_0.1.0_linux_am
 
 ## Releases
 
+Automated via `.github/workflows/release.yml`. Push a `v*` tag → workflow verifies versions, cross-compiles, and creates a GitHub Release.
+
+**Release checklist (all 3 must match the tag):**
+
+1. `internal/config/config.go:26` — `const Version = "odm/X.Y.Z"`
+2. `internal/download/manager.go:190` — `const Version = "odm/X.Y.Z"`
+3. `packaging/PKGBUILD:10` — `pkgver=X.Y.Z`
+
+**Release steps:**
+
 ```bash
-gh release create v0.1.0 --prerelease build/odm_0.1.0_* --title "v0.1.0" --notes "..."
+# 1. Bump versions in all 3 locations above
+# 2. Move [Unreleased] section in CHANGELOG.md → new version header
+# 3. Commit
+git add -A && git commit -m "release: vX.Y.Z"
+
+# 4. Tag & push
+git tag vX.Y.Z
+git push origin main && git push origin vX.Y.Z
+```
+
+**What the workflow does:**
+
+1. Extracts version from git tag (strips `v` prefix)
+2. Extracts versions from `config.go`, `manager.go`, `PKGBUILD` — fails if any mismatch
+3. Cross-compiles 6 targets: `linux/{386,amd64,arm,arm64}`, `darwin/{amd64,arm64}`
+4. Parses `CHANGELOG.md` for the version section (Keep a Changelog format)
+5. Generates SHA-256 checksums
+6. Creates GitHub Release via `softprops/action-gh-release@v2`
+   - Pre-release auto-detected if version contains `-` (e.g. `v0.2.0-rc1`)
+
+**Binary naming:** `odm_X.Y.Z_<os>_<arch>` (e.g. `odm_0.2.0_linux_amd64`)
+
+**Manual fallback (if needed):**
+
+```bash
+gh release create vX.Y.Z --prerelease build/odm_X.Y.Z_* --title "vX.Y.Z" --notes "..."
 ```
 
 Tag format: `v<semver>`. Pre-releases use `--prerelease`.
