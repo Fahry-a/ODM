@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+#
+# golangci-lint v2 config for ODM.
+#
+# Context: CI previously ran only `go vet`. This file formalizes a broader but
+# still-conservative lint baseline. Doc comments use British spelling
+# (colour/centred/honour) intentionally — matching PRD §8's "grey" color name —
+# so misspell is NOT enabled (it would flag the British forms under US locale
+# or the American forms under UK locale; the codebase is deliberately mixed).
+#
+# Two errcheck patterns are excluded as intentional CLI idioms:
+#
+#   - `defer x.Close()` — a deferred close on shutdown can't usefully handle
+#     an error, and `defer func() { _ = x.Close() }()` adds noise without value.
+#   - `fmt.Fprint*` to a writer — terminal/log output is best-effort.
+#
+# staticcheck ST1012 (error vars must be ErrFoo) is disabled: the sentinel
+# `NoControlFile` (internal/storage/resume.go) is intentionally human-readable
+# per the PRD §11.3 contract.
+
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.26"
+
+linters:
+  enable:
+    - unconvert    # flags unnecessary type conversions like int64(int64(x))
+
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - -ST1012 # error vars don't have to be ErrFoo; readable names OK
+
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+
+    rules:
+      - linters:
+          - errcheck
+        text: '`[^`]*\.Close` is not checked'
+
+      - linters:
+          - errcheck
+        text: '`fmt\.F(println|printf|print)` is not checked'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

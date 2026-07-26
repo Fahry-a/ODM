@@ -26,7 +26,6 @@ type ChunkQueue struct {
 	chunks    []Chunk // remaining work
 	completed map[int64]struct{}
 	total     int64 // sum of completed chunk sizes
-	taskDone  bool
 }
 
 // NewChunkQueue builds the chunk list for a file of totalSize using chunkSize
