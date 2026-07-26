@@ -22,10 +22,20 @@ _arch_aarch64="linux_arm64"
 _arch="_arch_${CARCH}"
 _source_arch="${!_arch}"
 
-source=("${pkgname}-${pkgver}-${_source_arch}::https://github.com/Fahry-a/odm/releases/download/v${pkgver}/odm_${pkgver}_${_source_arch}")
-sha256sums=('SKIP')
+source=(
+    "${pkgname}-${pkgver}-${_source_arch}::https://github.com/Fahry-a/odm/releases/download/v${pkgver}/odm_${pkgver}_${_source_arch}"
+    "${pkgname}.1::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/docs/odm.1"
+    "${pkgname}.conf.example::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/configs/odm.conf.example"
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 package() {
     # Binary.
     install -Dm755 "$srcdir/${pkgname}-${pkgver}-${_source_arch}" "$pkgdir/usr/bin/odm"
+
+    # Man page.
+    install -Dm644 "$srcdir/${pkgname}.1" "$pkgdir/usr/share/man/man1/odm.1"
+
+    # Example config.
+    install -Dm644 "$srcdir/${pkgname}.conf.example" "$pkgdir/etc/odm/config.conf.example"
 }
