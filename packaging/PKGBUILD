@@ -19,7 +19,7 @@ options=('!strip')
 
 _arch_x86_64="linux_amd64"
 _arch_aarch64="linux_arm64"
-_arch="arch_${CARCH}"
+_arch="_arch_${CARCH}"
 _source_arch="${!_arch}"
 
 source=("${pkgname}-${pkgver}-${_source_arch}::https://github.com/Fahry-a/odm/releases/download/v${pkgver}/odm_${pkgver}_${_source_arch}")
