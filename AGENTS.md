@@ -105,10 +105,13 @@ gh release create vX.Y.Z --prerelease build/odm_X.Y.Z_* --title "vX.Y.Z" --notes
 
 Tag format: `v<semver>`. Pre-releases use `--prerelease`.
 
-## Roadmap (PRD §15, not yet implemented)
+## Roadmap (not yet implemented)
 
-These are documented in the PRD but deferred — do NOT treat them as bugs:
+These are deferred — do NOT treat them as bugs:
 
+- **Mid-flight dynamic reallocation** — rebalance connections of chunks
+  already in progress (beyond allocation-time reallocation). Requires live
+  goroutine renegotiation.
 - **ETag validation on resume** — the `.odm` file stores the ETag from the
   initial probe, but on resume the engine does NOT revalidate with the server.
   If the file changed at the same URL between sessions, stale data is resumed.
@@ -121,7 +124,7 @@ These are documented in the PRD but deferred — do NOT treat them as bugs:
   add `packaging/odm.service` with `DynamicUser=`, `ProtectSystem=strict`,
   `AmbientCapabilities=CAP_NET_BIND_SERVICE` if needed.
 - **`changeOption` mid-flight** — currently an acknowledged no-op
-  (`server.go:187`). PRD §10.2 lists it but §15 defers real mutation.
+  (`server.go:187`). The RPC spec lists it but real mutation is deferred.
 - **Multi-mirror download** — splitting chunks across duplicate URLs for the
   same file. Out of scope for the connection-aggregation value proposition.
 - **BitTorrent / magnet links** — explicitly non-goal for MVP.

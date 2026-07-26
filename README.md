@@ -170,7 +170,7 @@ curl -s -X POST http://127.0.0.1:6900/rpc -H 'Content-Type: application/json' \
 
 ### Events (WebSocket `/ws`)
 
-All five PRD §10.3 events are emitted over the `/ws` fan-out:
+All five WebSocket events are emitted over the `/ws` fan-out:
 
 | Event | When |
 |---|---|
@@ -198,7 +198,7 @@ Each event's `params` carries the same field set as `odm.tellStatus`'s result.
 
 ## Acceptance
 
-The behaviour in the PRD's §16 checklist is covered by the test suite:
+The acceptance checklist is covered by the test suite:
 
 - Balancer Modes A/B/C produce allocations exactly matching the formulas — `internal/scheduler/balancer_test.go`.
 - Total active connections never exceed `--max-connections` (default 32) unless the user raises it — enforced in `Compute`, a warning is printed in that case.
