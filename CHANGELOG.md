@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 (pre-1.0.0 versions may evolve without full backward-compat guarantees).
 
-The PRD section references below point at `PRD.md`.
+The PRD section references below point at the original `PRD.md` (now removed; see `AGENTS.md` for the roadmap).
 
 ## [Unreleased]
 
@@ -243,7 +243,7 @@ JSON-RPC + WebSocket control surface.
   `internal/rpc/server.go:90`)
 - `/etc/odm/config.conf` documented as root-owned `0644`.
 
-### Known limitations (per PRD §15, deferred to roadmap)
+### Known limitations (deferred to roadmap)
 - Mid-flight dynamic reallocation of already-downloading chunks.
 - Multi-mirror download across duplicate URLs.
 - HTTP/2 / HTTP/3 stream multiplexing (deliberately out of scope for the
