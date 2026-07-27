@@ -47,7 +47,7 @@ func TestRenderTaskLine_Format(t *testing.T) {
 		BytesDone: 86 << 20, Connections: 16, State: download.StateActive, ETA: 5 * time.Second,
 	}
 	line := RenderTaskLine(v, false)
-	for _, want := range []string{"linux-cachyos", "MiB", "[x16]", "71%", "%"} {
+	for _, want := range []string{"linux-cachyos", "MiB", "x16", "71%", "%"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %s", want, line)
 		}
@@ -374,7 +374,7 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 	width := 20
 	seen := map[string]bool{}
 	posAt := func(frame int) string {
-		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), frame)
+		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), frame, "")
 	}
 	// Collect a handful of distinct frames; the bounce position must change.
 	for i := range 8 {
@@ -406,7 +406,7 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 	}
 	// Sanity: static (pos -1) still lands pacman in the middle (not leftmost)
 	// and contains both face and dots.
-	static := BarIndeterminate(0, -1, width, -1, 0)
+	static := BarIndeterminate(0, -1, width, -1, 0, "")
 	if strings.HasPrefix(static, "c") || !strings.Contains(static, "c") || !strings.Contains(static, "o") {
 		t.Fatalf("static indeterminate layout malformed: %q", static)
 	}
@@ -433,17 +433,17 @@ func gcd(a, b int) int {
 func TestBarIndeterminate_FaceAnimation(t *testing.T) {
 	width := 30
 	// Frame 0 → face should be 'c' (cycle 0)
-	bar0 := BarIndeterminate(0, -1, width, -1, 0)
+	bar0 := BarIndeterminate(0, -1, width, -1, 0, "")
 	if !strings.Contains(bar0, "c") {
 		t.Fatalf("frame 0 should contain lowercase 'c', got %q", bar0)
 	}
 	// Frame pacFaceFrameDuration → face should be 'C' (cycle 1)
-	bar10 := BarIndeterminate(0, -1, width, -1, pacFaceFrameDuration)
+	bar10 := BarIndeterminate(0, -1, width, -1, pacFaceFrameDuration, "")
 	if !strings.Contains(bar10, "C") {
 		t.Fatalf("frame %d should contain uppercase 'C', got %q", pacFaceFrameDuration, bar10)
 	}
 	// Frame 2*pacFaceFrameDuration → face should be 'c' again (cycle 0)
-	bar20 := BarIndeterminate(0, -1, width, -1, 2*pacFaceFrameDuration)
+	bar20 := BarIndeterminate(0, -1, width, -1, 2*pacFaceFrameDuration, "")
 	if !strings.Contains(bar20, "c") {
 		t.Fatalf("frame %d should contain lowercase 'c' again, got %q", 2*pacFaceFrameDuration, bar20)
 	}
@@ -728,7 +728,7 @@ func TestTruncateVisibleWidth(t *testing.T) {
 func TestTruncateToWidth_AnsiAware(t *testing.T) {
 	// Simulate a colored task line that would be wider than terminal.
 	// truncateToWidth must preserve ANSI codes intact.
-	line := "\x1b[33mlinux-cachyos        \x1b[0m  500.0 MiB  \x1b[33m  1.9 MiB/s\x1b[0m  00:04:18  \x1b[35m[x16]\x1b[0m  [\x1b[33mc\x1b[0m\x1b[32m----\x1b[0m\x1b[36m o o\x1b[0m]  \x1b[33m  1%\x1b[0m"
+	line := "\x1b[33mlinux-cachyos        \x1b[0m  500.0 MiB  \x1b[33m  1.9 MiB/s\x1b[0m  00:04:18  [\x1b[35mx16 \x1b[0m\x1b[33mc\x1b[0m\x1b[32m----\x1b[0m\x1b[36m o o\x1b[0m]  \x1b[33m  1%\x1b[0m"
 	got := truncateToWidth(line, 80)
 	visible := ansiVisibleWidth(got)
 	if visible > 80 {

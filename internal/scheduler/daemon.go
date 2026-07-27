@@ -17,8 +17,8 @@ type Daemon struct {
 	mgr *download.Manager
 
 	mu      sync.Mutex
-	pending []*scheduledTask // tasks added via AddURL waiting for a slot
 	started bool
+	ctx     context.Context // derived from Start's ctx, cancelled on stop
 
 	stop   context.CancelFunc
 	done   chan struct{}
@@ -43,6 +43,7 @@ func (d *Daemon) Start(ctx context.Context) {
 	cctx, cancel := context.WithCancel(ctx)
 	d.stop = cancel
 	d.done = make(chan struct{})
+	d.ctx = cctx
 	d.mu.Unlock()
 
 	go func() {
@@ -138,12 +139,16 @@ func (d *Daemon) AddURL(url string, conns int) (download.TaskID, error) {
 		conns = defaultConns
 	}
 	st := &scheduledTask{task: t, conns: conns}
+
 	d.mu.Lock()
-	d.pending = append(d.pending, st)
+	ctx := d.ctx
 	d.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Hand the new task to the scheduler's queue so the next free slot admits it.
-	d.sch.Enqueue(st)
+	d.sch.Enqueue(st, ctx)
 	return t.ID(), nil
 }
 

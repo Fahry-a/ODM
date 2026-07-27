@@ -108,11 +108,12 @@ func (q *ChunkQueue) MarkDone(c Chunk, totalSize int64) int64 {
 	return q.total
 }
 
-// Done reports whether all chunks are completed.
+// Done reports whether all chunks are completed (or there was nothing to do,
+// e.g. an empty file with zero chunks).
 func (q *ChunkQueue) Done() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.chunks) == 0 && len(q.completed) > 0
+	return len(q.chunks) == 0
 }
 
 // Remaining returns the count of un-started chunks (for the parseInto UI).

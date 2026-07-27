@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the ODM release string; baked into --user-agent default & --version.
-const Version = "odm/0.3.0"
+const Version = "odm/1.0.0"
 
 // Defaults mirrors the PRD §6.2 default column.
 const (
@@ -96,6 +96,8 @@ type Options struct {
 	RPCPort      int    // --rpc-listen-port
 	RPCListenAll bool   // --rpc-listen-all
 	RPCSecret    string // --rpc-secret
+	RPCTLSCert   string // --rpc-tls-cert  (TLS certificate path)
+	RPCTLSKey    string // --rpc-tls-key   (TLS private key path)
 
 	// changed tracks which CLI flags were explicitly set, so MergeCLI only
 	// applies those. Populated by BindFlags + the FlagSet after parsing.
@@ -275,6 +277,10 @@ func (o *Options) setFromKey(key, val string) error {
 		return setBool(val, &o.RPCListenAll, key)
 	case "rpc-secret":
 		o.RPCSecret = val
+	case "rpc-tls-cert":
+		o.RPCTLSCert = val
+	case "rpc-tls-key":
+		o.RPCTLSKey = val
 	case "log":
 		o.LogFile = val
 	case "log-level":
@@ -328,6 +334,8 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.RPCPort, "rpc-listen-port", o.RPCPort, "RPC server port")
 	fs.BoolVar(&o.RPCListenAll, "rpc-listen-all", o.RPCListenAll, "Bind to 0.0.0.0 (default 127.0.0.1)")
 	fs.StringVar(&o.RPCSecret, "rpc-secret", o.RPCSecret, "RPC authentication token")
+	fs.StringVar(&o.RPCTLSCert, "rpc-tls-cert", o.RPCTLSCert, "TLS certificate path (PEM); requires --rpc-tls-key")
+	fs.StringVar(&o.RPCTLSKey, "rpc-tls-key", o.RPCTLSKey, "TLS private key path (PEM); requires --rpc-tls-cert")
 }
 
 // NormalizeArgs rewrites the documented 2-char shortcut flags that pflag
@@ -379,6 +387,9 @@ func (o *Options) Validate() error {
 	}
 	if o.RPCPort < 1 || o.RPCPort > 65535 {
 		return errors.New("--rpc-listen-port out of range (1-65535)")
+	}
+	if (o.RPCTLSCert == "") != (o.RPCTLSKey == "") {
+		return errors.New("--rpc-tls-cert and --rpc-tls-key must be provided together")
 	}
 	switch o.LogLevel {
 	case "debug", "info", "warn", "error":

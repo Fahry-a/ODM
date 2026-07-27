@@ -180,7 +180,7 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 	for i := range conns {
 		nonRange[i] = !files[i].SupportsRange
 	}
-	distribute(conns, C-used, nonRange, nil)
+	distribute(conns, C-used, nonRange)
 
 	// Allocation-time reallocation for non-range files (§5.5). A non-range
 	// parallel file is capped to exactly 1 (single-stream fallback, §11.2);
@@ -196,7 +196,7 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 		}
 	}
 	if freed > 0 {
-		distribute(conns, freed, nonRange, nil)
+		distribute(conns, freed, nonRange)
 	}
 
 	for i := range N {
@@ -222,7 +222,7 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 // allocation-time reallocation. Slots marked skip are never topped up — this is
 // how non-range (single-stream) files are kept at their cap. `skip` may be nil
 // (all eligible). If no slot is eligible the budget is simply left unused.
-func distribute(conns []int, budget int, skip []bool, _ []bool) {
+func distribute(conns []int, budget int, skip []bool) {
 	if budget <= 0 || len(conns) == 0 {
 		return
 	}

@@ -198,7 +198,7 @@ func (s *Server) dispatch(req jsonRPCRequest) jsonRPCResponse {
 		resp.Result = map[string]any{
 			"version": download.Version,
 			"enabledFeatures": []string{"Multi-Connection", "Range-Download",
-				"Resume", "Batch", "Checksum", "RateLimit-Agent"},
+				"Resume", "Batch", "Checksum", "RateLimit-Agent", "TLS"},
 		}
 	case "odm.shutdown":
 		resp.Result = "OK"

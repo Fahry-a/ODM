@@ -82,7 +82,6 @@ const (
 	colSize  = 9  // "999.9 MiB", "1023 B"
 	colSpeed = 11 // "999.9 MiB/s", "1023 B/s"
 	colETA   = 8  // "HH:MM:SS" (was MM:SS = 5)
-	colConns = 5  // "[x1]" .. "[x99]" (wider values still fit via pad)
 )
 
 // FormatFileSize humanises a byte count (binary, KiB/MiB/GiB/…).
@@ -175,15 +174,17 @@ func fitWidth(s string, w int) string {
 //     pos<0 the bar falls back to the static centre layout Bar() stored before
 //     (kept for callers/tests that don't drive the tick).
 func Bar(done, total int64, width int) string {
-	return BarIndeterminate(done, total, width, -1, 0)
+	return BarIndeterminate(done, total, width, -1, 0, "")
 }
 
 // BarIndeterminate is Bar with an explicit pacman position for the sizeless
 // (indeterminate) case. pos==-1 means "no animation slot provided" and the
 // static centred layout is used (back-compat with the pure Bar() contract the
 // tests pin). pos is clamped to [0,width-1]. frame is the global frame counter
-// used to animate the pacman face (c/C) every ~1 second.
-func BarIndeterminate(done, total int64, width int, pos int, frame int) string {
+// used to animate the pacman face (c/C) every ~1 second. prefix is rendered
+// before the bar content (e.g. "x4 " for connection count) and is included in
+// the width budget.
+func BarIndeterminate(done, total int64, width int, pos int, frame int, prefix string) string {
 	if width < 2 {
 		width = 2
 	}
@@ -202,7 +203,7 @@ func BarIndeterminate(done, total int64, width int, pos int, frame int) string {
 		// position we honour it; otherwise pacman parks at the middle.
 		if pos < 0 {
 			half := width / 2
-			return barLine(half, face, width)
+			return barLine(half, face, width, prefix)
 		}
 		if pos >= width-1 {
 			pos = width - 1
@@ -210,7 +211,7 @@ func BarIndeterminate(done, total int64, width int, pos int, frame int) string {
 		if pos < 0 {
 			pos = 0
 		}
-		return barLine(pos, face, width)
+		return barLine(pos, face, width, prefix)
 	}
 	if done >= total {
 		return strings.Repeat("-", width) // fully eaten
@@ -220,25 +221,36 @@ func BarIndeterminate(done, total int64, width int, pos int, frame int) string {
 	if eaten >= width {
 		eaten = width - 1
 	}
-	return barLine(eaten, face, width)
+	return barLine(eaten, face, width, prefix)
 }
 
-// barLine renders: `eaten` dashes + face + remaining spaced dots, padded to
-// exactly `width` display cells. Each remaining dot takes 2 cells ("o " pair,
-// trailing space trimmed on the last dot); when the dots don't fill the
-// remaining space exactly, a single trailing space pads the line so the bar
-// stays a constant width and never shoves the percent column.
-func barLine(eaten int, face string, width int) string {
-	remDisplay := width - eaten - 1 // display cells available for dots
+// barLine renders: prefix + `eaten` dashes + face + remaining spaced dots,
+// padded to exactly `width` display cells. When prefix is non-empty (e.g.
+// "x4 ") it is placed before the dashes so the bar reads "x4 ---c  o  o  o".
+// Each remaining dot takes 2 cells ("o " pair, trailing space trimmed on the
+// last dot); when the dots don't fill the remaining space exactly, a single
+// trailing space pads the line so the bar stays a constant width.
+func barLine(eaten int, face string, width int, prefix string) string {
+	pLen := len([]rune(prefix))
+	avail := width - pLen
+	if avail < 1 {
+		return prefix + strings.Repeat("-", eaten) + face
+	}
+
+	remDisplay := avail - eaten - 1 // display cells available for dots
 	if remDisplay <= 0 {
 		// Face sits at the far right edge; pad with dashes on the left.
-		return strings.Repeat("-", eaten) + face
+		extra := prefix + strings.Repeat("-", eaten) + face
+		for len([]rune(extra)) < width {
+			extra += " "
+		}
+		return extra
 	}
 	// How many dots fit? n dots = 2n-1 cells. Fit n = (remDisplay+1)/2.
 	dots := (remDisplay + 1) / 2
-	s := strings.Repeat("-", eaten) + face + spacedDots(dots)
+	s := prefix + strings.Repeat("-", eaten) + face + spacedDots(dots)
 	// Pad with a trailing space if the dots came up short (even remDisplay).
-	for len(s) < width {
+	for len([]rune(s)) < width {
 		s += " "
 	}
 	return s
@@ -263,7 +275,8 @@ func spacedDots(n int) string {
 
 // colorizeBar applies ANSI colors to the pacman bar characters when useColor
 // is true: face (c/C) → yellow, dashes (eaten) → green, dots (remaining) → cyan.
-// When useColor is false, the bar is returned unchanged.
+// Prefix characters (x, digits, space) are left uncolored so colorConnPrefixInLine
+// can handle them separately. When useColor is false, the bar is returned unchanged.
 func colorizeBar(bar string, useColor bool) string {
 	if !useColor {
 		return bar
@@ -382,46 +395,68 @@ func truncateVisibleWidth(s string, width int) string {
 
 // maxNameRunes caps the displayed filename to keep one task line at a sane
 // width. The limit is in runes (display width), not bytes — see truncateName.
+// When rendering to a TTY, the name field expands to fill the terminal width
+// minus the fixed-width info block (see renderTaskLine's nameWidth param).
 const maxNameRunes = 20
+
+// infoBlockWidth is the display width of everything after the name field:
+// "  <size>  <speed>  <ETA>  [<bar>]  <pct>%"
+const infoBlockWidth = 2 + colSize + 2 + colSpeed + 2 + colETA + 2 + 1 + BarWidth + 1 + 2 + 4
 
 // truncateName cuts name to maxNameRunes display columns, rune-safe: a UTF-8
 // name (CJK, emoji, etc.) is split on codepoint boundaries, never mid-byte, so
 // no mojibake lands on screen (bug §3.4). An "…" ellipsis occupies the last 3
 // runes when trimmed.
 func truncateName(name string) string {
-	if utf8.RuneCountInString(name) <= maxNameRunes {
+	return truncateNameTo(name, maxNameRunes)
+}
+
+// truncateNameTo cuts name to the given max display columns, rune-safe.
+func truncateNameTo(name string, max int) string {
+	if utf8.RuneCountInString(name) <= max {
 		return name
 	}
 	rs := []rune(name)
-	return string(rs[:maxNameRunes-3]) + "..."
+	return string(rs[:max-3]) + "..."
 }
 
 // RenderTaskLine formats one per-file line per PRD §8.1, colouring it when
 // useColor is true. The line layout:
 //
-//	<file_name>   <size>   <speed>/s   <ETA>   [x<N>]   [<bar>]   <percent>%
+//	<file_name>   <size>   <speed>/s   <ETA>   [<bar>]   <percent>%
 //
+// Connection count is shown as a prefix inside the bar brackets (e.g. [x4---c  o  o]),
+// matching the pacman style where progress info sits on the right side of the line.
 // indeterminatePos drives the sizeless bar animation; pass -1 for a static
 // (centred) indeterminate bar. frame is the global frame counter for the
 // pacman face animation (c/C every ~1s).
 func RenderTaskLine(v download.ProgressView, useColor bool) string {
-	return renderTaskLine(v, useColor, -1, 0)
+	return renderTaskLine(v, useColor, -1, 0, 20)
 }
 
-func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int) string {
+func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int, nameWidth int) string {
+	if nameWidth < 10 {
+		nameWidth = 10
+	}
 	name := v.Filename
 	if name == "" {
 		name = v.URL
 	}
-	name = truncateName(name)
+	name = truncateNameTo(name, nameWidth)
 	size := FormatFileSize(v.TotalSize)
 	if v.TotalSize < 0 {
 		size = "?"
 	}
 	speed := FormatSpeed(v.Speed)
 	eta := FormatDuration(v.ETA)
-	conns := fmt.Sprintf("[x%d]", v.Connections)
-	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame)
+
+	// Connection prefix inside the bar brackets, e.g. "x4 "
+	connPrefix := ""
+	if v.Connections > 0 && v.State != download.StateCompleted {
+		connPrefix = fmt.Sprintf("x%d ", v.Connections)
+	}
+
+	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame, connPrefix)
 	bar = colorizeBar(bar, useColor)
 	pct := 0
 	if v.TotalSize > 0 {
@@ -432,30 +467,19 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	if c != "" {
 		reset = string(colorReset)
 	}
-	// Fixed columns: name | size | speed | ETA | [xN] | [bar] | pct%
+	// Fixed columns: name | size | speed | ETA | [bar] | pct%
 	// Speed/ETA/size are fitted so a slow→fast or short→long ETA transition
 	// cannot walk the pacman bar and the right-edge percent left/right.
-	line := fmt.Sprintf("%s%-20s  %s  %s  %s  %s  [%s]  %3d%%%s",
-		c, name,
+	line := fmt.Sprintf("%s%-*s  %s  %s  %s  [%s]  %3d%%%s",
+		c, nameWidth, name,
 		fitWidth(size, colSize),
 		fitWidth(speed, colSpeed),
 		fitWidth(eta, colETA),
-		fitWidth(conns, colConns),
 		bar, pct, reset)
 	if !useColor {
 		return line
 	}
 	// Apply component-level colors on top of the state-colored line.
-	// Order matters: replace connections/pct first (plain text), then colorize bar.
-	// Color the connections count: magenta for active, green for completed.
-	switch v.State {
-	case download.StateActive, download.StateRetrying:
-		line = colorReplace(line, conns, string(colorMagenta)+conns+string(colorReset))
-	case download.StateCompleted:
-		line = colorReplace(line, conns, string(colorGreen)+conns+string(colorReset))
-	case download.StateQueued, download.StatePaused:
-		line = colorReplace(line, conns, string(colorGrey)+conns+string(colorReset))
-	}
 	// Color the percentage.
 	pctStr := fmt.Sprintf("%3d%%", pct)
 	switch v.State {
@@ -466,12 +490,52 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	case download.StateError:
 		line = colorReplace(line, pctStr, string(colorRed)+pctStr+string(colorReset))
 	}
-	// Finally colorize the pacman bar (face→yellow, dashes→green, dots→cyan).
+	// Finally colorize the pacman bar (face→yellow, dashes→green, dots→cyan,
+	// prefix→magenta/green/grey).
 	line = colorizeBarInLine(line)
+	// Color the connection prefix inside the bar.
+	line = colorConnPrefixInLine(line, v)
 	return line
 }
 
-// colorReplace does a simple single-replacement of old with new in s.
+// colorConnPrefixInLine finds the connection prefix inside the bar brackets
+// (e.g. "x4 " in "[x4 ---c  o  o  o]") and colors it: magenta for active,
+// green for completed, grey for queued/paused.
+func colorConnPrefixInLine(line string, v download.ProgressView) string {
+	if v.Connections <= 0 {
+		return line
+	}
+	open := strings.LastIndex(line, "[")
+	if open < 0 {
+		return line
+	}
+	close := strings.Index(line[open:], "]")
+	if close < 0 {
+		return line
+	}
+	close += open
+	barContent := line[open+1 : close]
+
+	prefix := fmt.Sprintf("x%d ", v.Connections)
+	if !strings.HasPrefix(barContent, prefix) {
+		return line
+	}
+
+	var connColor Color
+	switch v.State {
+	case download.StateActive, download.StateRetrying:
+		connColor = colorMagenta
+	case download.StateCompleted:
+		connColor = colorGreen
+	case download.StateQueued, download.StatePaused:
+		connColor = colorGrey
+	default:
+		return line
+	}
+
+	colored := string(connColor) + prefix + string(colorReset) + barContent[len(prefix):]
+	return line[:open+1] + colored + line[close:]
+}
 func colorReplace(s, old, new string) string {
 	i := strings.Index(s, old)
 	if i < 0 {
@@ -501,7 +565,20 @@ func colorizeBarInLine(line string) string {
 // RenderSummary formats the bottom summary line (PRD §8.1 example):
 //
 //	Total: X/Y completed  |  <speed>/s  |  ETA HH:MM:SS  [====--]  ZZ%
+//
+// When termWidth > 0, the info block (speed/ETA/bar/pct) is right-aligned to
+// match the task line layout.
 func RenderSummary(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool) string {
+	return renderSummaryWidth(completed, total, speedBps, eta, bytesDone, totalSize, useColor, 0)
+}
+
+// RenderSummaryWidth is like RenderSummary but right-aligns the info block to
+// the given terminal width, matching the pacman-style task line layout.
+func RenderSummaryWidth(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int) string {
+	return renderSummaryWidth(completed, total, speedBps, eta, bytesDone, totalSize, useColor, termWidth)
+}
+
+func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int) string {
 	sp := fitWidth(FormatSpeed(speedBps), colSpeed)
 	etaStr := fitWidth(FormatDuration(eta), colETA)
 	pct := 0
@@ -509,14 +586,34 @@ func RenderSummary(completed, total int, speedBps int64, eta time.Duration, byte
 		pct = min(max(int(float64(bytesDone)/float64(totalSize)*100), 0), 100)
 	}
 	pctStr := fmt.Sprintf("%3d%%", pct)
-	bar := Bar(bytesDone, totalSize, 20)
+	bar := Bar(bytesDone, totalSize, BarWidth)
 	if useColor {
 		bar = colorizeBar(bar, true)
-		return fmt.Sprintf("%sTotal: %d/%d completed%s  |  %s%s%s  |  ETA %s  [%s]  %s%s%s",
-			string(colorGreen), completed, total, string(colorReset),
+	}
+
+	leftText := fmt.Sprintf("Total: %d/%d completed", completed, total)
+	rightSide := fmt.Sprintf("  |  %s  |  ETA %s  [%s]  %s", sp, etaStr, bar, pctStr)
+
+	if termWidth > 0 {
+		padding := termWidth - ansiVisibleWidth(leftText) - ansiVisibleWidth(rightSide) - 1
+		if padding < 2 {
+			padding = 2
+		}
+		if useColor {
+			return fmt.Sprintf("%s%s%s%s%s",
+				string(colorGreen), leftText, string(colorReset),
+				strings.Repeat(" ", padding), rightSide)
+		}
+		return leftText + strings.Repeat(" ", padding) + rightSide
+	}
+
+	// Fixed-width fallback (non-TTY, tests)
+	if useColor {
+		return fmt.Sprintf("%s%s%s  |  %s%s%s  |  ETA %s  [%s]  %s%s%s",
+			string(colorGreen), leftText, string(colorReset),
 			string(colorYellow), sp, string(colorReset),
 			etaStr, bar,
 			string(colorGreen), pctStr, string(colorReset))
 	}
-	return fmt.Sprintf("Total: %d/%d completed  |  %s  |  ETA %s  [%s]  %s", completed, total, sp, etaStr, bar, pctStr)
+	return fmt.Sprintf("%s  |  %s  |  ETA %s  [%s]  %s", leftText, sp, etaStr, bar, pctStr)
 }
