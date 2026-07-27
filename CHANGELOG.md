@@ -3,16 +3,33 @@
 All notable changes to ODM (Oryn Download Manager) are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-(pre-1.0.0 versions may evolve without full backward-compat guarantees).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-07-27
+
+> **Production-ready release — TLS, systemd, ETag validation, final UI polish.**
+>
+> All roadmap items from AGENTS.md are implemented. The CLI, RPC daemon,
+> progress bar, and resume engine are stable and tested under -race.
 
 ### Added
+- **TLS for RPC** — `--rpc-tls-cert` and `--rpc-tls-key` flags enable HTTPS/WSS on the RPC listener, with `http.ServeTLS`. Both must be provided together. (`internal/config/config.go`, `cmd/odm/main.go`)
+- **ETag validation on resume** — on `--continue`, the stored ETag from the `.odm` control file is compared against the server's current ETag. If both are non-empty and don't match, the file is re-downloaded from scratch to prevent corruption. (`internal/download/task.go`)
+- **systemd service unit** — `packaging/odm.service` with security hardening: `DynamicUser=yes`, `ProtectSystem=strict`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, and `EnvironmentFile` support for `/etc/odm/odm.env`. (`packaging/odm.service`)
 - Dependabot configuration for automated dependency updates (`go.mod` + GitHub Actions).
 
 ### Changed
+- **Pacman-style progress bar** — connection count `[xN]` indicator moved inside the bar brackets (e.g. `[x4---c  o  o  o]`) instead of a separate column. On TTY, the name field expands dynamically to fill terminal width so the info block (size/speed/ETA/bar/%) sits at the right edge of the terminal, matching the ILoveCandy layout. Summary bar width increased from 20 to 30 for consistency; summary info block is right-aligned to terminal width. (`internal/ui/render.go`, `internal/ui/progress.go`)
+- **Checkpoint interval**: `persistCheckpointInterval` raised from 1 to 5 — reduces `.odm` JSON write frequency from per-chunk (potentially hundreds/sec) to every 5 chunks, with no material impact on crash recovery (at most ~20 MB lost). (`internal/download/task.go`)
 - `actions/setup-go` upgraded from v5 to v7 in CI workflows.
+
+### Fixed
+- **Memory leak**: removed unused `Daemon.pending` slice that grew unboundedly. (`internal/scheduler/daemon.go`)
+- **Context leak**: `Enqueue` now accepts a context (from the daemon) instead of `context.Background()`, so queued tasks respect daemon shutdown. (`internal/scheduler/queue.go`)
+- **Stalled connection hang**: per-chunk timeout (`Timeout × 10`, default 300s) wraps `fetchAndWrite` and `fetchWhole` so a dead connection eventually retries instead of blocking forever. `ResponseHeaderTimeout` added to the HTTP transport. (`internal/download/task.go`, `internal/transport/transport.go`)
+- **Pause race**: removed the spurious `pauseC` drain at the top of the worker loop — the drain could consume the unpause signal before the paused check, causing a worker to block forever. (`internal/download/task.go`)
+- **Empty-file `Done()`**: `ChunkQueue.Done()` now returns true when the queue is empty even if no chunks were ever completed (0-byte files). (`internal/download/chunkqueue.go`)
+- **Dead parameter**: removed unused 4th parameter from `distribute()`. (`internal/scheduler/balancer.go`)
 
 ### Removed
 - `PRD.md` — migrated remaining roadmap items to `AGENTS.md`.
@@ -145,7 +162,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Fahry-a/ODM/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/Fahry-a/ODM/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Fahry-a/ODM/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Fahry-a/ODM/releases/tag/v0.1.0

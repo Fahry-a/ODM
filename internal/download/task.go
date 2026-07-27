@@ -31,10 +31,10 @@ const (
 	// persistCheckpointInterval controls how often the control file is written
 	// during an active download. Every N completed chunks the .odm file is
 	// flushed so a crash/kill leaves a usable resume point (similar to aria2's
-	// periodic-persist strategy). Set to 1 so the .odm file is persisted on
-	// every chunk completion — this ensures the resume file is always up to
-	// date with the latest progress.
-	persistCheckpointInterval = 1
+	// periodic-persist strategy). 5 strikes a balance: frequent enough that a
+	// crash loses at most 5 chunks (~20 MB at 4 MiB/chunk), but avoids hundreds
+	// of JSON-writes per second on fast multi-connection downloads.
+	persistCheckpointInterval = 5
 )
 
 func (s TaskState) String() string {
@@ -296,7 +296,11 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	alreadyDone := int64(0)
 	if t.opts.Continue {
 		if cf, cerr := storage.LoadControl(t.outPath); cerr == nil {
-			if cf.TotalSize == pr.TotalSize && cf.ChunkSize == t.opts.ChunkSize {
+			// ETag validation: if both are non-empty and don't match, the file
+			// changed on the server — do NOT resume stale chunks.
+			if cf.ETag != "" && pr.ETag != "" && cf.ETag != pr.ETag {
+				t.logf("warn", "ETag changed (%s → %s), re-downloading from scratch", cf.ETag, pr.ETag)
+			} else if cf.TotalSize == pr.TotalSize && cf.ChunkSize == t.opts.ChunkSize {
 				alreadyDone = q.ResetCompletedOffsets(cf.CompletedOffsets(), t.opts.ChunkSize, pr.TotalSize)
 				t.bytesDone.Store(alreadyDone)
 				t.logf("info", "resuming %s: %d bytes already written", outName, alreadyDone)
@@ -375,18 +379,11 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 		}
 	}()
 	for {
-		// Pause gate: if paused, block until unpause or ctx done.
-		select {
-		case <-t.pauseC:
-			// drained a pause signal; continue
-		default:
-		}
 		if t.isPaused() {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.unpauseSignal():
-				// resume
 			}
 		}
 		select {
@@ -455,22 +452,26 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress.
 func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView)) error {
-	// No per-request timeout here — dial + TLS + handshake timeouts are
-	// handled by the Transport's DialContext and TLSHandshakeTimeout. The
-	// body read runs under the task-level ctx so a slow-but-alive stream
-	// survives indefinitely (aria2c-class behaviour). The task ctx is
-	// cancelled only on explicit Cancel or when the Manager shuts down.
+	// Per-chunk timeout prevents a stalled connection from hanging a worker
+	// forever. Each chunk gets Timeout*10 to complete (default 300s = 5 min).
+	// If the timeout fires, the chunk is retried by the caller (downloadChunk).
+	chunkTimeout := t.opts.Timeout * 10
+	if chunkTimeout <= 0 {
+		chunkTimeout = 300 * time.Second
+	}
+	chunkCtx, chunkCancel := context.WithTimeout(ctx, chunkTimeout)
+	defer chunkCancel()
 
 	// Sizeless single-stream chunk: plain GET, no Range.
 	if t.probe.TotalSize < 0 || (t.probe.SingleStream && c.Start == 0 && c.Index == 0) {
-		return t.fetchWhole(ctx, c, sink)
+		return t.fetchWhole(chunkCtx, c, sink)
 	}
 
 	end := c.End
 	if end < 0 {
 		end = -1
 	}
-	rr, err := t.client.GetRange(ctx, t.probe.FinalURL, c.Start, end)
+	rr, err := t.client.GetRange(chunkCtx, t.probe.FinalURL, c.Start, end)
 	if err != nil {
 		return err
 	}
@@ -478,7 +479,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 
 	body := rr.Resp.Body
 	if !t.lim.Unlimited() {
-		body = io.NopCloser(t.lim.Reader(ctx, body))
+		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
 	}
 
 	// Copy chunk to disk at offset Start using a small buffer; the WriteAt
@@ -503,7 +504,15 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
 func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView)) error {
-	req, err := t.client.NewGetRequest(ctx, t.probe.FinalURL)
+	// Per-chunk timeout prevents a stalled connection from hanging forever.
+	chunkTimeout := t.opts.Timeout * 10
+	if chunkTimeout <= 0 {
+		chunkTimeout = 300 * time.Second
+	}
+	chunkCtx, chunkCancel := context.WithTimeout(ctx, chunkTimeout)
+	defer chunkCancel()
+
+	req, err := t.client.NewGetRequest(chunkCtx, t.probe.FinalURL)
 	if err != nil {
 		return err
 	}
@@ -514,7 +523,7 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 	defer resp.Body.Close()
 	body := resp.Body
 	if !t.lim.Unlimited() {
-		body = io.NopCloser(t.lim.Reader(ctx, body))
+		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
 	}
 	buf := make([]byte, 64*1024)
 	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), func(delta int64) {

@@ -56,7 +56,7 @@ internal/logging → Leveled logger (--log / --log-level)
 ```bash
 export CGO_ENABLED=0 GOFLAGS="-trimpath -mod=readonly" GOTOOLCHAIN=local
 LDFLAGS="-s -w -buildid="
-GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o build/odm_0.1.0_linux_amd64 ./cmd/odm
+GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o build/odm_1.0.0_linux_amd64 ./cmd/odm
 # also: 386, arm, arm64, darwin/amd64, darwin/arm64
 ```
 
@@ -112,17 +112,6 @@ These are deferred — do NOT treat them as bugs:
 - **Mid-flight dynamic reallocation** — rebalance connections of chunks
   already in progress (beyond allocation-time reallocation). Requires live
   goroutine renegotiation.
-- **ETag validation on resume** — the `.odm` file stores the ETag from the
-  initial probe, but on resume the engine does NOT revalidate with the server.
-  If the file changed at the same URL between sessions, stale data is resumed.
-  Fix: on resume, send a HEAD with `If-None-Match: <etag>` and compare
-  `Content-Length` vs `total_size` from the control file.
-- **TLS for RPC server** — the RPC HTTP/WS listener is plain text. When
-  `--rpc-listen-all` is used on `0.0.0.0`, traffic is unencrypted. Fix: add
-  `--rpc-tls-cert` / `--rpc-tls-key` flags, or document reverse-proxy setup.
-- **systemd unit file** — daemon mode (`--rpc`) has no service unit. Fix:
-  add `packaging/odm.service` with `DynamicUser=`, `ProtectSystem=strict`,
-  `AmbientCapabilities=CAP_NET_BIND_SERVICE` if needed.
 - **`changeOption` mid-flight** — currently an acknowledged no-op
   (`server.go:187`). The RPC spec lists it but real mutation is deferred.
 - **Multi-mirror download** — splitting chunks across duplicate URLs for the

@@ -380,9 +380,20 @@ func runRPC(o *config.Options, engineLog download.LogFn, logger *logging.Logger)
 	if err != nil {
 		return err
 	}
-	logger.Infof("odm RPC listening on %s (secret:%s)", addr, secretWord(o.RPCSecret))
+	useTLS := o.RPCTLSCert != "" && o.RPCTLSKey != ""
+	if useTLS {
+		logger.Infof("odm RPC listening on https://%s (secret:%s, tls:%s)", addr, secretWord(o.RPCSecret), o.RPCTLSCert)
+	} else {
+		logger.Infof("odm RPC listening on http://%s (secret:%s)", addr, secretWord(o.RPCSecret))
+	}
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- http.Serve(ln, mux) }()
+	go func() {
+		if useTLS {
+			serveErr <- http.ServeTLS(ln, mux, o.RPCTLSCert, o.RPCTLSKey)
+		} else {
+			serveErr <- http.Serve(ln, mux)
+		}
+	}()
 
 	select {
 	case <-shutdown:
@@ -507,6 +518,8 @@ Config / logging / RPC:
       --rpc-listen-port PORT                           (default 6900)
       --rpc-listen-all  bind 0.0.0.0 (default 127.0.0.1)
       --rpc-secret TOKEN  auth for RPC ('token:<secret>' param or ?secret=)
+      --rpc-tls-cert FILE  TLS certificate (PEM); enables HTTPS
+      --rpc-tls-key FILE   TLS private key (PEM); requires --rpc-tls-cert
   -V, --version         print version and exit
   -h, --help            show this help
 

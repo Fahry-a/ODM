@@ -81,6 +81,8 @@ func TestApplyKnownKeys(t *testing.T) {
 		"rpc-listen-port":   "9999",
 		"rpc-listen-all":    "true",
 		"rpc-secret":        "s3cr3t",
+		"rpc-tls-cert":      "/etc/odm/odm.crt",
+		"rpc-tls-key":       "/etc/odm/odm.key",
 	}
 	if err := o.Apply(kv); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -93,6 +95,9 @@ func TestApplyKnownKeys(t *testing.T) {
 	}
 	if o.LimitRate != "1M" || o.LogLevel != "debug" || o.RPCSecret != "s3cr3t" || o.RPCPort != 9999 {
 		t.Fatalf("str/port wrong: %+v", o)
+	}
+	if o.RPCTLSCert != "/etc/odm/odm.crt" || o.RPCTLSKey != "/etc/odm/odm.key" {
+		t.Fatalf("tls fields wrong: cert=%q key=%q", o.RPCTLSCert, o.RPCTLSKey)
 	}
 }
 
@@ -135,6 +140,10 @@ func TestValidate(t *testing.T) {
 		{"bad checksum fmt", func(o *Options) *Options { o.Checksum = "sha256"; return o }, false},
 		{"bad checksum algo", func(o *Options) *Options { o.Checksum = "crc32:deadbeef"; return o }, false},
 		{"good checksum", func(o *Options) *Options { o.Checksum = "sha256:" + strings.Repeat("a", 64); return o }, true},
+		{"tls both unset", func(o *Options) *Options { return o }, true},
+		{"tls both set", func(o *Options) *Options { o.RPCTLSCert = "/a/b.crt"; o.RPCTLSKey = "/a/b.key"; return o }, true},
+		{"tls cert only", func(o *Options) *Options { o.RPCTLSCert = "/a/b.crt"; return o }, false},
+		{"tls key only", func(o *Options) *Options { o.RPCTLSKey = "/a/b.key"; return o }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

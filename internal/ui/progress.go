@@ -328,19 +328,25 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 
 	// TTY: build lines, truncated to width so wrapping can't desync cursor-up.
 	width := rendererWidth(r.w)
+	// Compute name width so the info block (size/speed/ETA/bar/pct) sits at the
+	// right edge of the terminal, matching the pacman ILoveCandy layout.
+	nameWidth := width - infoBlockWidth - 1 // -1 for leading space
+	if nameWidth < 10 {
+		nameWidth = 10
+	}
 	lines := make([]string, 0, len(view)+1)
 	pos := bouncePosition(r.indeterminateTick, BarWidth)
 	for _, v := range view {
 		if !isActive(v) {
 			continue
 		}
-		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick)
+		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick, nameWidth)
 		lines = append(lines, truncateToWidth(line, width))
 	}
 	// Only show summary when there are tasks — avoids the misleading
 	// "Total: 0/0" before any snapshots arrive.
 	if st.total > 0 {
-		lines = append(lines, truncateToWidth(RenderSummary(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor), width))
+		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor, width), width))
 	}
 
 	// Move cursor up over the previous frame, clearing each row.
@@ -426,7 +432,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 			if !isActive(v) {
 				continue
 			}
-			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick))
+			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick, 40))
 			b.WriteByte('\n')
 		}
 		b.WriteString(summary)

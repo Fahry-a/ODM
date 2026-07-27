@@ -216,14 +216,15 @@ func (s *Scheduler) handleComplete(st scheduledTask) {
 }
 
 // Enqueue injects an externally-built task (RPC addUri) into the queue. Slot
-// admission happens the same way as batch-queued tasks. Used only in daemon
+// admission happens the same way as batch-queued tasks. ctx is passed through
+// to startOne so the task honours daemon cancellation. Used only in daemon
 // mode; the CLI one-shot path never calls this.
-func (s *Scheduler) Enqueue(st *scheduledTask) {
+func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) {
 	s.mu.Lock()
 	s.queued = append(s.queued, st)
 	s.mu.Unlock()
 	s.wg.Add(1)
-	s.admitNext(context.Background())
+	s.admitNext(ctx)
 }
 
 // LiveViews returns snapshots of currently running tasks.

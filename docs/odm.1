@@ -218,6 +218,12 @@ bind 0.0.0.0 (default 127.0.0.1)
 .BR \-\-rpc\-secret " \fITOKEN\fR"
 auth for RPC (token:<secret> param or ?secret=)
 .TP
+.BR \-\-rpc\-tls\-cert " \fIFILE\fR"
+TLS certificate path (PEM); enables HTTPS
+.TP
+.BR \-\-rpc\-tls\-key " \fIFILE\fR"
+TLS private key path (PEM); requires \fB\-\-rpc\-tls\-cert\fR
+.TP
 .BR \-V ", " \-\-version
 print version and exit
 .TP
@@ -263,6 +269,8 @@ rpc                 = false
 rpc-listen-port     = 6900
 rpc-listen-all       = false
 rpc-secret          =
+rpc-tls-cert        =
+rpc-tls-key         =
 # Logging
 log                 =
 log-level           = info
@@ -310,13 +318,14 @@ When stderr/stdout is a TTY, odm renders a pacman / CachyOS-style
 progress bar. The per-file line format is:
 .PP
 .RS
-\fI<file_name>\fR   \fI<size>\fR   \fI<speed>\fR/s   \fI<ETA>\fR   [x\fI<N>\fR]   [<progress-bar>]   \fI<percent>\fR%
+\fI<file_name>\fR   \fI<size>\fR   \fI<speed>\fR/s   \fI<ETA>\fR   [\fIx<N>\fR-\fI<progress-bar>\fR]   \fI<percent>\fR%
 .RE
 .PP
 where
-.B [x<N>]
-is the number of parallel connections currently used by that file (the
-Balancer's output),
+.B x<N>
+is the number of parallel connections currently used by that file (shown inside
+the bar brackets as a prefix, e.g.
+.BR [x4-----c  o  o  o  o] ),
 .B c
 is the pacman icon moving left to right as progress advances,
 .B o
@@ -352,6 +361,18 @@ binds
 .B 0.0.0.0
 \(em pair that with
 .BR \-\-rpc\-secret .
+.PP
+TLS encryption can be enabled with
+.B \-\-rpc\-tls\-cert
+and
+.BR \-\-rpc\-tls\-key ;
+when both are provided the server switches to HTTPS/WSS and the listener
+prints a
+.B https://
+URL. Without TLS, a
+.B http://
+URL is shown (the default).
+.PP
 Auth is aria2-style: the first JSON-RPC param is
 .RB \(dq token:<secret> \(dq
 (or

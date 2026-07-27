@@ -7,7 +7,7 @@
 #   makepkg --printsrcinfo > .SRCINFO
 
 pkgname=odm-bin
-pkgver=0.3.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Oryn Download Manager — an aria2c-inspired CLI with a Connection Balancer and a pacman-style progress bar"
 arch=('x86_64' 'aarch64')
@@ -26,8 +26,9 @@ source=(
     "${pkgname}-${pkgver}-${_source_arch}::https://github.com/Fahry-a/odm/releases/download/v${pkgver}/odm_${pkgver}_${_source_arch}"
     "${pkgname}.1::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/docs/odm.1"
     "${pkgname}.conf.example::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/configs/odm.conf.example"
+    "${pkgname}.service::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/packaging/odm.service"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
     # Binary.
@@ -40,4 +41,7 @@ package() {
     install -Dm644 "$srcdir/${pkgname}.conf.example" "$pkgdir/etc/odm/config.conf.example"
 
     install -Dm644 "$srcdir/${pkgname}.conf.example" "$pkgdir/etc/odm/config.conf"
+
+    # systemd service.
+    install -Dm644 "$srcdir/${pkgname}.service" "$pkgdir/usr/lib/systemd/system/odm.service"
 }
