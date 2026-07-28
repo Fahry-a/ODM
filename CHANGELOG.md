@@ -5,6 +5,57 @@ All notable changes to ODM (Oryn Download Manager) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-07-28
+
+> **Short flag aliases, Content-Disposition parsing, and UI polish.**
+>
+> Adds short CLI flags for common options, extracts filenames from
+> `Content-Disposition` headers, fixes the pacman dot-shifting bug,
+> and improves crash resilience with frequent control-file persistence.
+
+### Added
+- **Short flag aliases** for 11 flags: `-m` (max-connections), `-n` (max-redirect),
+  `-r` (retry), `-w` (retry-wait), `-t` (timeout), `-u` (user-agent), `-p` (proxy),
+  `-l` (limit-rate), `-s` (chunk-size), `-L` (log), `-V` → `-v` for version
+  (uppercase `-V` preserved for backward compatibility).
+  (`internal/config/config.go`, `cmd/odm/main.go`, `docs/odm.1`)
+- **Content-Disposition header parsing** — probes now extract the `filename`
+  parameter from `Content-Disposition` headers per RFC 6266, supporting
+  both `filename=` and `filename*=UTF-8''...` forms.
+  (`internal/transport/transport.go`)
+- **Crash-resilient control-file persistence** — control file is flushed on
+  every chunk error path, so partial progress survives process termination
+  before the task's main error handler runs.
+  (`internal/download/task.go`)
+
+### Changed
+- **Progress bar dots anchored to absolute positions** — the alternating
+  `o`/` ` pattern is now computed from the cell's absolute position instead
+  of relative to the pacman face, so dots stay fixed and don't shift right
+  as pacman advances. (`internal/ui/render.go`)
+- **Connection indicator moved outside bar brackets** — `[xN]` is now shown
+  before the bar `[...]` instead of inside it, with its own magenta/grey
+  coloring independent of the pacman bar colors.
+  (`internal/ui/render.go`)
+- **Checkpoint interval lowered to 1** — control file is persisted on every
+  chunk completion (was every 5 chunks), maximising resume granularity at
+  negligible I/O cost. (`internal/download/task.go`)
+- **Scheduler drain wait** — `Run()` now waits up to 200ms on cancellation
+  for in-flight workers to persist control files before returning.
+  (`internal/scheduler/queue.go`)
+- `--chunk-size` now has `-s`, `--max-connections` has `-m`, `--timeout`
+  has `-t`, `--retry` has `-r`, `--proxy` has `-p`, `--user-agent` has `-u`,
+  `--limit-rate` has `-l`, `--retry-wait` has `-w`, `--max-redirect` has `-n`,
+  and `--log` has `-L`.
+
+### Fixed
+- **Pacman dots shifting right** — the remaining-dot pattern after the face
+  no longer recomputes from a fresh alternating layout every frame; dots
+  stay at their fixed column positions and get eaten one by one as the face
+  advances. (`internal/ui/render.go`)
+
+---
+
 ## [1.0.0] - 2026-07-27
 
 > **Production-ready release — TLS, systemd, ETag validation, final UI polish.**
@@ -162,7 +213,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Fahry-a/ODM/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Fahry-a/ODM/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/Fahry-a/ODM/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Fahry-a/ODM/compare/v0.1.0...v0.2.0

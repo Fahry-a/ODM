@@ -224,12 +224,13 @@ func BarIndeterminate(done, total int64, width int, pos int, frame int, prefix s
 	return barLine(eaten, face, width, prefix)
 }
 
-// barLine renders: prefix + `eaten` dashes + face + remaining spaced dots,
-// padded to exactly `width` display cells. When prefix is non-empty (e.g.
-// "x4 ") it is placed before the dashes so the bar reads "x4 ---c  o  o  o".
-// Each remaining dot takes 2 cells ("o " pair, trailing space trimmed on the
-// last dot); when the dots don't fill the remaining space exactly, a single
-// trailing space pads the line so the bar stays a constant width.
+// barLine renders: prefix + `eaten` dashes + face + remaining fill from a
+// fixed alternating dot pattern (first position after face is always 'o',
+// then space, then 'o', etc.), padded to exactly `width` display cells.
+// Unlike the previous re-spaced approach (which recomputed spacedDots from
+// the remaining width every frame, causing dots to shift right), this keeps
+// the same alternating sequence anchored to the face position so dots never
+// jump — they shift at most 1 cell per frame as the face advances.
 func barLine(eaten int, face string, width int, prefix string) string {
 	pLen := len([]rune(prefix))
 	avail := width - pLen
@@ -237,46 +238,40 @@ func barLine(eaten int, face string, width int, prefix string) string {
 		return prefix + strings.Repeat("-", eaten) + face
 	}
 
-	remDisplay := avail - eaten - 1 // display cells available for dots
-	if remDisplay <= 0 {
-		// Face sits at the far right edge; pad with dashes on the left.
-		extra := prefix + strings.Repeat("-", eaten) + face
-		for len([]rune(extra)) < width {
-			extra += " "
-		}
-		return extra
+	if eaten >= avail {
+		return prefix + strings.Repeat("-", avail)
 	}
-	// How many dots fit? n dots = 2n-1 cells. Fit n = (remDisplay+1)/2.
-	dots := (remDisplay + 1) / 2
-	s := prefix + strings.Repeat("-", eaten) + face + spacedDots(dots)
-	// Pad with a trailing space if the dots came up short (even remDisplay).
+
+	var b strings.Builder
+	b.Grow(width)
+	b.WriteString(prefix)
+
+	for i := 0; i < eaten; i++ {
+		b.WriteByte('-')
+	}
+	b.WriteString(face)
+
+	// Fill remaining cells with a fixed alternating pattern anchored
+	// to absolute position, so dots stay in place and don't shift right
+	// as pacman advances through them.
+	for pos := eaten + 1; pos < avail; pos++ {
+		if pos%2 == 0 {
+			b.WriteByte('o')
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+
+	s := b.String()
 	for len([]rune(s)) < width {
 		s += " "
 	}
 	return s
 }
 
-// spacedDots returns a string of `n` dots with a single space between each
-// (e.g., n=3 → "o o o"). The result is exactly 2n-1 cells: no trailing space
-// so callers can pad to a precise fixed width.
-func spacedDots(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	b := make([]byte, 0, n*2-1)
-	for i := 0; i < n; i++ {
-		b = append(b, 'o')
-		if i < n-1 {
-			b = append(b, ' ')
-		}
-	}
-	return string(b)
-}
-
 // colorizeBar applies ANSI colors to the pacman bar characters when useColor
 // is true: face (c/C) → yellow, dashes (eaten) → green, dots (remaining) → cyan.
-// Prefix characters (x, digits, space) are left uncolored so colorConnPrefixInLine
-// can handle them separately. When useColor is false, the bar is returned unchanged.
+// When useColor is false, the bar is returned unchanged.
 func colorizeBar(bar string, useColor bool) string {
 	if !useColor {
 		return bar
@@ -400,8 +395,15 @@ func truncateVisibleWidth(s string, width int) string {
 const maxNameRunes = 20
 
 // infoBlockWidth is the display width of everything after the name field:
-// "  <size>  <speed>  <ETA>  [<bar>]  <pct>%"
-const infoBlockWidth = 2 + colSize + 2 + colSpeed + 2 + colETA + 2 + 1 + BarWidth + 1 + 2 + 4
+// "  <size>  <speed>  <ETA>  <conn> [<bar>]  <pct>%"
+//
+// colConns is a fixed-width slot for the connection indicator "[xN] " so
+// the bar bracket stays aligned regardless of connection count.
+const (
+	colConns = 6 // "[x32] " max = 6
+)
+
+const infoBlockWidth = 2 + colSize + 2 + colSpeed + 2 + colETA + 2 + colConns + 1 + BarWidth + 1 + 2 + 4
 
 // truncateName cuts name to maxNameRunes display columns, rune-safe: a UTF-8
 // name (CJK, emoji, etc.) is split on codepoint boundaries, never mid-byte, so
@@ -450,13 +452,16 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	speed := FormatSpeed(v.Speed)
 	eta := FormatDuration(v.ETA)
 
-	// Connection prefix inside the bar brackets, e.g. "x4 "
-	connPrefix := ""
+	// Build a fixed-width connection indicator "[xN]  " in its own bracket
+	// before the progress bar, so it doesn't visually merge with bar content.
+	connDisplay := strings.Repeat(" ", colConns)
 	if v.Connections > 0 && v.State != download.StateCompleted {
-		connPrefix = fmt.Sprintf("x%d ", v.Connections)
+		connStr := fmt.Sprintf("[x%d]", v.Connections)
+		// Left-align with trailing spaces to fill colConns.
+		connDisplay = connStr + strings.Repeat(" ", colConns-len(connStr))
 	}
 
-	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame, connPrefix)
+	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame, "")
 	bar = colorizeBar(bar, useColor)
 	pct := 0
 	if v.TotalSize > 0 {
@@ -467,19 +472,34 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	if c != "" {
 		reset = string(colorReset)
 	}
-	// Fixed columns: name | size | speed | ETA | [bar] | pct%
+	// Fixed columns: name | size | speed | ETA | <conn> [<bar>] | pct%
 	// Speed/ETA/size are fitted so a slow→fast or short→long ETA transition
 	// cannot walk the pacman bar and the right-edge percent left/right.
-	line := fmt.Sprintf("%s%-*s  %s  %s  %s  [%s]  %3d%%%s",
+	line := fmt.Sprintf("%s%-*s  %s  %s  %s  %s[%s]  %3d%%%s",
 		c, nameWidth, name,
 		fitWidth(size, colSize),
 		fitWidth(speed, colSpeed),
 		fitWidth(eta, colETA),
-		bar, pct, reset)
+		connDisplay, bar, pct, reset)
 	if !useColor {
 		return line
 	}
 	// Apply component-level colors on top of the state-colored line.
+	// Color the connection indicator: magenta for active, grey for queued,
+	// green for completed (though completed won't show the bracket).
+	var connColor Color
+	switch v.State {
+	case download.StateActive, download.StateRetrying:
+		connColor = colorMagenta
+	case download.StateQueued, download.StatePaused:
+		connColor = colorGrey
+	}
+	if connColor != "" && v.Connections > 0 && v.State != download.StateCompleted {
+		connStr := fmt.Sprintf("[x%d]", v.Connections)
+		coloredConn := string(connColor) + connStr + string(colorReset)
+		connPadded := coloredConn + strings.Repeat(" ", colConns-len(connStr))
+		line = strings.Replace(line, connDisplay, connPadded, 1)
+	}
 	// Color the percentage.
 	pctStr := fmt.Sprintf("%3d%%", pct)
 	switch v.State {
@@ -490,52 +510,12 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	case download.StateError:
 		line = colorReplace(line, pctStr, string(colorRed)+pctStr+string(colorReset))
 	}
-	// Finally colorize the pacman bar (face→yellow, dashes→green, dots→cyan,
-	// prefix→magenta/green/grey).
+	// Colorize the pacman bar (face→yellow, dashes→green, dots→cyan).
 	line = colorizeBarInLine(line)
-	// Color the connection prefix inside the bar.
-	line = colorConnPrefixInLine(line, v)
 	return line
 }
 
-// colorConnPrefixInLine finds the connection prefix inside the bar brackets
-// (e.g. "x4 " in "[x4 ---c  o  o  o]") and colors it: magenta for active,
-// green for completed, grey for queued/paused.
-func colorConnPrefixInLine(line string, v download.ProgressView) string {
-	if v.Connections <= 0 {
-		return line
-	}
-	open := strings.LastIndex(line, "[")
-	if open < 0 {
-		return line
-	}
-	close := strings.Index(line[open:], "]")
-	if close < 0 {
-		return line
-	}
-	close += open
-	barContent := line[open+1 : close]
-
-	prefix := fmt.Sprintf("x%d ", v.Connections)
-	if !strings.HasPrefix(barContent, prefix) {
-		return line
-	}
-
-	var connColor Color
-	switch v.State {
-	case download.StateActive, download.StateRetrying:
-		connColor = colorMagenta
-	case download.StateCompleted:
-		connColor = colorGreen
-	case download.StateQueued, download.StatePaused:
-		connColor = colorGrey
-	default:
-		return line
-	}
-
-	colored := string(connColor) + prefix + string(colorReset) + barContent[len(prefix):]
-	return line[:open+1] + colored + line[close:]
-}
+// colorReplace replaces the first occurrence of old in s with new.
 func colorReplace(s, old, new string) string {
 	i := strings.Index(s, old)
 	if i < 0 {
