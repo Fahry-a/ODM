@@ -88,7 +88,7 @@ Key flags (`odm --help` for the full list):
 
 ```
 -c, --connections N        total connection budget           (default 5)
-    --max-connections N    soft ceiling; exceeding warns     (default 32)
+-m, --max-connections N    soft ceiling; exceeding warns     (default 32)
     --split-file/-sf N     connections per file in batch     (unset = 1 each)
 -o, --output NAME          output filename (single-file only)
 -d, --dir PATH             destination directory             (default cwd)
@@ -96,18 +96,19 @@ Key flags (`odm --help` for the full list):
 -y, --yes                  skip the confirmation prompt
 -q, --quiet                no progress bar (cron/scripts); also skips prompt
 -x, --continue             resume incomplete file via .odm control file (default on)
-    --chunk-size SIZE      work-stealing chunk size          (default 4M)
-    --max-redirect N       redirect hops to follow            (default 5)
-    --retry N              retries per segment                 (default 3)
-    --retry-wait SEC       delay between retries             (default 2)
-    --timeout SEC          dial+headers timeout              (default 30)
-    --user-agent UA        custom User-Agent                 (default odm/<ver>)
+-s, --chunk-size SIZE      work-stealing chunk size          (default 4M)
+-n, --max-redirect N       redirect hops to follow            (default 5)
+-r, --retry N              retries per segment                 (default 3)
+-w, --retry-wait SEC       delay between retries             (default 2)
+-t, --timeout SEC          dial+headers timeout              (default 30)
+-u, --user-agent UA        custom User-Agent                 (default odm/<ver>)
 -H, --header K:V           add a custom header (repeatable)
     --referer URL          set the Referer header
-    --proxy URL            http/https/socks5 proxy
+-p, --proxy URL            http/https/socks5 proxy
     --check-certificate    verify TLS                        (default true)
     --checksum algo:hash   verify md5/sha1/sha256
-    --limit-rate RATE      global speed limit, e.g. 5M/500K
+-l, --limit-rate RATE      global speed limit, e.g. 5M/500K
+-L, --log FILE             mirror logs to FILE
 ```
 
 > **Comma note:** the legacy `"url1,url2,..."` single-argument form is still supported, but a comma *inside* a URL (e.g. `?ids=1,2,3`) is ambiguous, so **space-separated positional args** are the recommended form. URLs with a literal comma must use either space-separated form or `-i <file>`.

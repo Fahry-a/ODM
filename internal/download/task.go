@@ -31,10 +31,10 @@ const (
 	// persistCheckpointInterval controls how often the control file is written
 	// during an active download. Every N completed chunks the .odm file is
 	// flushed so a crash/kill leaves a usable resume point (similar to aria2's
-	// periodic-persist strategy). 5 strikes a balance: frequent enough that a
-	// crash loses at most 5 chunks (~20 MB at 4 MiB/chunk), but avoids hundreds
-	// of JSON-writes per second on fast multi-connection downloads.
-	persistCheckpointInterval = 5
+	// periodic-persist strategy). 1 means every chunk is persisted right away,
+	// maximising resume granularity at negligible I/O cost (JSON marshal +
+	// atomic rename on a small file completes in microseconds).
+	persistCheckpointInterval = 1
 )
 
 func (s TaskState) String() string {
@@ -348,6 +348,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 
 	if t.errors.Load() > 0 && t.bytesDone.Load() < t.totalOrDone() {
 		t.setState(StateError)
+		// Persist completed chunks before exiting so partial progress
+		// survives even if the process terminates shortly after this
+		// returns (e.g. via os.Exit on signal).
+		t.persistControl()
 		t.emitFinal(progressSink)
 		return fmt.Errorf("task failed: %d chunk errors, %d/%d bytes", t.errors.Load(), t.bytesDone.Load(), t.totalOrDone())
 	}
@@ -399,6 +403,10 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 
 		if err := t.downloadChunk(ctx, c, sink); err != nil {
 			if ctx.Err() != nil {
+				t.errors.Add(1)
+				// Persist completed chunks so partial progress survives
+				// even if the process exits before Start's error path runs.
+				t.persistControl()
 				return
 			}
 			t.errors.Add(1)

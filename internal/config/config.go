@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the ODM release string; baked into --user-agent default & --version.
-const Version = "odm/1.0.0"
+const Version = "odm/1.0.1"
 
 // Defaults mirrors the PRD §6.2 default column.
 const (
@@ -300,7 +300,7 @@ func (o *Options) setFromKey(key, val string) error {
 // -d, -i, -y, -q, -x, -H, -V, -h) are added as aliases so both work.
 func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.IntVarP(&o.Connections, "connections", "c", o.Connections, "Total connection budget")
-	fs.IntVar(&o.MaxConnection, "max-connections", o.MaxConnection, "Configurable ceiling for -c/-sf; exceeding it warns")
+	fs.IntVarP(&o.MaxConnection, "max-connections", "m", o.MaxConnection, "Configurable ceiling for -c/-sf; exceeding it warns")
 	// -sf is a 2-char token, which pflag can't bind as a shorthand (shorthands
 	// are single ASCII chars and would split -sf into -s -f). We bind the long
 	// name only and rewrite bare -sf → --split-file in NormalizeArgs (main.go)
@@ -314,20 +314,20 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.BoolVarP(&o.Quiet, "quiet", "q", o.Quiet, "Disable the progress bar (for cron/scripts)")
 	fs.BoolVarP(&o.Continue, "continue", "x", o.Continue, "Resume an incomplete file (uses the .odm control file)")
 
-	fs.IntVar(&o.MaxRedirect, "max-redirect", o.MaxRedirect, "Max number of redirect hops to follow")
-	fs.IntVar(&o.Retry, "retry", o.Retry, "Number of retries per segment on failure")
-	fs.IntVar(&o.RetryWait, "retry-wait", o.RetryWait, "Delay between retries (seconds)")
-	fs.IntVar(&o.Timeout, "timeout", o.Timeout, "Connection timeout (seconds)")
-	fs.StringVar(&o.UserAgent, "user-agent", o.UserAgent, "Custom User-Agent header")
+	fs.IntVarP(&o.MaxRedirect, "max-redirect", "n", o.MaxRedirect, "Max number of redirect hops to follow")
+	fs.IntVarP(&o.Retry, "retry", "r", o.Retry, "Number of retries per segment on failure")
+	fs.IntVarP(&o.RetryWait, "retry-wait", "w", o.RetryWait, "Delay between retries (seconds)")
+	fs.IntVarP(&o.Timeout, "timeout", "t", o.Timeout, "Connection timeout (seconds)")
+	fs.StringVarP(&o.UserAgent, "user-agent", "u", o.UserAgent, "Custom User-Agent header")
 	fs.StringArrayVarP(&o.Headers, "header", "H", o.Headers, "Add a custom HTTP header (repeatable: 'Key: value')")
 	fs.StringVar(&o.Referer, "referer", o.Referer, "Set the Referer header")
-	fs.StringVar(&o.Proxy, "proxy", o.Proxy, "Proxy (http/https/socks5)")
+	fs.StringVarP(&o.Proxy, "proxy", "p", o.Proxy, "Proxy (http/https/socks5)")
 	fs.BoolVar(&o.CheckCertificate, "check-certificate", o.CheckCertificate, "Verify TLS certificates")
 	fs.StringVar(&o.Checksum, "checksum", o.Checksum, "Verify checksum, format algo:hash (md5/sha1/sha256)")
-	fs.StringVar(&o.LimitRate, "limit-rate", o.LimitRate, "Global speed limit, e.g. 5M, 500K")
-	fs.StringVar(&o.ChunkSize, "chunk-size", o.ChunkSize, "Chunk size for the work-stealing queue, e.g. 4M")
+	fs.StringVarP(&o.LimitRate, "limit-rate", "l", o.LimitRate, "Global speed limit, e.g. 5M, 500K")
+	fs.StringVarP(&o.ChunkSize, "chunk-size", "s", o.ChunkSize, "Chunk size for the work-stealing queue, e.g. 4M")
 	fs.StringVar(&o.ConfigFile, "config", o.ConfigFile, "Path to a custom config file")
-	fs.StringVar(&o.LogFile, "log", o.LogFile, "Log file path")
+	fs.StringVarP(&o.LogFile, "log", "L", o.LogFile, "Log file path")
 	fs.StringVar(&o.LogLevel, "log-level", o.LogLevel, "debug / info / warn / error")
 
 	fs.BoolVar(&o.RPC, "rpc", o.RPC, "Run as an RPC server (daemon mode)")

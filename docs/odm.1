@@ -116,7 +116,7 @@ instead of holding the whole file back.
 total parallel-connection budget
 .RI ( default " 5" )
 .TP
-.BR \-\-max\-connections " \fIN\fR"
+.BR \-m ", " \-\-max\-connections " \fIN\fR"
 ceiling; exceeding it just warns
 .RI ( default " 32" )
 .TP
@@ -148,29 +148,29 @@ resume an incomplete file via the
 control file
 .RI ( default " on" )
 .TP
-.BR \-\-chunk-size " \fISIZE\fR"
+.BR -s ", " \-\-chunk-size " \fISIZE\fR"
 work-stealing chunk size, e.g.
 .B 4M
 .RI ( default " 4M" )
 .SS "HTTP / network"
 .TP
-.BR \-\-max\-redirect " \fIN\fR"
+.BR -n ", " \-\-max\-redirect " \fIN\fR"
 redirect hops to follow
 .RI ( default " 5" )
 .TP
-.BR \-\-retry " \fIN\fR"
+.BR -r ", " \-\-retry " \fIN\fR"
 retries per segment on failure
 .RI ( default " 3" )
 .TP
-.BR \-\-retry\-wait " \fISEC\fR"
+.BR -w ", " \-\-retry\-wait " \fISEC\fR"
 delay between retries
 .RI ( default " 2" )
 .TP
-.BR \-\-timeout " \fISEC\fR"
+.BR -t ", " \-\-timeout " \fISEC\fR"
 dial+headers timeout
 .RI ( default " 30" )
 .TP
-.BR \-\-user\-agent " \fIUA\fR"
+.BR -u ", " \-\-user\-agent " \fIUA\fR"
 custom User-Agent
 .RI ( default " odm/<version>" )
 .TP
@@ -180,7 +180,7 @@ add a custom header (repeatable)
 .BR \-\-referer " \fIURL\fR"
 set the Referer header
 .TP
-.BR \-\-proxy " \fIURL\fR"
+.BR -p ", " \-\-proxy " \fIURL\fR"
 http/https/socks5 proxy
 .TP
 .BR \-\-check\-certificate " \fIBOOL\fR"
@@ -190,7 +190,7 @@ verify TLS
 .BR \-\-checksum " \fIALGO:HASH\fR"
 verify md5/sha1/sha256
 .TP
-.BR \-\-limit\-rate " \fIRATE\fR"
+.BR -l ", " \-\-limit\-rate " \fIRATE\fR"
 global speed limit, e.g.
 .BR 5M / 500K
 .SS "Config / logging / RPC"
@@ -199,7 +199,7 @@ global speed limit, e.g.
 config file path
 .RI ( default " /etc/odm/config.conf" )
 .TP
-.BR \-\-log " \fIFILE\fR"
+.BR -L ", " \-\-log " \fIFILE\fR"
 mirror logs to FILE
 .TP
 .BR \-\-log\-level " \fILEVEL\fR"

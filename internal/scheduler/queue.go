@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"odm/internal/download"
 )
@@ -152,6 +153,15 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 			// Release the daemon idle hold (if any) so bg wg.Wait returns and
 			// Run's goroutine can exit; then cancel still-propagating work.
 			s.releaseIdle()
+			// Brief wait so running tasks have a chance to persist control
+			// files (with completed chunk offsets) before the process exits
+			// via os.Exit in main(). A full doneCh wait is avoided because
+			// queued tasks may have unbalanced wg.Add that prevents wg.Wait
+			// from ever returning.
+			select {
+			case <-doneCh:
+			case <-time.After(200 * time.Millisecond):
+			}
 			return int(s.succeeded), int(s.failed), ctx.Err()
 		case st := <-s.compl:
 			s.handleComplete(st)
