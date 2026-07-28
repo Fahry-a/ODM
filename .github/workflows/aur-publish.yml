@@ -1,0 +1,36 @@
+name: Publish AUR
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  aur-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate PKGBUILD
+        working-directory: packaging
+        run: |
+          grep -q "^pkgname=odm-bin$" PKGBUILD
+          grep -q "^pkgver=" PKGBUILD
+          echo "PKGBUILD validated"
+
+      - name: Publish AUR package
+        uses: ulises-jeremias/github-actions-aur-publish@v1.0.3
+        with:
+          pkgname: odm-bin
+          pkgbuild: packaging/PKGBUILD
+          assets: |
+            packaging/.SRCINFO
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to v${{ github.event.release.tag_name || 'latest' }}"
+          ssh_keyscan_types: rsa,dsa,ecdsa,ed25519
+          update_pkgver: false
