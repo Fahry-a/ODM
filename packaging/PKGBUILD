@@ -28,11 +28,11 @@ source=(
     "${pkgname}.conf.example::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/configs/odm.conf.example"
     "${pkgname}.service::https://raw.githubusercontent.com/Fahry-a/odm/v${pkgver}/packaging/odm.service"
 )
-sha256sums_x86_64=('1977cb8742a9b2940b983ce5347ec832b70f5131c20ca9aaf5f617d6186e53be'
+sha256sums_x86_64=('4c34c8fe20e0583f200e5d66097bfac1005e1021f643b98833aa658a83484619'
                   'e4ce4b2444a15646e33917442c92c99473230675f1fbe23959c07d1da15fd6bc'
                   '147927f1159686577a143c88cebff2d8ca25daf781e344c989a8db4e856ea748'
                   '314998f62c236fb2aaa7362e2b1638a72627eb2702f95f9fac4e7219c10a5b7e')
-sha256sums_aarch64=('a918de2cf5a3d99f5418ac6631f7d231b5aea7058a00297579256c3b623d693c'
+sha256sums_aarch64=('4c58158a0ab80fe592ab06b02204423554cbadfb043ba104463b1e441ec64bbc'
                     'e4ce4b2444a15646e33917442c92c99473230675f1fbe23959c07d1da15fd6bc'
                     '147927f1159686577a143c88cebff2d8ca25daf781e344c989a8db4e856ea748'
                     '314998f62c236fb2aaa7362e2b1638a72627eb2702f95f9fac4e7219c10a5b7e')
