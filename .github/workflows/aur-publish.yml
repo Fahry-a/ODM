@@ -101,22 +101,6 @@ jobs:
           grep -q "^pkgver=${{ steps.version.outputs.version }}$" PKGBUILD || { echo "::error::Wrong pkgver"; errors=1; }
           [ "$errors" -eq 0 ] || exit 1
 
-      - name: Commit to main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-          git add packaging/PKGBUILD packaging/.SRCINFO
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(aur): update PKGBUILD and .SRCINFO for v${{ steps.version.outputs.version }}"
-            git push
-          else
-            echo "No changes to commit"
-          fi
-
       - name: Publish AUR
         uses: ulises-jeremias/github-actions-aur-publish@v1
         with:
@@ -133,3 +117,23 @@ jobs:
           commit_message: "chore(aur): update to v${{ steps.version.outputs.version }}"
           ssh_keyscan_types: rsa,ecdsa,ed25519
           update_pkgver: false
+
+      - name: Clean up generated assets
+        working-directory: packaging
+        run: rm -f odm-bin-*.*
+
+      - name: Commit to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git add packaging/PKGBUILD packaging/.SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(aur): update PKGBUILD and .SRCINFO for v${{ steps.version.outputs.version }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi
