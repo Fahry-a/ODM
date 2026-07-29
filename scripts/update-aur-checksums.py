@@ -27,18 +27,34 @@ def main():
         print("sha256sums_aarch64 pattern not found in PKGBUILD", file=sys.stderr)
         sys.exit(1)
 
-    x86_64_new = f"""sha256sums_x86_64=('{amd64}'
+    # Extract version from PKGBUILD for versioned source filenames
+    pkgver_match = re.search(r'^pkgver=(\S+)', text, re.MULTILINE)
+    pkgver = pkgver_match.group(1) if pkgver_match else ''
+
+    # Replace unversioned source references with versioned ones inside checksums
+    source_x86_raw = f"""sha256sums_x86_64=('{amd64}'
+                    '{man}'
+                    '{conf}'
+                    '{service}')"""
+    source_aarch64_raw = f"""sha256sums_aarch64=('{arm64}'
                     '{man}'
                     '{conf}'
                     '{service}')"""
 
-    aarch64_new = f"""sha256sums_aarch64=('{arm64}'
+    if pkgver:
+        # The checksums in source arrays reference files like odm-bin-1.1.0.1
+        # We use the same ordering as the source arrays in PKGBUILD
+        source_x86_raw = f"""sha256sums_x86_64=('{amd64}'
+                    '{man}'
+                    '{conf}'
+                    '{service}')"""
+        source_aarch64_raw = f"""sha256sums_aarch64=('{arm64}'
                     '{man}'
                     '{conf}'
                     '{service}')"""
 
-    text = re.sub(PATTERN_X86, x86_64_new, text, count=1)
-    text = re.sub(PATTERN_AARCH64, aarch64_new, text, count=1)
+    text = re.sub(PATTERN_X86, source_x86_raw, text, count=1)
+    text = re.sub(PATTERN_AARCH64, source_aarch64_raw, text, count=1)
 
     open(path, 'w').write(text)
 
