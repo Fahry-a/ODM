@@ -193,6 +193,10 @@ verify md5/sha1/sha256
 .BR -l ", " \-\-limit\-rate " \fIRATE\fR"
 global speed limit, e.g.
 .BR 5M / 500K
+.TP
+.BR \-\-limit\-rate\-per\-task " \fIRATE\fR"
+per-task speed cap (stacked on global), e.g.
+.BR 2M
 .SS "Config / logging / RPC"
 .TP
 .BR \-\-config " \fIPATH\fR"
@@ -264,6 +268,7 @@ check-certificate   = true
 continue            = true
 quiet               = false
 limit-rate          =
+limit-rate-per-task  =
 # RPC
 rpc                 = false
 rpc-listen-port     = 6900
@@ -301,6 +306,17 @@ tasks, rather than splitting the limit per connection. Throttling happens at
 the data-stream level (bytes read from the network, before writing to disk),
 so the aggregate throughput stays close to the configured cap regardless of
 how many connections are alive or how the batch queue advances.
+.PP
+An optional
+.BR \-\-limit\-rate\-per\-task
+adds a
+.I per-task token bucket
+stacked on top of the global one. Each worker acquires tokens from both
+buckets before writing to disk, so a single task is capped to
+.BR min ( per-task, global )
+and the sum across all tasks never exceeds the global cap. Both limits can
+be changed at runtime via RPC
+.BR odm.changeOption .
 .SH RESUME
 With
 .B \-x
@@ -318,10 +334,14 @@ When stderr/stdout is a TTY, odm renders a pacman / CachyOS-style
 progress bar. The per-file line format is:
 .PP
 .RS
-\fI<file_name>\fR   \fI<size>\fR   \fI<speed>\fR/s   \fI<ETA>\fR   [\fIx<N>\fR-\fI<progress-bar>\fR]   \fI<percent>\fR%
+\fI<file_name>\fR   \fI<done/total>\fR   \fI<speed>\fR/s   \fI<ETA>\fR   [\fIx<N>\fR-\fI<progress-bar>\fR]   \fI<percent>\fR%
 .RE
 .PP
 where
+.B <done/total>
+is the hybrid downloaded/total size with compact suffixes (e.g.
+.BR 42.0M/256.0M )
+that grows live as bytes arrive,
 .B x<N>
 is the number of parallel connections currently used by that file (shown inside
 the bar brackets as a prefix, e.g.
@@ -407,7 +427,7 @@ odm.unpause / odm.unpauseAll@Resume paused task(s).
 odm.remove@Cancel and remove a task.
 odm.tellStatus@Detailed status of one task (progress, speed, conns, ETA).
 odm.tellActive / odm.tellWaiting / odm.tellStopped@List active / queued / finished tasks.
-odm.changeOption@Change an option on a running task (MVP: acknowledged no-op).
+odm.changeOption@Change options at runtime: max-download-limit, max-download-limit-per-task, connections.
 odm.getGlobalStat@Global stats (active/waiting/stopped counts).
 odm.getVersion@Version + enabled features.
 odm.shutdown@Shut the daemon down.
@@ -502,8 +522,10 @@ Run the RPC daemon on port 6900 with a shared secret, downloads going to
 .BR curl (1)
 .SH BUGS
 .LP
-Mid-flight dynamic reallocation (rebalancing connections of chunks already
-in progress) is a roadmap item \(em see AGENTS.md for the Post-MVP list.
+Mid-flight connection reallocation (\fBchangeOption\fR with key
+\fBconnections\fR) is partially supported: graceful drain (excess workers
+finish their current chunk and retire) is implemented; dynamic rebalancing
+of already-dispatched chunks across tasks is a roadmap item.
 .LP
 HTTP/2 / HTTP/3 multiplexing is deliberately not a core feature: odm's
 value proposition is opening many independent TCP connections; against

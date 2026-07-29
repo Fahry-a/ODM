@@ -7,7 +7,7 @@
 #   makepkg --printsrcinfo > .SRCINFO
 
 pkgname=odm-bin
-pkgver=1.0.1
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Oryn Download Manager — aria2c-inspired CLI download manager with Connection Balancer, parallel download acceleration, pacman/ILoveCandy progress bar, JSON-RPC + WebSocket daemon, and resume support"
 arch=('x86_64' 'aarch64')

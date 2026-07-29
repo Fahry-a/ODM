@@ -108,6 +108,7 @@ Key flags (`odm --help` for the full list):
     --check-certificate    verify TLS                        (default true)
     --checksum algo:hash   verify md5/sha1/sha256
 -l, --limit-rate RATE      global speed limit, e.g. 5M/500K
+    --limit-rate-per-task RATE  per-task speed cap (stacked on global), e.g. 2M
 -L, --log FILE             mirror logs to FILE
 ```
 
@@ -118,6 +119,10 @@ Key flags (`odm --help` for the full list):
 ## Rate limiting
 
 `--limit-rate` is enforced with a **global token bucket** shared across *all* active workers of *all* tasks, rather than splitting the limit per connection. Throttling happens at the data-stream level (bytes read from the network, before writing to disk), so the aggregate throughput stays close to the configured cap regardless of how many connections are alive or how the batch queue advances.
+
+An optional **per-task cap** (`--limit-rate-per-task`) can be stacked on top: each task gets its own token bucket, and the body is throttled through both the per-task and global buckets. The effective speed of a single task is `min(per-task, global)`, and the total across all tasks never exceeds the global cap. Both limits can be changed at runtime via RPC `odm.changeOption`.
+
+`--limit-rate` and `--limit-rate-per-task` both support human-readable suffixes: `5M`, `500K`, `2.5G`, `off` to disable.
 
 ---
 
@@ -164,7 +169,7 @@ curl -s -X POST http://127.0.0.1:6900/rpc -H 'Content-Type: application/json' \
 | `odm.remove` | Cancel and remove a task. |
 | `odm.tellStatus` | Detailed status of one task (progress, speed, conns, ETA). |
 | `odm.tellActive` / `odm.tellWaiting` / `odm.tellStopped` | List active / queued / finished tasks. |
-| `odm.changeOption` | Change an option on a running task (MVP: acknowledged no-op; mid-flight mutation is a roadmap item). |
+| `odm.changeOption` | Change options at runtime: `max-download-limit` (global rate), `max-download-limit-per-task` (per-task rate), `connections` (mid-flight reallocation). |
 | `odm.getGlobalStat` | Global stats (active/waiting/stopped counts). |
 | `odm.getVersion` | Version + enabled features. |
 | `odm.shutdown` | Shut the daemon down. |

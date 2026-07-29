@@ -47,7 +47,7 @@ func TestRenderTaskLine_Format(t *testing.T) {
 		BytesDone: 86 << 20, Connections: 16, State: download.StateActive, ETA: 5 * time.Second,
 	}
 	line := RenderTaskLine(v, false)
-	for _, want := range []string{"linux-cachyos", "MiB", "x16", "71%", "%"} {
+	for _, want := range []string{"linux-cachyos", "86.0M/120.0M", "x16", "71%", "%"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %s", want, line)
 		}
@@ -147,6 +147,18 @@ func TestFormatFileSize_No1024Overflow(t *testing.T) {
 		sp := FormatSpeed(b)
 		if n := len([]rune(sp)); n > colSpeed {
 			t.Fatalf("FormatSpeed(%d)=%q len=%d > colSpeed %d", b, sp, n, colSpeed)
+		}
+		// FormatFileSizeShort must also fit within colSize when paired as "done/total".
+		short := FormatFileSizeShort(b)
+		if n := len([]rune(short)); n > 6 {
+			t.Fatalf("FormatFileSizeShort(%d)=%q len=%d > 6", b, short, n)
+		}
+	}
+	// Verify the combined "done/total" fits within colSize.
+	for _, pair := range [][2]int64{{100, 1000}, {86 << 20, 120 << 20}, {1 << 30, 2 << 30}, {500, -1}} {
+		combined := FormatFileSizeShort(pair[0]) + "/" + FormatFileSizeShort(pair[1])
+		if n := len([]rune(combined)); n > colSize {
+			t.Fatalf("size pair %v=%q len=%d > colSize %d", pair, combined, n, colSize)
 		}
 	}
 }
