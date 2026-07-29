@@ -4,25 +4,123 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish (e.g. v1.0.2)"
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   aur-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: main
 
-      - name: Validate PKGBUILD
+      - name: Extract version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$RELEASE_TAG"
+          fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update PKGBUILD pkgver
         working-directory: packaging
         run: |
-          grep -q "^pkgname=odm-bin$" PKGBUILD
-          grep -q "^pkgver=" PKGBUILD
-          echo "PKGBUILD validated"
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
 
-      - name: Publish AUR package
-        uses: ulises-jeremias/github-actions-aur-publish@v1.0.3
+      - name: Compute all checksums
+        working-directory: packaging
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          curl -fsSL -o /tmp/checksums.txt \
+            "https://github.com/Fahry-a/odm/releases/download/v${VERSION}/checksums.txt"
+
+          AMD64_SUM=$(awk -v file="odm_${VERSION}_linux_amd64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+          ARM64_SUM=$(awk -v file="odm_${VERSION}_linux_arm64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+
+          if [ -z "$AMD64_SUM" ] || [ -z "$ARM64_SUM" ]; then
+            echo "::error::Missing binary checksum in release artifacts"
+            exit 1
+          fi
+
+          curl -fsSL -o /tmp/odm.1 \
+            "https://raw.githubusercontent.com/Fahry-a/odm/v${VERSION}/docs/odm.1"
+          curl -fsSL -o /tmp/odm.conf.example \
+            "https://raw.githubusercontent.com/Fahry-a/odm/v${VERSION}/configs/odm.conf.example"
+          curl -fsSL -o /tmp/odm.service \
+            "https://raw.githubusercontent.com/Fahry-a/odm/v${VERSION}/packaging/odm.service"
+
+          MAN_SUM=$(sha256sum /tmp/odm.1 | awk '{print $1}')
+          CONF_SUM=$(sha256sum /tmp/odm.conf.example | awk '{print $1}')
+          SERVICE_SUM=$(sha256sum /tmp/odm.service | awk '{print $1}')
+
+          export AMD64_SUM ARM64_SUM MAN_SUM CONF_SUM SERVICE_SUM
+          python3 ../scripts/update-aur-checksums.py
+
+      - name: Verify checksums and regenerate .SRCINFO
+        working-directory: packaging
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/pkg" -w /pkg archlinux:base-devel bash -c "
+            useradd -m builder
+            chown -R builder:builder /pkg
+            su builder -c 'makepkg --verifysource --nodeps'
+            su builder -c 'makepkg --printsrcinfo' > .SRCINFO
+          "
+
+      - name: Validate
+        working-directory: packaging
+        run: |
+          set -euo pipefail
+          errors=0
+          grep -q "^pkgname=odm-bin$" PKGBUILD || { echo "::error::Missing pkgname"; errors=1; }
+          grep -q "^pkgver=${{ steps.version.outputs.version }}$" PKGBUILD || { echo "::error::Wrong pkgver"; errors=1; }
+          if grep -qE "'SKIP'|SKIP" PKGBUILD; then
+            echo "::error::PKGBUILD contains SKIP checksum"
+            errors=1
+          fi
+          [ "$errors" -eq 0 ] || exit 1
+
+      - name: Commit to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git add packaging/PKGBUILD packaging/.SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "aur: update PKGBUILD and .SRCINFO for v${{ steps.version.outputs.version }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi
+
+      - name: Publish AUR
+        uses: ulises-jeremias/github-actions-aur-publish@v1
         with:
           pkgname: odm-bin
           pkgbuild: packaging/PKGBUILD
@@ -31,6 +129,6 @@ jobs:
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to v${{ github.event.release.tag_name || 'latest' }}"
+          commit_message: "Update to v${{ steps.version.outputs.version }}"
           ssh_keyscan_types: rsa,dsa,ecdsa,ed25519
           update_pkgver: false

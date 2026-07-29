@@ -182,6 +182,34 @@ func (d *Daemon) Remove(id download.TaskID) bool {
 	return true
 }
 
+// ChangeGlobalLimit updates the global rate limit at runtime. Used by RPC
+// changeOption with "max-download-limit" key.
+func (d *Daemon) ChangeGlobalLimit(spec string) error {
+	return d.mgr.Limiter().SetRate(spec)
+}
+
+// ChangeTaskLimit updates the per-task rate limit for a running task. Used by
+// RPC changeOption with "max-download-limit-per-task" key.
+func (d *Daemon) ChangeTaskLimit(id download.TaskID, spec string) bool {
+	t := d.mgr.Task(id)
+	if t == nil {
+		return false
+	}
+	return t.SetTaskRate(spec)
+}
+
+// ChangeConns adjusts the connection count for a running task. Used by RPC
+// changeOption with "connections" key. Uses graceful drain for reduction;
+// spawns new workers for increase. Returns false if task is not found or has
+// already finished and cannot accept new workers.
+func (d *Daemon) ChangeConns(id download.TaskID, newConns int) bool {
+	t := d.mgr.Task(id)
+	if t == nil {
+		return false
+	}
+	return t.AdjustConns(newConns, nil, nil)
+}
+
 // TellStatus returns the snapshot of one task by id.
 func (d *Daemon) TellStatus(id download.TaskID) (download.ProgressView, bool) {
 	t := d.mgr.Task(id)
