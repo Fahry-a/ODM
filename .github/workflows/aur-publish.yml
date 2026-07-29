@@ -56,9 +56,10 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          cp ../docs/odm.1 "${pkgname}-${VERSION}.1"
-          cp ../configs/odm.conf.example "${pkgname}-${VERSION}.conf.example"
-          cp ../packaging/odm.service "${pkgname}-${VERSION}.service"
+          PKGNAME=$(grep -oP '^pkgname=\K.*' PKGBUILD)
+          cp ../docs/odm.1 "${PKGNAME}-${VERSION}.1"
+          cp ../configs/odm.conf.example "${PKGNAME}-${VERSION}.conf.example"
+          cp ../packaging/odm.service "${PKGNAME}-${VERSION}.service"
 
       - name: Get binary checksum and update PKGBUILD
         working-directory: packaging
