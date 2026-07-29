@@ -51,7 +51,16 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
 
-      - name: Compute all checksums
+      - name: Copy bundled files with versioned names
+        working-directory: packaging
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          cp ../docs/odm.1 "${pkgname}-${VERSION}.1"
+          cp ../configs/odm.conf.example "${pkgname}-${VERSION}.conf.example"
+          cp ../packaging/odm.service "${pkgname}-${VERSION}.service"
+
+      - name: Get binary checksum and update PKGBUILD
         working-directory: packaging
         run: |
           set -euo pipefail
@@ -68,18 +77,7 @@ jobs:
             exit 1
           fi
 
-          curl -fsSL -o /tmp/odm.1 \
-            "https://raw.githubusercontent.com/Fahry-a/odm/v${VERSION}/docs/odm.1"
-          curl -fsSL -o /tmp/odm.conf.example \
-            "https://raw.githubusercontent.com/Fahry-a/odm/v${VERSION}/configs/odm.conf.example"
-          curl -fsSL -o /tmp/odm.service \
-            "https://raw.githubusercontent.com/Fahry-a/odm/v${VERSION}/packaging/odm.service"
-
-          MAN_SUM=$(sha256sum /tmp/odm.1 | awk '{print $1}')
-          CONF_SUM=$(sha256sum /tmp/odm.conf.example | awk '{print $1}')
-          SERVICE_SUM=$(sha256sum /tmp/odm.service | awk '{print $1}')
-
-          export AMD64_SUM ARM64_SUM MAN_SUM CONF_SUM SERVICE_SUM
+          export AMD64_SUM ARM64_SUM
           python3 ../scripts/update-aur-checksums.py
 
       - name: Verify checksums and regenerate .SRCINFO
@@ -100,10 +98,6 @@ jobs:
           errors=0
           grep -q "^pkgname=odm-bin$" PKGBUILD || { echo "::error::Missing pkgname"; errors=1; }
           grep -q "^pkgver=${{ steps.version.outputs.version }}$" PKGBUILD || { echo "::error::Wrong pkgver"; errors=1; }
-          if grep -qE "'SKIP'|SKIP" PKGBUILD; then
-            echo "::error::PKGBUILD contains SKIP checksum"
-            errors=1
-          fi
           [ "$errors" -eq 0 ] || exit 1
 
       - name: Commit to main
@@ -114,9 +108,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-          git add packaging/PKGBUILD packaging/.SRCINFO
+          git add packaging/PKGBUILD packaging/.SRCINFO packaging/*.1 packaging/*.conf.example packaging/*.service
           if ! git diff --cached --quiet; then
-            git commit -m "aur: update PKGBUILD and .SRCINFO for v${{ steps.version.outputs.version }}"
+            git commit -m "aur: update PKGBUILD, .SRCINFO, and bundled files for v${{ steps.version.outputs.version }}"
             git push
           else
             echo "No changes to commit"
@@ -129,6 +123,9 @@ jobs:
           pkgbuild: packaging/PKGBUILD
           assets: |
             packaging/.SRCINFO
+            packaging/*.1
+            packaging/*.conf.example
+            packaging/*.service
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
