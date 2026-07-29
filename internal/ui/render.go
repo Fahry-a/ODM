@@ -79,9 +79,9 @@ func stateColor(s download.TaskState, useColor bool) Color {
 // around every frame. Values are fitted to these widths (right-aligned) so
 // the bar stays glued to the right edge of the line.
 const (
-	colSize  = 9  // "999.9 MiB", "1023 B"
-	colSpeed = 11 // "999.9 MiB/s", "1023 B/s"
-	colETA   = 8  // "HH:MM:SS" (was MM:SS = 5)
+	colSize   = 14 // "999.9M/999.9M" (hybrid done/total)
+	colSpeed  = 11 // "999.9 MiB/s", "1023 B/s"
+	colETA    = 8  // "HH:MM:SS" (was MM:SS = 5)
 )
 
 // FormatFileSize humanises a byte count (binary, KiB/MiB/GiB/…).
@@ -109,6 +109,31 @@ func FormatFileSize(b int64) string {
 		idx++
 	}
 	return fmt.Sprintf("%.1f %s", val, units[idx])
+}
+
+// FormatFileSizeShort is like FormatFileSize but uses single-letter suffixes
+// (K, M, G, T, P) so values stay compact enough for two-part displays like
+// "42.0M/256.0M". Max output: "999.9P" (6 chars).
+func FormatFileSizeShort(b int64) string {
+	const unit = 1024.0
+	if b < 0 {
+		return "?"
+	}
+	if b < 1024 {
+		return fmt.Sprintf("%dB", b)
+	}
+	val := float64(b)
+	units := []string{"K", "M", "G", "T", "P"}
+	idx := -1
+	for val >= unit && idx < len(units)-1 {
+		val /= unit
+		idx++
+	}
+	if idx < len(units)-1 && val+0.05 >= unit {
+		val /= unit
+		idx++
+	}
+	return fmt.Sprintf("%.1f%s", val, units[idx])
 }
 
 // FormatSpeed humanises bytes/sec. Always fits in colSpeed once padded
@@ -445,9 +470,15 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 		name = v.URL
 	}
 	name = truncateNameTo(name, nameWidth)
-	size := FormatFileSize(v.TotalSize)
-	if v.TotalSize < 0 {
-		size = "?"
+	size := FormatFileSizeShort(v.BytesDone)
+	if v.TotalSize > 0 {
+		size += "/" + FormatFileSizeShort(v.TotalSize)
+	} else if v.TotalSize < 0 {
+		size += "/?"
+	}
+	// For completed tasks show final size (pinned, not "0/?" for sizeless).
+	if v.TotalSize <= 0 && v.State == download.StateCompleted && v.BytesDone > 0 {
+		size = FormatFileSizeShort(v.BytesDone) + "/" + FormatFileSizeShort(v.BytesDone)
 	}
 	speed := FormatSpeed(v.Speed)
 	eta := FormatDuration(v.ETA)
@@ -571,7 +602,11 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration,
 		bar = colorizeBar(bar, true)
 	}
 
-	leftText := fmt.Sprintf("Total: %d/%d completed", completed, total)
+	bytesStr := FormatFileSize(bytesDone)
+	if totalSize > 0 {
+		bytesStr += "/" + FormatFileSize(totalSize)
+	}
+	leftText := fmt.Sprintf("Total: %d/%d completed  %s", completed, total, bytesStr)
 	rightSide := fmt.Sprintf("  |  %s  |  ETA %s  [%s]  %s", sp, etaStr, bar, pctStr)
 
 	if termWidth > 0 {

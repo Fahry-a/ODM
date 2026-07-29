@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the ODM release string; baked into --user-agent default & --version.
-const Version = "odm/1.0.1"
+const Version = "odm/1.1.0"
 
 // Defaults mirrors the PRD §6.2 default column.
 const (
@@ -79,6 +79,7 @@ type Options struct {
 	CheckCertificate bool   // --check-certificate
 	Checksum         string // --checksum "algo:hash"
 	LimitRate        string // --limit-rate "5M"/"500K"  ("" = unlimited)
+	TaskLimitRate    string // --limit-rate-per-task "2M" (per-task cap, additive to global)
 	ChunkSize        string // --chunk-size "4M"
 
 	// Behaviour.
@@ -267,6 +268,8 @@ func (o *Options) setFromKey(key, val string) error {
 		o.Checksum = val
 	case "limit-rate":
 		o.LimitRate = val
+	case "limit-rate-per-task":
+		o.TaskLimitRate = val
 	case "chunk-size":
 		o.ChunkSize = val
 	case "rpc":
@@ -325,6 +328,7 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.CheckCertificate, "check-certificate", o.CheckCertificate, "Verify TLS certificates")
 	fs.StringVar(&o.Checksum, "checksum", o.Checksum, "Verify checksum, format algo:hash (md5/sha1/sha256)")
 	fs.StringVarP(&o.LimitRate, "limit-rate", "l", o.LimitRate, "Global speed limit, e.g. 5M, 500K")
+	fs.StringVar(&o.TaskLimitRate, "limit-rate-per-task", o.TaskLimitRate, "Per-task speed cap, additive to global, e.g. 2M")
 	fs.StringVarP(&o.ChunkSize, "chunk-size", "s", o.ChunkSize, "Chunk size for the work-stealing queue, e.g. 4M")
 	fs.StringVar(&o.ConfigFile, "config", o.ConfigFile, "Path to a custom config file")
 	fs.StringVarP(&o.LogFile, "log", "L", o.LogFile, "Log file path")

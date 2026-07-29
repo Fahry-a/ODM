@@ -87,7 +87,8 @@ type Task struct {
 	url    string
 	opts   TaskOptions
 	client *transport.Client
-	lim    *ratelimit.Limiter
+	lim    *ratelimit.Limiter // global rate limiter
+	taskLim *ratelimit.Limiter // per-task rate limiter; nil = unlimited
 
 	// resolved after Probe
 	probe   *transport.ProbeResult
@@ -119,6 +120,15 @@ type Task struct {
 
 	mu     sync.Mutex // guards state transitions & control-file writes
 	paused bool
+
+	// mid-flight reallocation
+	connTarget atomic.Int32 // desired connection count (≤ conns for drain)
+	baseCtx    context.Context
+	sink       func(ProgressView)
+	workerWg   sync.WaitGroup
+
+	adjustMu   sync.Mutex // guards adjustDone + workerWg.Add race
+	adjustDone bool       // true after workerWg.Wait() returns
 }
 
 // LogLn is the logger callback signature used by Task: level (info/warn/error)
@@ -128,17 +138,18 @@ type LogFn = func(level string, format string, args ...any)
 // TaskOptions are the parts of *config.Options a Task needs. Decoupling the
 // engine from config keeps download tests buildable from scratch.
 type TaskOptions struct {
-	OutputName  string // "" ⇒ derive from URL
-	Dir         string
-	Connections int
-	Retry       int
-	RetryWait   time.Duration
-	Continue    bool
-	ChunkSize   int64 // bytes; parsed from --chunk-size
-	Timeout     time.Duration
-	MaxRedirect int
-	UserAgent   string // for control file metadata
-	Checksum    string // "algo:hex" if --checksum was used
+	OutputName    string // "" ⇒ derive from URL
+	Dir           string
+	Connections   int
+	Retry         int
+	RetryWait     time.Duration
+	Continue      bool
+	ChunkSize     int64 // bytes; parsed from --chunk-size
+	Timeout       time.Duration
+	MaxRedirect   int
+	UserAgent     string // for control file metadata
+	Checksum      string // "algo:hex" if --checksum was used
+	TaskLimitRate string // per-task rate cap, e.g. "2M"; "" = unlimited
 }
 
 // rateMeasure keeps a short rolling window of bytes vs time to produce a stable
@@ -196,14 +207,16 @@ func NewTask(id TaskID, url string, opts TaskOptions, client *transport.Client, 
 	if logf == nil {
 		logf = func(level string, format string, args ...any) {}
 	}
+	taskLim, _ := ratelimit.New(opts.TaskLimitRate)
 	return &Task{
-		id:     id,
-		url:    url,
-		opts:   opts,
-		client: client,
-		lim:    lim,
-		pauseC: make(chan struct{}, 1),
-		logf:   logf,
+		id:      id,
+		url:     url,
+		opts:    opts,
+		client:  client,
+		lim:     lim,
+		taskLim: taskLim,
+		pauseC:  make(chan struct{}, 1),
+		logf:    logf,
 	}
 }
 
@@ -254,7 +267,43 @@ func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
 // SetConns overrides the task's connection count. Used by the Scheduler to
 // apply the Balancer's per-file allocation, which may differ from the global
 // default returned by the TaskMaker.
-func (t *Task) SetConns(n int) { t.conns.Store(int32(n)) }
+func (t *Task) SetConns(n int) { t.conns.Store(int32(n)); t.connTarget.Store(int32(n)) }
+
+// AdjustConns changes the desired connection count at runtime. When target is
+// lower than the current count, excess workers gracefully drain after finishing
+// their current chunk (no mid-chunk cancels). When target is higher, additional
+// worker goroutines are spawned. Safe to call concurrently with Start.
+// Returns true if the adjustment was applied, false if the task has already
+// finished (no workers can be spawned).
+func (t *Task) AdjustConns(target int, ctx context.Context, sink func(ProgressView)) bool {
+	if ctx == nil {
+		ctx = t.baseCtx
+	}
+	if sink == nil {
+		sink = t.sink
+	}
+	old := t.connTarget.Swap(int32(target))
+	// If target < old, workers self-terminate via the graceful drain check at
+	// the top of their loop — no further action needed for reduction.
+	if target <= int(old) {
+		return true
+	}
+
+	// Increase path: guard against the race where workerWg.Wait() has already
+	// returned in Start. Adding to a WaitGroup after Wait returns is undefined
+	// behaviour in Go.
+	t.adjustMu.Lock()
+	if t.adjustDone {
+		t.adjustMu.Unlock()
+		return false
+	}
+	for i := 0; i < target-int(old); i++ {
+		t.workerWg.Add(1)
+		go t.worker(ctx, -1, &t.workerWg, sink)
+	}
+	t.adjustMu.Unlock()
+	return true
+}
 
 // Start runs Probe → open file → start workers. Blocks until the task finishes
 // (completed or errored) or ctx is cancelled. progressSink receives periodic
@@ -265,6 +314,8 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	defer cancel()
 	t.startAt = time.Now()
 	t.setState(StateActive)
+	t.baseCtx = ctx
+	t.sink = progressSink
 
 	// 1. Probe.
 	t.logf("info", "probing %s", t.url)
@@ -328,23 +379,27 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 
 	// 3. Launch workers.
 	t.conns.Store(int32(conns))
+	t.connTarget.Store(int32(conns))
 	if pr.TotalSize <= 0 && pr.SingleStream {
 		// Single-stream fallback: exactly one worker on the single whole-file chunk.
 		conns = 1
 		t.conns.Store(1)
+		t.connTarget.Store(1)
 	}
 
 	// Write the control file immediately so it's visible on disk from the
 	// start (like aria2's .aria2), not only after the first checkpoint.
 	t.persistControl()
 
-	var wg sync.WaitGroup
 	for i := range conns {
-		wg.Add(1)
-		go t.worker(ctx, i, &wg, progressSink)
+		t.workerWg.Add(1)
+		go t.worker(ctx, i, &t.workerWg, progressSink)
 	}
 	// progress ticker even in single-worker sizeless case.
-	wg.Wait()
+	t.workerWg.Wait()
+	t.adjustMu.Lock()
+	t.adjustDone = true
+	t.adjustMu.Unlock()
 
 	if t.errors.Load() > 0 && t.bytesDone.Load() < t.totalOrDone() {
 		t.setState(StateError)
@@ -383,6 +438,14 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 		}
 	}()
 	for {
+		// Graceful drain: if we have more live workers than the target,
+		// this worker retires before pulling the next chunk. Connections
+		// are decremented in the defer, not here, so the count drops
+		// naturally as workers exit.
+		if t.conns.Load() > t.connTarget.Load() {
+			return
+		}
+
 		if t.isPaused() {
 			select {
 			case <-ctx.Done():
@@ -489,6 +552,9 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
 	}
+	if t.taskLim != nil && !t.taskLim.Unlimited() {
+		body = io.NopCloser(t.taskLim.Reader(chunkCtx, body))
+	}
 
 	// Copy chunk to disk at offset Start using a small buffer; the WriteAt
 	// positions the write at Start regardless of the file pointer.
@@ -532,6 +598,9 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 	body := resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
+	}
+	if t.taskLim != nil && !t.taskLim.Unlimited() {
+		body = io.NopCloser(t.taskLim.Reader(chunkCtx, body))
 	}
 	buf := make([]byte, 64*1024)
 	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), func(delta int64) {
@@ -683,6 +752,20 @@ func (t *Task) persistControl() {
 		Checksum:    t.opts.Checksum,
 	}
 	_ = storage.SaveControl(t.outPath, cf)
+}
+
+// SetTaskRate updates the per-task rate limit at runtime. spec="" or "off" →
+// unlimited. Used by RPC changeOption with "max-download-limit-per-task". Safe
+// for concurrent use: creates a new limiter atomically (readers snapshot
+// t.taskLim when wrapping the body, so an in-flight read finishes with the old
+// value; subsequent reads pick up the new one).
+func (t *Task) SetTaskRate(spec string) bool {
+	l, err := ratelimit.New(spec)
+	if err != nil {
+		return false
+	}
+	t.taskLim = l
+	return true
 }
 
 // Pause / Unpause are RPC-facing hooks (§10. pause/unpause).
