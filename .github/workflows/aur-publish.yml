@@ -1,8 +1,10 @@
 name: Publish AUR
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       tag:
@@ -15,23 +17,24 @@ permissions:
 
 jobs:
   aur-publish:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: main
+          ref: ${{ github.event.workflow_run.head_branch || 'main' }}
 
       - name: Extract version
         id: version
         env:
           INPUT_TAG: ${{ inputs.tag }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RUN_REF: ${{ github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             TAG="$INPUT_TAG"
           else
-            TAG="$RELEASE_TAG"
+            TAG="$RUN_REF"
           fi
           if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
