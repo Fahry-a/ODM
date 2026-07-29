@@ -109,9 +109,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-          git add packaging/PKGBUILD packaging/.SRCINFO packaging/*.1 packaging/*.conf.example packaging/*.service
+          git add packaging/PKGBUILD packaging/.SRCINFO
           if ! git diff --cached --quiet; then
-            git commit -m "aur: update PKGBUILD, .SRCINFO, and bundled files for v${{ steps.version.outputs.version }}"
+            git commit -m "chore(aur): update PKGBUILD and .SRCINFO for v${{ steps.version.outputs.version }}"
             git push
           else
             echo "No changes to commit"
@@ -130,6 +130,6 @@ jobs:
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to v${{ steps.version.outputs.version }}"
+          commit_message: "chore(aur): update to v${{ steps.version.outputs.version }}"
           ssh_keyscan_types: rsa,ecdsa,ed25519
           update_pkgver: false
