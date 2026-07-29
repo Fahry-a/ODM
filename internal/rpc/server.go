@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"odm/internal/download"
@@ -185,9 +186,7 @@ func (s *Server) dispatch(req jsonRPCRequest) jsonRPCResponse {
 	case "odm.tellStopped":
 		resp.Result = dbSnapshots(s.daemon.TellStopped())
 	case "odm.changeOption":
-		// Honoured as no-op acknowledgement in MVP (option mutation mid-flight is
-		// §15 roadmap). We return OK so a GUI's "apply" click doesn't error.
-		resp.Result = "OK"
+		return s.methodChangeOption(&req, &resp)
 	case "odm.getGlobalStat":
 		resp.Result = map[string]any{
 			"active":  len(s.daemon.TellActive()),
@@ -229,6 +228,22 @@ func stripToken(p []any) []any {
 		}
 	}
 	return p
+}
+
+func parseIntParam(v any) (int, error) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), nil
+	case int:
+		return n, nil
+	case string:
+		i, err := strconv.Atoi(n)
+		if err != nil {
+			return 0, fmt.Errorf("not an integer: %q", n)
+		}
+		return i, nil
+	}
+	return 0, fmt.Errorf("not a number")
 }
 
 func strParam(p []any, idx int) (string, error) {
@@ -374,6 +389,57 @@ func (s *Server) methodTellStatus(req *jsonRPCRequest, resp *jsonRPCResponse) js
 	} else {
 		resp.Error = &rpcError{Code: codeInternalError, Message: "task not found"}
 	}
+	return *resp
+}
+
+func (s *Server) methodChangeOption(req *jsonRPCRequest, resp *jsonRPCResponse) jsonRPCResponse {
+	p := stripToken(req.Params)
+	if len(p) < 2 {
+		resp.Error = &rpcError{Code: codeInvalidParams, Message: "changeOption needs gid and options dict"}
+		return *resp
+	}
+	gid, ok := p[0].(string)
+	if !ok {
+		resp.Error = &rpcError{Code: codeInvalidParams, Message: "gid must be a string"}
+		return *resp
+	}
+	opts, ok := p[1].(map[string]any)
+	if !ok {
+		resp.Error = &rpcError{Code: codeInvalidParams, Message: "options must be a dict"}
+		return *resp
+	}
+	for k, v := range opts {
+		switch k {
+		case "max-download-limit":
+			val, ok := v.(string)
+			if !ok {
+				resp.Error = &rpcError{Code: codeInvalidParams, Message: "max-download-limit must be a string"}
+				return *resp
+			}
+			if err := s.daemon.ChangeGlobalLimit(val); err != nil {
+				resp.Error = &rpcError{Code: codeInternalError, Message: err.Error()}
+				return *resp
+			}
+		case "max-download-limit-per-task":
+			val, ok := v.(string)
+			if !ok {
+				resp.Error = &rpcError{Code: codeInvalidParams, Message: "max-download-limit-per-task must be a string"}
+				return *resp
+			}
+			if !s.daemon.ChangeTaskLimit(download.TaskID(gid), val) {
+				resp.Error = &rpcError{Code: codeInternalError, Message: "task not found"}
+				return *resp
+			}
+		case "connections":
+			nc, err := parseIntParam(v)
+			if err != nil {
+				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be an integer"}
+				return *resp
+			}
+			s.daemon.ChangeConns(download.TaskID(gid), nc)
+		}
+	}
+	resp.Result = "OK"
 	return *resp
 }
 

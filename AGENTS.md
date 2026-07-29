@@ -118,6 +118,8 @@ These are deferred — do NOT treat them as bugs:
   same file. Out of scope for the connection-aggregation value proposition.
 - **BitTorrent / magnet links** — explicitly non-goal for MVP.
 - **HTTP/2 / HTTP/3 stream multiplexing** — deliberately excluded; the whole
-  point of ODM is multi-connection aggregation over HTTP/1.1.
+  point of ODM is multi-connection aggregation over HTTP/1.1. Future implementation
+  if demand arises; would require a new Balancer mode that ignores connection
+  budget for HTTP/2-capable servers.
 - **Per-task speed limits** — only the global `--limit-rate` exists today.
 - **Reference Web UI** — roadmap item built on the RPC + WebSocket layer.

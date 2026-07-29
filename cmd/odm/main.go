@@ -237,24 +237,25 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		dir, _ = os.Getwd()
 	}
 	return download.ExecOptions{
-		Dir:         dir,
-		OutFile:     o.OutFile,
-		Connections: o.Connections,
-		MaxConn:     o.MaxConnection,
-		SplitFile:   o.SplitFile,
-		Retry:       o.Retry,
-		RetryWait:   time.Duration(o.RetryWait) * time.Second,
-		Continue:    o.Continue,
-		ChunkSize:   chunk,
-		Timeout:     time.Duration(o.Timeout) * time.Second,
-		MaxRedirect: o.MaxRedirect,
-		Checksum:    o.Checksum,
-		LimitRate:   o.LimitRate,
-		UserAgent:   o.UserAgent,
-		Headers:     o.Headers,
-		Referer:     o.Referer,
-		Proxy:       o.Proxy,
-		CheckCert:   o.CheckCertificate,
+		Dir:            dir,
+		OutFile:        o.OutFile,
+		Connections:    o.Connections,
+		MaxConn:        o.MaxConnection,
+		SplitFile:      o.SplitFile,
+		Retry:          o.Retry,
+		RetryWait:      time.Duration(o.RetryWait) * time.Second,
+		Continue:       o.Continue,
+		ChunkSize:      chunk,
+		Timeout:        time.Duration(o.Timeout) * time.Second,
+		MaxRedirect:    o.MaxRedirect,
+		Checksum:       o.Checksum,
+		LimitRate:      o.LimitRate,
+		TaskLimitRate:  o.TaskLimitRate,
+		UserAgent:      o.UserAgent,
+		Headers:        o.Headers,
+		Referer:        o.Referer,
+		Proxy:          o.Proxy,
+		CheckCert:      o.CheckCertificate,
 	}, nil
 }
 
@@ -509,6 +510,7 @@ HTTP / network:
       --check-cert BOOL  verify TLS                       (default true)
       --checksum algo:hash  verify md5/sha1/sha256
   -l, --limit-rate RATE   global speed limit, e.g. 5M/500K
+      --limit-rate-per-task RATE  per-task speed cap (stacked on global), e.g. 2M
 
 Config / logging / RPC:
       --config PATH     config file path               (default /etc/odm/config.conf)

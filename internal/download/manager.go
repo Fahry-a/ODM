@@ -49,9 +49,10 @@ type ExecOptions struct {
 	ChunkSize   int64
 	Timeout     time.Duration
 	MaxRedirect int
-	Checksum    string // "algo:hex" or ""
-	LimitRate   string // "5M"/"500K"/""=unlimited
-	UserAgent   string
+	Checksum       string // "algo:hex" or ""
+	LimitRate      string // "5M"/"500K"/""=unlimited
+	TaskLimitRate  string // "2M"/""=unlimited — per-task cap
+	UserAgent      string
 	Headers     []string
 	Referer     string
 	Proxy       string
@@ -104,17 +105,18 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 	id := TaskID(fmt.Sprintf("odm-%03d", m.nextID.Add(1)))
 	conns := m.opts.Connections
 	t := NewTask(id, url, TaskOptions{
-		OutputName:  m.opts.OutFile,
-		Dir:         m.opts.Dir,
-		Connections: m.opts.Connections,
-		Retry:       m.opts.Retry,
-		RetryWait:   m.opts.RetryWait,
-		Continue:    m.opts.Continue,
-		ChunkSize:   m.opts.ChunkSize,
-		Timeout:     m.opts.Timeout,
-		MaxRedirect: m.opts.MaxRedirect,
-		UserAgent:   m.opts.UserAgent,
-		Checksum:    m.opts.Checksum,
+		OutputName:    m.opts.OutFile,
+		Dir:           m.opts.Dir,
+		Connections:   m.opts.Connections,
+		Retry:         m.opts.Retry,
+		RetryWait:     m.opts.RetryWait,
+		Continue:      m.opts.Continue,
+		ChunkSize:     m.opts.ChunkSize,
+		Timeout:       m.opts.Timeout,
+		MaxRedirect:   m.opts.MaxRedirect,
+		UserAgent:     m.opts.UserAgent,
+		Checksum:      m.opts.Checksum,
+		TaskLimitRate: m.opts.TaskLimitRate,
 	}, m.client, m.lim, m.logf)
 	m.track(id, t)
 	return t, conns, nil
@@ -189,7 +191,7 @@ const (
 // Version is the ODM release string; surfaced over RPC (odm.getVersion) and used
 // in the default User-Agent. Defined here (not import cycling from config) so
 // the engine + RPC layer can read it without depending on config at runtime.
-const Version = "odm/1.0.1"
+const Version = "odm/1.1.0"
 
 // ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {

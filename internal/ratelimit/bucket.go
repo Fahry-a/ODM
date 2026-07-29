@@ -55,6 +55,36 @@ func (l *Limiter) BytesPerSec() int64 { return l.bytes }
 // Unlimited reports whether the limiter is disabled.
 func (l *Limiter) Unlimited() bool { return l == nil || l.lr == nil }
 
+// SetRate updates the global rate limit at runtime. spec is the same format as
+// New ("5M", "500K", "off"/""=unlimited). Safe for concurrent use — x/time/rate
+// Limiter.SetLimit and SetBurst are goroutine-safe.
+func (l *Limiter) SetRate(spec string) error {
+	spec = strings.TrimSpace(spec)
+	if spec == "" || strings.EqualFold(spec, "off") || spec == "0" {
+		l.lr = nil
+		l.bytes = 0
+		return nil
+	}
+	bps, err := ParseRate(spec)
+	if err != nil {
+		return err
+	}
+	if bps <= 0 {
+		l.lr = nil
+		l.bytes = 0
+		return nil
+	}
+	l.bytes = bps
+	if l.lr == nil {
+		// was unlimited; create a fresh limiter
+		l.lr = rate.NewLimiter(rate.Limit(bps), int(bps))
+	} else {
+		l.lr.SetLimit(rate.Limit(bps))
+		l.lr.SetBurst(int(bps))
+	}
+	return nil
+}
+
 // Acquire waits until n bytes worth of tokens are available, honouring ctx
 // cancellation. n may be 0 (returns immediately) or negative (no-op).
 func (l *Limiter) Acquire(ctx context.Context, n int) error {

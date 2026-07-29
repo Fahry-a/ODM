@@ -5,6 +5,43 @@ All notable changes to ODM (Oryn Download Manager) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.1.0] - 2026-07-29
+
+> **Dynamic rate limiting, per-task speed caps, mid-flight connection reallocation,
+> hybrid BytesDone/Total progress bar.**
+>
+> `changeOption` is now a real mutation endpoint. `--limit-rate-per-task` adds
+> a per-task token bucket stacked on the global one. Workers can be added or
+> removed mid-flight with graceful drain. The progress bar now shows live
+> downloaded/total sizes instead of a static total.
+
+### Added
+- **Dynamic rate limit update** — `Limiter.SetRate(spec)` updates the global
+  token bucket at runtime via RPC `odm.changeOption` key `max-download-limit`.
+  (`internal/ratelimit/bucket.go`, `internal/rpc/server.go`)
+- **Per-task speed limits** — new flag `--limit-rate-per-task` creates a
+  per-task token bucket stacked on the global one. The body is throttled
+  through both, so a task caps at `min(per-task, global)` and the aggregate
+  never exceeds the global cap. RPC key `max-download-limit-per-task`.
+  (`internal/config/config.go`, `internal/download/task.go`, `cmd/odm/main.go`)
+- **Mid-flight connection reallocation** — `Task.AdjustConns(target)` changes
+  the desired connection count at runtime. Reduction: excess workers check
+  `connTarget` before pulling the next chunk and retire gracefully. Increase:
+  new worker goroutines are spawned. RPC key `connections`.
+  (`internal/download/task.go`, `internal/scheduler/daemon.go`)
+- **Hybrid BytesDone/Total column** — the per-file size column now shows
+  `42.0M/256.0M` (downloaded/total) using compact single-letter suffixes,
+  growing live during download. (`internal/ui/render.go`)
+
+### Changed
+- **`odm.changeOption`** is no longer a no-op — supports `max-download-limit`,
+  `max-download-limit-per-task`, and `connections` keys.
+- **Progress bar layout**: `colSize` increased from 9 to 14 to accommodate
+  the hybrid done/total format. Summary line now shows aggregate bytes.
+- **Man page and README** updated to document new flags and RPC keys.
+
 ## [1.0.1] - 2026-07-28
 
 > **Short flag aliases, Content-Disposition parsing, and UI polish.**
@@ -213,7 +250,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Fahry-a/ODM/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/Fahry-a/ODM/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Fahry-a/ODM/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/Fahry-a/ODM/compare/v0.2.0...v0.3.0
