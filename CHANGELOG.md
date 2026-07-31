@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-01
+
 ### Added
 - **True SOCKS5 / SOCKS5h proxy support** — `--proxy socks5://…` and
   `socks5h://…` now speak the SOCKS5 protocol (RFC 1928) instead of falling
