@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-31
+
+> **Chunk re-queue, resume integrity checks, data-corruption fixes, and a batch
+> of reliability fixes across the engine, scheduler, RPC and UI.**
+>
+> The headline is correctness: single-stream downloads can no longer silently
+> corrupt files (or report success on them), ^C now exits with code 4
+> (cancelled), `--checksum` verifies the actual written file, and a failed chunk
+> is re-queued instead of aborting the whole task. Resume spot-checks on-disk
+> data against the server, the `.odm` control file is flushed on a bounded
+> interval instead of per-chunk, RPC `remove` works on queued tasks, slot
+> admission is atomic, and 0-byte tasks finally render in the progress list.
+
 ### Fixed
 - **Data corruption on single-stream downloads with a known size** — when a
   server reported `Content-Length` but ignored `Range` (always serving 200 with
@@ -72,6 +85,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **0-byte completed/error tasks render in the per-file list** — an empty file
   (or a failed probe) vanished from the list while still counting in the
   summary; terminal states now always display. (`internal/ui/progress.go`)
+
+### Changed
+- **No more double probe** — the CLI already probed every URL for the Balancer
+  and confirmation prompt; that result is now reused by each task (`SetProbe`),
+  so a download fires one probe instead of two. The RPC daemon path still
+  probes at task start as before. (`internal/download/task.go`, `cmd/odm/main.go`)
+- **Bounded task retention** — the RPC daemon's task registry and the
+  `tellStopped` list no longer grow forever: terminal (completed/error) tasks
+  are pruned oldest-first past a cap, so a long-lived daemon's memory stays
+  flat. (`internal/download/manager.go`, `internal/scheduler/queue.go`)
+- **Progress bar shrinks on narrow terminals** — the fixed 30-cell bar plus the
+  info block needed ~96 columns; below that the bar (and only the bar) now
+  gives way so the percent column stays on screen instead of being truncated.
+  (`internal/ui/render.go`, `internal/ui/progress.go`)
+- **Wide CJK/emoji filenames are measured in display cells, not runes** — a
+  CJK name counts 2 cells per character, so it truncates and pads correctly
+  instead of pushing the info block past the terminal edge. (`internal/ui/render.go`)
 
 ## [1.1.0] - 2026-07-29
 

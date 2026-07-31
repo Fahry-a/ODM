@@ -31,6 +31,18 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Verify version consistency
+        run: |
+          CONFIG_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/config/config.go)
+          MANAGER_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/download/manager.go)
+          PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
+          if [ -z "$CONFIG_VER" ] || [ "$CONFIG_VER" != "$MANAGER_VER" ] || [ "$CONFIG_VER" != "$PKGBUILD_VER" ]; then
+            echo "::error::Version mismatch: config=$CONFIG_VER manager=$MANAGER_VER pkgbuild=$PKGBUILD_VER"
+            echo "::error::The three version locations must stay in sync (see AGENTS.md)."
+            exit 1
+          fi
+          echo "Versions in sync: $CONFIG_VER"
+
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:

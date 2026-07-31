@@ -1,0 +1,108 @@
+# Auto Tag
+#
+# The "productively lazy" half of the release pipeline: instead of manually
+# running `git tag vX.Y.Z -m "release: vX.Y.Z"`, this workflow watches main.
+# When a push bumps the version in all three version-bearing files AND the
+# CHANGELOG has an entry for it, an annotated tag is created automatically —
+# which then triggers release.yml (GitHub Release) → aur-publish.yml (AUR).
+#
+# Safeguards so it never tags the wrong thing:
+#   1. Strict consistency — all three files must carry the SAME version, or the
+#      workflow fails loudly (catches "forgot to bump one file" on the push).
+#   2. Idempotency — if vX.Y.Z already exists, or the version is not newer than
+#      the latest existing tag, nothing happens (a normal docs-only push to
+#      main is a no-op, not a failure).
+#   3. Changelog gate — a version bump without a matching `## [X.Y.Z]` header
+#      is rejected so release notes are never empty.
+#
+# Push the tag only after every guard passes; release.yml then does the rest.
+
+name: Auto Tag
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  auto-tag:
+    name: Tag released version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # need every tag to compute "latest"
+
+      - name: Extract version from code
+        id: code
+        run: |
+          set -euo pipefail
+          CONFIG_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/config/config.go)
+          MANAGER_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/download/manager.go)
+          PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
+          if [ -z "$CONFIG_VER" ] || [ -z "$MANAGER_VER" ] || [ -z "$PKGBUILD_VER" ]; then
+            echo "::error::Could not extract a version from one of the files"
+            exit 1
+          fi
+          echo "config=$CONFIG_VER" >> "$GITHUB_OUTPUT"
+          echo "manager=$MANAGER_VER" >> "$GITHUB_OUTPUT"
+          echo "pkgbuild=$PKGBUILD_VER" >> "$GITHUB_OUTPUT"
+          echo "Versions: config=$CONFIG_VER manager=$MANAGER_VER pkgbuild=$PKGBUILD_VER"
+
+      - name: Validate versions match
+        id: validate
+        run: |
+          set -euo pipefail
+          C="${{ steps.code.outputs.config }}"
+          M="${{ steps.code.outputs.manager }}"
+          P="${{ steps.code.outputs.pkgbuild }}"
+          if [ "$C" != "$M" ] || [ "$C" != "$P" ]; then
+            echo "::error::Version mismatch on main: config=$C manager=$M pkgbuild=$P"
+            echo "::error::Bump all three files together before pushing."
+            exit 1
+          fi
+          echo "version=$C" >> "$GITHUB_OUTPUT"
+          echo "All three files match: $C"
+
+      - name: Check existing tag / version order
+        id: check
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.validate.outputs.version }}"
+          LATEST=$(git tag -l 'v*' | sort -V | tail -1 || true)
+          echo "version=$VERSION"
+          echo "latest=$LATEST"
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists — nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$LATEST" ] && [ "$(printf '%s\n%s' "$VERSION" "${LATEST#v}" | sort -V | tail -1)" = "${LATEST#v}" ]; then
+            echo "Version $VERSION is not newer than the latest tag $LATEST — nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify changelog entry
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.validate.outputs.version }}"
+          if ! grep -qE "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$VERSION]' entry"
+            echo "::error::Add the release notes for v$VERSION before pushing the version bump."
+            exit 1
+          fi
+          echo "CHANGELOG.md has an entry for $VERSION"
+
+      - name: Create and push tag
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.validate.outputs.version }}"
+          git tag -a "v$VERSION" -m "release: v$VERSION"
+          git push origin "v$VERSION"
+          echo "Created and pushed tag v$VERSION — release.yml will pick it up"
