@@ -208,9 +208,10 @@ func TestResolveURLs_InputFile(t *testing.T) {
 	}
 }
 
-// TestMergeCLI_PriorityStatic exercises the layered merge without spinning a
-// real argc; it tests Apply precedence (user > system) directly since that's
-// what Load composes on top of CLI-flag Changed logic.
+// TestApply_UserOverridesSystem exercises the layered file-stack merge without
+// spinning a real argc; it tests Apply precedence (user > system) directly,
+// which is what Load composes on top of the CLI-flag Changed logic (Apply skips
+// any key the CLI explicitly set, so pflag-written flags win by construction).
 func TestApply_UserOverridesSystem(t *testing.T) {
 	sys := map[string]string{"connections": "4", "dir": "/sys"}
 	user := map[string]string{"connections": "20"}

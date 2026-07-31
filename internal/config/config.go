@@ -104,8 +104,9 @@ type Options struct {
 	RPCTLSCert   string // --rpc-tls-cert  (TLS certificate path)
 	RPCTLSKey    string // --rpc-tls-key   (TLS private key path)
 
-	// changed tracks which CLI flags were explicitly set, so MergeCLI only
-	// applies those. Populated by BindFlags + the FlagSet after parsing.
+	// changed tracks which CLI flags were explicitly set, so ApplyLayer skips
+	// those keys when applying file layers (CLI wins for flags that were
+	// provided). Populated by CaptureChanged after the FlagSet parses.
 	changed map[string]bool
 }
 
@@ -300,8 +301,8 @@ func (o *Options) setFromKey(key, val string) error {
 
 // --- CLI flags (pflag binding) ----------------------------------------------
 
-// BindFlags wires every §6.2 flag to pointers on o. The returned map lets the
-// caller read whether each flag changed after parsing for MergeCLI.
+// BindFlags wires every §6.2 flag to pointers on o. Call CaptureChanged after
+// parsing to record which flags were explicitly set; file layers skip those.
 //
 // Flags use the long names as their canonical id; short aliases (-c, -sf, -o,
 // -d, -i, -y, -q, -x, -H, -V, -h) are added as aliases so both work.
@@ -369,11 +370,12 @@ func NormalizeArgs(args []string) []string {
 	return out
 }
 
-// --- Merge & load orchestration -------------------------------------------
+// --- Load orchestration & layer priority -----------------------------------
 
-// CaptureChanged records which flags of fs were explicitly set, so MergeCLI can
-// honour §6.3 priority (CLI overrides config only when the flag was provided).
-// Call after fs.Parse().
+// CaptureChanged records which flags of fs were explicitly set, so ApplyLayer
+// can honour §6.3 priority (CLI overrides config only when the flag was
+// provided; pflag writes into Options first, then file layers skip changed
+// keys). Call after fs.Parse().
 func (o *Options) CaptureChanged(fs *pflag.FlagSet) {
 	o.changed = map[string]bool{}
 	fs.VisitAll(func(f *pflag.Flag) {
