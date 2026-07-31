@@ -40,22 +40,22 @@ source_aarch64=(
     "${pkgname}-${pkgver}.LICENSE"
 )
 
-sha256sums_i686=('1d100627972c2a6cad0da140c20314fe10f8bddb130c4b34319a4324297a9436'
+sha256sums_i686=('7789358b1b975675d912cb98da54804591e3145703cfe58fd44007fa9121fdce'
                     'SKIP'
                     'SKIP'
                     'SKIP'
                     'SKIP')
-sha256sums_x86_64=('b7d5c468299c9126d1bd1a04d6bb775a3e61f8d6eda3cdd353ccd3c6c74e114d'
+sha256sums_x86_64=('8db38c82e9e5753b5ed87dc5a1e401b2b65bdf4530d1719dfe8b05e882f0866e'
                     'SKIP'
                     'SKIP'
                     'SKIP'
                     'SKIP')
-sha256sums_armv7h=('7cc8aa99d87f67a205c3f1cb210d2c18de51c4c8753331a7d873ae671e6e1db0'
+sha256sums_armv7h=('10119108f2dc7e2233e922aad3009100545e3994733b479f21a32336d98d3f2f'
                     'SKIP'
                     'SKIP'
                     'SKIP'
                     'SKIP')
-sha256sums_aarch64=('f80ff4a3f9548250d16cff03a2f8702f0867d4aed6fa94140f457fe60fcb3f26'
+sha256sums_aarch64=('a4d8d868d3c09d7275973c3268a10ab07d4a4d6d4986faaff2da73ccfd57ca89'
                     'SKIP'
                     'SKIP'
                     'SKIP'
