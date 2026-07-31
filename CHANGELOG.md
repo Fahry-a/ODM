@@ -37,6 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Flaky RPC test** — `TestServer_AddURIAndTellActive` could miss a task whose
   probe fails faster than the poll loop; it now also polls `tellStopped`.
   (`internal/rpc/server_test.go`)
+- **A failed chunk no longer aborts the whole download** — a worker that
+  exhausts its per-chunk retry budget now returns the chunk to the queue (bounded
+  by `--retry` worker-level passes) instead of failing the task, so a transient
+  error on one range doesn't discard the rest of the file. (`internal/download/chunkqueue.go`, `internal/download/task.go`)
+- **Resume validates on-disk data against the server** — when `--continue` finds
+  completed chunks, a sample of them is spot-checked with ranged GETs; a
+  silently-changed file (no ETag) or corrupt local bytes triggers a full
+  re-download instead of resuming into a corrupt result. A control file whose
+  layout no longer matches the URL (e.g. ranged resume hitting a single-stream
+  server) is likewise discarded. (`internal/download/task.go`)
+- **Control-file writes are bounded, not per-chunk** — the `.odm` file used to
+  be rewritten on every completed chunk, which is O(n²) on large files (the
+  completed-offset list grows with each chunk). It now flushes at most every 16
+  chunks or 2 seconds, and concurrent worker writes are serialized so the file
+  can't be corrupted by interleaved temp-writes. (`internal/download/task.go`)
 
 ## [1.1.0] - 2026-07-29
 

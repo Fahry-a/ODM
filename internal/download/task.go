@@ -1,6 +1,7 @@
 package download
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -28,13 +29,22 @@ const (
 	StateCompleted
 	StateError
 
-	// persistCheckpointInterval controls how often the control file is written
-	// during an active download. Every N completed chunks the .odm file is
-	// flushed so a crash/kill leaves a usable resume point (similar to aria2's
-	// periodic-persist strategy). 1 means every chunk is persisted right away,
-	// maximising resume granularity at negligible I/O cost (JSON marshal +
-	// atomic rename on a small file completes in microseconds).
-	persistCheckpointInterval = 1
+	// persistCheckpointInterval controls how often the control file is flushed
+	// during an active download: every N completed chunks the .odm file is
+	// rewritten so a crash/kill leaves a usable resume point (aria2-style
+	// periodic-persist). persistMinInterval is the wall-clock floor. Writing
+	// every chunk was O(n²) for large files — the completed-offset list grows
+	// with each chunk, so a 100 GiB file meant re-serialising a ~25k-entry JSON
+	// on every chunk — hence the count AND a 2s time gate: a crash loses at
+	// worst ~16 chunks / 2 seconds of resume granularity.
+	persistCheckpointInterval = 16
+	persistMinInterval        = 2 * time.Second
+
+	// resumeVerifyChunks bounds how many completed chunks are sampled and
+	// compared against the server when a --continue resume starts, and
+	// resumeProbeLen is how many bytes of each sampled chunk are compared.
+	resumeVerifyChunks = 4
+	resumeProbeLen     = 1024
 )
 
 func (s TaskState) String() string {
@@ -106,7 +116,8 @@ type Task struct {
 	startAt   time.Time
 
 	// periodic control-file checkpoint
-	chunksSincePersist atomic.Int64
+	chunksSincePersist int64 // guarded by mu (see checkpoint)
+	lastPersist        time.Time
 	controlCreatedAt   time.Time // when the control file was first written
 
 	// rate measurement helper (rolling)
@@ -363,9 +374,17 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			if cf.ETag != "" && pr.ETag != "" && cf.ETag != pr.ETag {
 				t.logf("warn", "ETag changed (%s → %s), re-downloading from scratch", cf.ETag, pr.ETag)
 			} else if cf.TotalSize == pr.TotalSize && cf.ChunkSize == t.opts.ChunkSize {
-				alreadyDone = q.ResetCompletedOffsets(cf.CompletedOffsets(), t.opts.ChunkSize, pr.TotalSize)
-				t.bytesDone.Store(alreadyDone)
-				t.logf("info", "resuming %s: %d bytes already written", outName, alreadyDone)
+				var ok bool
+				alreadyDone, ok = q.ResetCompletedOffsets(cf.CompletedOffsets(), pr.TotalSize)
+				if !ok {
+					// e.g. a ranged control file now hitting a single-stream URL,
+					// or a stale layout: trust nothing, start over.
+					t.logf("warn", "control file layout doesn't match this download, re-downloading from scratch")
+					alreadyDone = 0
+				} else {
+					t.bytesDone.Store(alreadyDone)
+					t.logf("info", "resuming %s: %d bytes already written", outName, alreadyDone)
+				}
 			}
 		}
 	}
@@ -379,6 +398,19 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	t.disk = disk
 	defer disk.Close()
 	t.queue = q
+
+	if alreadyDone > 0 {
+		// Resume integrity check: spot-check completed chunks against the server
+		// so a silently-changed file (no ETag to detect it) or corrupt/stale
+		// on-disk bytes can't be resumed into a corrupt result. Any mismatch →
+		// full re-download.
+		if err := t.verifyResumedChunks(ctx); err != nil {
+			t.logf("warn", "resume integrity check failed (%v) — re-downloading from scratch", err)
+			alreadyDone = 0
+			q = NewChunkQueue(qs, t.opts.ChunkSize)
+			t.queue = q
+		}
+	}
 
 	if pr.TotalSize >= 0 && alreadyDone >= pr.TotalSize && pr.TotalSize > 0 {
 		// Already complete on disk (resume found everything done).
@@ -498,20 +530,28 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 				t.persistControl()
 				return
 			}
+			// Requeue the chunk so another worker gives it a fresh chance
+			// instead of failing the whole task on one transient worker
+			// failure. The chunk is dropped only after opts.Retry worker-level
+			// passes (each pass running its own internal retry budget); beyond
+			// that it's treated as permanently broken.
+			if t.queue.Requeue(c, t.opts.Retry) {
+				t.logf("warn", "chunk %d (off %d) failed, requeued for retry: %v", c.Index, c.Start, err)
+				continue
+			}
 			t.errors.Add(1)
 			t.setState(StateError)
-			t.logf("error", "chunk %d (off %d): %v", c.Index, c.Start, err)
-			return // a failed worker retires; manager may reschedule
+			t.logf("error", "chunk %d (off %d) failed permanently: %v", c.Index, c.Start, err)
+			return
 		}
 		t.queue.MarkDone(c, t.probe.TotalSize)
 		if sink != nil {
 			sink(t.getCurrent(c))
 		}
-		// Periodic checkpoint: flush the control file every N chunks so a
-		// crash/kill leaves a usable resume point (similar to aria2's
-		// periodic .aria2 persist). Without this the .odm file only appears
-		// after the entire task finishes or is cancelled.
-		if t.chunksSincePersist.Add(1)%persistCheckpointInterval == 0 {
+		// Periodic checkpoint: flush the control file on the count/time gate so
+		// a crash/kill leaves a usable resume point (similar to aria2's periodic
+		// .aria2 persist) without re-serialising the whole file every chunk.
+		if t.checkpoint() {
 			t.persistControl()
 		}
 	}
@@ -767,15 +807,37 @@ func (t *Task) finish() error {
 	return nil
 }
 
-// persistControl records completed chunk offsets so resume picks up.
+// checkpoint returns true when the control file should be flushed: either
+// persistCheckpointInterval chunks have completed since the last flush, or
+// persistMinInterval has elapsed since the last write. Serialized under t.mu
+// (the same lock persistControl takes) so the counters are race-free across
+// concurrent workers.
+func (t *Task) checkpoint() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.chunksSincePersist++
+	if t.chunksSincePersist >= persistCheckpointInterval {
+		t.chunksSincePersist = 0
+		return true
+	}
+	return !t.lastPersist.IsZero() && time.Since(t.lastPersist) >= persistMinInterval
+}
+
+// persistControl records completed chunk offsets so resume picks up. Mutex
+// guarded: several workers (and the error/cancel paths) can call it
+// concurrently, and SaveControl writes a shared temp path — concurrent writes
+// would interleave and risk a corrupt .odm file.
 func (t *Task) persistControl() {
 	if t.probe == nil || t.queue == nil {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	now := time.Now()
 	if t.controlCreatedAt.IsZero() {
 		t.controlCreatedAt = now
 	}
+	t.lastPersist = now
 	cf := &storage.ControlFile{
 		URL:       t.url,
 		FinalURL:  t.probe.FinalURL,
@@ -792,6 +854,49 @@ func (t *Task) persistControl() {
 		Checksum:    t.opts.Checksum,
 	}
 	_ = storage.SaveControl(t.outPath, cf)
+}
+
+// verifyResumedChunks samples a handful of the chunks the control file claims
+// are already on disk and compares them against the server with ranged GETs. A
+// mismatch means the file changed server-side (with no ETag to detect it) or
+// the local copy is stale/corrupt, so the caller re-downloads from scratch.
+// Single-stream downloads are skipped: the single whole-file chunk can't be
+// sampled without effectively re-downloading it, and its resume is guarded by
+// the ETag/size checks. Fails safe — any request/read error is treated as a
+// mismatch.
+func (t *Task) verifyResumedChunks(ctx context.Context) error {
+	if t.probe == nil || t.probe.SingleStream || t.probe.TotalSize <= 0 {
+		return nil
+	}
+	spans := t.queue.CompletedSpans(t.opts.ChunkSize, t.probe.TotalSize, resumeVerifyChunks)
+	for _, s := range spans {
+		end := s.Start + resumeProbeLen - 1
+		if end > s.End {
+			end = s.End
+		}
+		want := int(end - s.Start + 1)
+		chkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		rr, err := t.client.GetRange(chkCtx, t.probe.FinalURL, s.Start, end)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("resume check at %d: %w", s.Start, err)
+		}
+		got := make([]byte, want)
+		_, rerr := io.ReadFull(rr.Resp.Body, got)
+		rr.Resp.Body.Close()
+		cancel()
+		if rerr != nil {
+			return fmt.Errorf("resume check at %d: %v", s.Start, rerr)
+		}
+		disk := make([]byte, want)
+		if _, derr := t.disk.ReadAt(disk, s.Start); derr != nil {
+			return fmt.Errorf("resume check at %d: %v", s.Start, derr)
+		}
+		if !bytes.Equal(got, disk) {
+			return fmt.Errorf("resume check at %d: on-disk data differs from server", s.Start)
+		}
+	}
+	return nil
 }
 
 // SetTaskRate updates the per-task rate limit at runtime. spec="" or "off" →
