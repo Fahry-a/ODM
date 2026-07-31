@@ -97,9 +97,12 @@ git push origin main && git push origin vX.Y.Z
 **What the workflows do:**
 
 1. `auto-tag.yml` — on push to `main`: extracts the version from `config.go`,
-   `manager.go`, `PKGBUILD`; FAILS if the three mismatch; creates the tag only
-   when the version is newer than the latest `v*` tag AND `CHANGELOG.md` has a
-   `## [X.Y.Z]` header. Idempotent — a docs-only push is a no-op.
+   `manager.go`, `PKGBUILD`; FAILS if the three mismatch; creates an annotated
+   tag only when the version is newer than the latest `v*` tag AND `CHANGELOG.md`
+   has a `## [X.Y.Z]` header. Idempotent — a docs-only push is a no-op. Because
+   a tag pushed with `GITHUB_TOKEN` cannot trigger other workflows (GitHub's
+   recursion guard), it then dispatches `release.yml` explicitly via
+   `workflow_dispatch`.
 2. `release.yml` — on `v*` tag push: extracts version from the tag, re-checks
    all three version files (fails on mismatch), requires the CHANGELOG entry
    (fails if missing), cross-compiles 6 targets, generates SHA-256 checksums,

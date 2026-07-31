@@ -34,13 +34,15 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             TAG="$INPUT_TAG"
           else
-            # The Release run was triggered by a tag push. Resolve the tag that
-            # points at the exact commit the Release ran on — head_branch is
-            # unreliable for tag-triggered workflow_runs (it can be the tag, a
-            # branch, or empty depending on how the release fired).
-            TAG=$(git tag --points-at "$RUN_SHA" 'v*' | head -1 || true)
+            # Resolve the released version from the commit the Release run used.
+            # head_branch is unreliable for tag-triggered workflow_runs (it can
+            # be the tag, a branch, or empty depending on how the release was
+            # fired). git describe finds the nearest reachable v* tag, which is
+            # the exact tag for a tag-push release and the release tag on the
+            # branch for a workflow_dispatch release.
+            TAG=$(git describe --tags --abbrev=0 "$RUN_SHA" 2>/dev/null || true)
             if [ -z "$TAG" ]; then
-              echo "::error::No v* tag points at workflow run commit $RUN_SHA"
+              echo "::error::No reachable v* tag from workflow run commit $RUN_SHA"
               exit 1
             fi
           fi
