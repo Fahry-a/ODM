@@ -70,6 +70,7 @@ jobs:
           cp ../docs/odm.1 "${PKGNAME}-${VERSION}.1"
           cp ../configs/odm.conf.example "${PKGNAME}-${VERSION}.conf.example"
           cp ../packaging/odm.service "${PKGNAME}-${VERSION}.service"
+          cp ../LICENSE "${PKGNAME}-${VERSION}.LICENSE"
 
       - name: Get binary checksum and update PKGBUILD
         working-directory: packaging
@@ -80,15 +81,17 @@ jobs:
           curl -fsSL -o /tmp/checksums.txt \
             "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/checksums.txt"
 
+          I686_SUM=$(awk -v file="odm_${VERSION}_linux_386" '$2 == file { print $1; exit }' /tmp/checksums.txt)
           AMD64_SUM=$(awk -v file="odm_${VERSION}_linux_amd64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+          ARMV7H_SUM=$(awk -v file="odm_${VERSION}_linux_arm" '$2 == file { print $1; exit }' /tmp/checksums.txt)
           ARM64_SUM=$(awk -v file="odm_${VERSION}_linux_arm64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
 
-          if [ -z "$AMD64_SUM" ] || [ -z "$ARM64_SUM" ]; then
+          if [ -z "$I686_SUM" ] || [ -z "$AMD64_SUM" ] || [ -z "$ARMV7H_SUM" ] || [ -z "$ARM64_SUM" ]; then
             echo "::error::Missing binary checksum in release artifacts"
             exit 1
           fi
 
-          export AMD64_SUM ARM64_SUM
+          export I686_SUM AMD64_SUM ARMV7H_SUM ARM64_SUM
           python3 ../scripts/update-aur-checksums.py
 
       - name: Verify checksums and regenerate .SRCINFO
@@ -138,15 +141,15 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
           git fetch origin main
-          # Rebase the PKGBUILD/.SRCINFO edits onto the latest main, then push
+          # Rebase the PKGBUILD edits onto the latest main, then push
           # explicitly. A bare `git push` only works on a branch checkout; the
           # default checkout here is detached, so an explicit branch+refspec is
           # required to land the commit on main.
           git checkout -B aur-publish origin/main
-          git add packaging/PKGBUILD packaging/.SRCINFO
+          git add packaging/PKGBUILD
           if ! git diff --cached --quiet; then
-            git commit -m "chore(aur): update PKGBUILD and .SRCINFO for v${{ steps.version.outputs.version }}"
-            git push origin aur-publish:main
+            git commit -m "chore(aur): update PKGBUILD for v${{ steps.version.outputs.version }}"
+            git push --force-with-lease origin aur-publish:main
           else
             echo "No changes to commit"
           fi

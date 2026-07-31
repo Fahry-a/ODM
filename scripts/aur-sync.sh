@@ -25,6 +25,7 @@ ASSETS=(
     "${PKGNAME}-${VERSION}.1"
     "${PKGNAME}-${VERSION}.conf.example"
     "${PKGNAME}-${VERSION}.service"
+    "${PKGNAME}-${VERSION}.LICENSE"
 )
 
 # Every file to publish must exist — they are produced by earlier workflow
@@ -64,6 +65,7 @@ git rm -q --ignore-unmatch \
     "${PKGNAME}-"*.1 \
     "${PKGNAME}-"*.conf.example \
     "${PKGNAME}-"*.service \
+    "${PKGNAME}-"*.LICENSE \
     "${PKGNAME}.service" \
     || true
 
@@ -82,5 +84,5 @@ fi
 git config user.name "$AUR_COMMIT_USERNAME"
 git config user.email "$AUR_COMMIT_EMAIL"
 git commit -q -m "chore(aur): update to v${VERSION}"
-git push -q origin master
+git push -q origin HEAD:master
 echo "Published ${PKGNAME} v${VERSION} to AUR"
