@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 // ProbeResult is what the §5.2 probe decides about a URL.
@@ -37,7 +39,7 @@ type ClientConfig struct {
 	UserAgent        string
 	Headers          []string // "Key: value"
 	Referer          string
-	Proxy            string // http/https/socks5
+	Proxy            string // http/https/socks5/socks5h
 	CheckCertificate bool
 	MaxRedirect      int
 	Timeout          time.Duration // per-request dial+headers timeout; 0 = default
@@ -53,9 +55,11 @@ type Client struct {
 }
 
 // NewClient builds an HTTP client honouring MaxRedirect, CheckCertificate and
-// Proxy. Proxy parsing accepts http://, https:// and socks5:// (via Go's
-// net/http URL-based proxy support for HTTP schemes; socks5 needs a custom
-// Dialer — we wire it through the Transport).
+// Proxy. Proxy parsing accepts http:// and https:// (wired through
+// Transport.Proxy, i.e. HTTP CONNECT) plus socks5:// and socks5h:// (real
+// SOCKS5 via golang.org/x/net/proxy, wired through DialContext — see
+// socks5Dialer for the DNS semantics). Unsupported or malformed proxy URLs
+// error out here rather than silently falling back to CONNECT tunnelling.
 func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.MaxRedirect < 0 {
 		cfg.MaxRedirect = 0
@@ -67,11 +71,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: !cfg.CheckCertificate,
 	}
+	netDialer := &net.Dialer{
+		Timeout:   cfg.Timeout,
+		KeepAlive: 30 * time.Second,
+	}
 	tr := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   cfg.Timeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		DialContext:           netDialer.DialContext,
 		TLSClientConfig:       tlsConf,
 		TLSHandshakeTimeout:   cfg.Timeout,
 		ResponseHeaderTimeout: cfg.Timeout,
@@ -90,16 +95,19 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		switch px.Scheme {
 		case "http", "https":
 			tr.Proxy = http.ProxyURL(px)
-		case "socks5":
-			// Transport.Proxy only supports HTTP CONNECT proxies; for socks5
-			// net/http can dial through a *net.Dialer from golang.org/x/net,
-			// but to avoid an extra dep we set Proxy to http.ProxyURL for
-			// socks5 too and rely on Go's built-in socks5-by-CONNECT fallback
-			// when present; otherwise error early so the user knows to use
-			// an http(s) proxy.
-			tr.Proxy = http.ProxyURL(px)
+		case "socks5", "socks5h":
+			// Transport.Proxy only speaks HTTP CONNECT; real SOCKS5 needs a
+			// custom dialer. golang.org/x/net/proxy speaks the SOCKS5 wire
+			// protocol (RFC 1928) directly. DNS semantics: socks5 resolves the
+			// target locally and sends an IP to the proxy; socks5h sends the
+			// hostname and lets the proxy resolve it (see socks5Dialer).
+			sd, err := newSocks5Dialer(px, netDialer)
+			if err != nil {
+				return nil, err
+			}
+			tr.DialContext = sd.DialContext
 		default:
-			return nil, fmt.Errorf("unsupported proxy scheme %q (use http/https/socks5)", px.Scheme)
+			return nil, fmt.Errorf("unsupported proxy scheme %q (use http/https/socks5/socks5h)", px.Scheme)
 		}
 	}
 
@@ -123,6 +131,75 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// socks5Dialer wraps golang.org/x/net/proxy's SOCKS5 dialer as an
+// http.Transport.DialContext hook. It implements the two DNS semantics:
+//
+//	socks5  — client-side DNS: the target hostname is resolved locally and the
+//	          resulting IP is handed to the proxy (ATYP IPv4/IPv6).
+//	socks5h — proxy-side DNS: the hostname is sent to the proxy unchanged
+//	          (ATYP FQDN), so names only the proxy can resolve still work.
+//
+// x/net/proxy's FromURL treats both schemes identically (always forwarding the
+// hostname as given — i.e. socks5h behaviour), so socks5 needs the extra local
+// resolution step in DialContext; socks5h can use the x/net dialer directly.
+type socks5Dialer struct {
+	d       proxy.Dialer // underlying x/net SOCKS5 dialer
+	resolve bool         // true → socks5: resolve target hostname locally
+	timeout time.Duration
+}
+
+// newSocks5Dialer validates the socks5/socks5h URL and builds the x/net dialer
+// on top of forward (a *net.Dialer carrying the ClientConfig Timeout/KeepAlive,
+// used for the TCP hop to the proxy itself).
+func newSocks5Dialer(px *url.URL, forward *net.Dialer) (*socks5Dialer, error) {
+	if px.Hostname() == "" {
+		return nil, fmt.Errorf("proxy: %s URL %q has no host", px.Scheme, px)
+	}
+	if p := px.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, fmt.Errorf("proxy: %s URL %q has invalid port %q", px.Scheme, px, p)
+		}
+	}
+	d, err := proxy.FromURL(px, forward)
+	if err != nil {
+		return nil, fmt.Errorf("proxy: %w", err)
+	}
+	return &socks5Dialer{d: d, resolve: px.Scheme == "socks5", timeout: forward.Timeout}, nil
+}
+
+// DialContext is the http.Transport.DialContext hook. When the caller's context
+// carries no deadline it applies cfg.Timeout to the whole dial (local DNS,
+// TCP to the proxy, SOCKS handshake), matching the plain net.Dialer behaviour.
+func (s *socks5Dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if _, ok := ctx.Deadline(); !ok && s.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		defer cancel()
+	}
+	if s.resolve {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("proxy socks5: %w", err)
+		}
+		if net.ParseIP(host) == nil {
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, fmt.Errorf("proxy socks5: resolve %q: %w", host, err)
+			}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("proxy socks5: no addresses for %q", host)
+			}
+			address = net.JoinHostPort(ips[0].IP.String(), port)
+		}
+	}
+	cd, ok := s.d.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("proxy socks5: dialer does not support context dialing")
+	}
+	return cd.DialContext(ctx, network, address)
 }
 
 // initBaseHeaders parses cfg.Headers into a reusable header set and stamps the
