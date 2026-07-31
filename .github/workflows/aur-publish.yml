@@ -112,21 +112,16 @@ jobs:
           [ "$errors" -eq 0 ] || exit 1
 
       - name: Publish AUR
-        uses: ulises-jeremias/github-actions-aur-publish@v1
-        with:
-          pkgname: odm-bin
-          pkgbuild: packaging/PKGBUILD
-          assets: |
-            packaging/.SRCINFO
-            packaging/odm-bin-*.1
-            packaging/odm-bin-*.conf.example
-            packaging/odm-bin-*.service
-          commit_username: ${{ secrets.AUR_USERNAME }}
-          commit_email: ${{ secrets.AUR_EMAIL }}
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "chore(aur): update to v${{ steps.version.outputs.version }}"
-          ssh_keyscan_types: rsa,ecdsa,ed25519
-          update_pkgver: false
+        working-directory: packaging
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_COMMIT_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_COMMIT_EMAIL: ${{ secrets.AUR_EMAIL }}
+          VERSION: ${{ steps.version.outputs.version }}
+        # Custom sync script (replaces ulises-jeremias/github-actions-aur-publish):
+        # prunes stale odm-bin-<ver>.* assets from the AUR repo before copying
+        # the current set, so old-version files never accumulate.
+        run: bash ../scripts/aur-sync.sh "$VERSION"
 
       - name: Clean up generated assets
         working-directory: packaging
