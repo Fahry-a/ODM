@@ -281,6 +281,16 @@ func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
 // default returned by the TaskMaker.
 func (t *Task) SetConns(n int) { t.conns.Store(int32(n)); t.connTarget.Store(int32(n)) }
 
+// SetProbe attaches a pre-probed result so Start can skip the network probe.
+// The CLI one-shot path probes every URL up front (for the Balancer and the
+// confirmation prompt) and injects it here; the RPC daemon path leaves it nil
+// and Start probes normally. Must be called before Start.
+func (t *Task) SetProbe(pr *transport.ProbeResult) {
+	if pr != nil {
+		t.probe = pr
+	}
+}
+
 // AdjustConns changes the desired connection count at runtime. When target is
 // lower than the current count, excess workers gracefully drain after finishing
 // their current chunk (no mid-chunk cancels). When target is higher, additional
@@ -338,15 +348,22 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	t.baseCtx = ctx
 	t.sink = progressSink
 
-	// 1. Probe.
-	t.logf("info", "probing %s", t.url)
-	pr, err := t.client.Probe(ctx, t.url)
-	if err != nil {
-		t.setState(StateError)
-		t.emitFinal(progressSink)
-		return fmt.Errorf("probe: %w", err)
+	// 1. Probe. The CLI one-shot path already probed every URL for the Balancer
+	// and confirmation prompt and injects the result via SetProbe, so a fresh
+	// network probe (HEAD + ranged GET) is skipped there. The RPC daemon path
+	// leaves t.probe nil and probes here as usual.
+	pr := t.probe
+	if pr == nil {
+		t.logf("info", "probing %s", t.url)
+		var perr error
+		pr, perr = t.client.Probe(ctx, t.url)
+		if perr != nil {
+			t.setState(StateError)
+			t.emitFinal(progressSink)
+			return fmt.Errorf("probe: %w", perr)
+		}
+		t.probe = pr
 	}
-	t.probe = pr
 	if pr.Filename == "" {
 		pr.Filename = deriveFilename(pr.FinalURL, t.opts.OutputName)
 	} else if t.opts.OutputName != "" {

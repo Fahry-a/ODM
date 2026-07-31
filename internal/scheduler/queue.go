@@ -216,11 +216,21 @@ func (s *Scheduler) launch(ctx context.Context, st *scheduledTask) {
 	}()
 }
 
+// maxStoppedTasks bounds how many completed/failed tasks the scheduler retains
+// for tellStopped. Without a cap a long-lived daemon would accumulate every
+// finished task in memory forever; once exceeded, the oldest are dropped
+// (a fresh slice is allocated so the backing array's pointers are released).
+var maxStoppedTasks = 1000
+
 // handleComplete tallies the result and retires the slot.
 func (s *Scheduler) handleComplete(st scheduledTask) {
 	s.mu.Lock()
 	delete(s.live, st.task.ID())
 	s.stopped = append(s.stopped, &st)
+	if maxStoppedTasks > 0 && len(s.stopped) > maxStoppedTasks {
+		keep := len(s.stopped) - maxStoppedTasks
+		s.stopped = append([]*scheduledTask(nil), s.stopped[keep:]...)
+	}
 	cb := s.onComplete
 	s.mu.Unlock()
 	if st.task.State() == download.StateCompleted {

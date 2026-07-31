@@ -82,6 +82,10 @@ const (
 	colSize  = 14 // "999.9M/999.9M" (hybrid done/total)
 	colSpeed = 11 // "999.9 MiB/s", "1023 B/s"
 	colETA   = 8  // "HH:MM:SS" (was MM:SS = 5)
+
+	// colConns is a fixed-width slot for the connection indicator "[xN] " so
+	// the bar bracket stays aligned regardless of connection count.
+	colConns = 6 // "[x32] " max = 6
 )
 
 // FormatFileSize humanises a byte count (binary, KiB/MiB/GiB/…).
@@ -163,21 +167,71 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, sec)
 }
 
-// fitWidth right-aligns s into exactly w display cells (runes). Longer
-// strings are truncated on the left-kept side so a pathological value still
+// runeWidth returns the number of terminal cells r occupies: East Asian wide
+// and fullwidth characters (CJK ideographs, Hangul, Kana, fullwidth forms,
+// emoji/pictographs, CJK Ext B+) take two cells, everything else one. This
+// mirrors wcwidth's East Asian Wide ranges without pulling in a dependency.
+func runeWidth(r rune) int {
+	if r >= 0x1100 &&
+		(r <= 0x115f || // Hangul Jamo
+			r == 0x2329 || r == 0x232a || // angle brackets
+			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) || // CJK .. Yi
+			(r >= 0xac00 && r <= 0xd7a3) || // Hangul Syllables
+			(r >= 0xf900 && r <= 0xfaff) || // CJK Compatibility Ideographs
+			(r >= 0xfe10 && r <= 0xfe19) || // Vertical forms
+			(r >= 0xfe30 && r <= 0xfe6f) || // CJK Compatibility Forms
+			(r >= 0xff00 && r <= 0xff60) || // Fullwidth forms
+			(r >= 0xffe0 && r <= 0xffe6) || // Fullwidth signs
+			(r >= 0x1f300 && r <= 0x1faff) || // emoji / pictographs
+			(r >= 0x1f900 && r <= 0x1f9ff) || // Supplemental Symbols
+			(r >= 0x20000 && r <= 0x2fffd) || // CJK Ext B+
+			(r >= 0x30000 && r <= 0x3fffd)) {
+		return 2
+	}
+	return 1
+}
+
+// displayWidth returns the number of terminal cells s occupies; wide runes
+// count double and ANSI escape sequences contribute zero width.
+func displayWidth(s string) int {
+	w := 0
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3f {
+				j++
+			}
+			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
+				i = j + 1
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			i++
+			continue
+		}
+		w += runeWidth(r)
+		i += size
+	}
+	return w
+}
+
+// fitWidth right-aligns s into exactly w display cells. Wide runes (CJK/emoji)
+// count as 2 cells; a longer string is truncated so a pathological value still
 // cannot shove neighbouring columns.
 func fitWidth(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	rs := []rune(s)
-	if len(rs) == w {
+	d := displayWidth(s)
+	if d == w {
 		return s
 	}
-	if len(rs) > w {
-		return string(rs[:w])
+	if d > w {
+		return truncateVisibleWidth(s, w)
 	}
-	return strings.Repeat(" ", w-len(rs)) + s
+	return strings.Repeat(" ", w-d) + s
 }
 
 // Bar renders one pacman progress bar into a fixed-width string. `done`/`total`
@@ -324,34 +378,10 @@ func colorizeBar(bar string, useColor bool) string {
 	return b.String()
 }
 
-// ansiVisibleWidth returns the number of visible (non-ANSI) runes in s. ANSI
-// escape sequences (\x1b[...m) contribute zero display width.
-func ansiVisibleWidth(s string) int {
-	w := 0
-	i := 0
-	for i < len(s) {
-		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
-			// Skip ANSI escape sequence: \x1b[<params>m
-			j := i + 2
-			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3f {
-				j++
-			}
-			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
-				i = j + 1
-				continue
-			}
-		}
-		// Count as visible rune.
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && size == 1 {
-			i++
-			continue
-		}
-		w++
-		i += size
-	}
-	return w
-}
+// ansiVisibleWidth returns the number of visible (non-ANSI) display cells in s,
+// wide runes counting double. ANSI escape sequences (\x1b[...m) contribute zero
+// width.
+func ansiVisibleWidth(s string) int { return displayWidth(s) }
 
 // truncateVisibleWidth cuts s so that only the first `width` visible cells are
 // kept, preserving all ANSI escape sequences intact. Sequences that span the
@@ -403,7 +433,8 @@ func truncateVisibleWidth(s string, width int) string {
 			break
 		}
 		b.WriteString(seg.text)
-		remaining--
+		r, _ := utf8.DecodeRuneInString(seg.text)
+		remaining -= runeWidth(r)
 		wasColorActive = false
 	}
 	// Append a reset only if we truncated while color was active.
@@ -414,37 +445,80 @@ func truncateVisibleWidth(s string, width int) string {
 }
 
 // maxNameRunes caps the displayed filename to keep one task line at a sane
-// width. The limit is in runes (display width), not bytes — see truncateName.
-// When rendering to a TTY, the name field expands to fill the terminal width
-// minus the fixed-width info block (see renderTaskLine's nameWidth param).
+// width. The limit is in display cells, not bytes — see truncateName. When
+// rendering to a TTY, the name field expands to fill the terminal width minus
+// the fixed-width info block (see renderTaskLine's nameWidth param).
 const maxNameRunes = 20
 
-// infoBlockWidth is the display width of everything after the name field:
-// "  <size>  <speed>  <ETA>  <conn> [<bar>]  <pct>%"
-//
-// colConns is a fixed-width slot for the connection indicator "[xN] " so
-// the bar bracket stays aligned regardless of connection count.
-const (
-	colConns = 6 // "[x32] " max = 6
-)
+// minBarWidth is the floor for the adaptive progress bar on narrow terminals.
+// The fixed 30-cell bar plus the info block needs ~96 columns; below that the
+// bar shrinks (to this floor) so the percent column stays on screen instead of
+// being truncated off the right edge.
+const minBarWidth = 10
 
-const infoBlockWidth = 2 + colSize + 2 + colSpeed + 2 + colETA + 2 + colConns + 1 + BarWidth + 1 + 2 + 4
+// infoFixedWidth is the display width of everything after the name field that
+// does NOT depend on the bar width: "  <size>  <speed>  <ETA>  <conn> [ ]  <pct>%".
+// The bar's own width is added by infoBlockWidthFor.
+const infoFixedWidth = 2 + colSize + 2 + colSpeed + 2 + colETA + 2 + colConns + 1 + 1 + 2 + 4
 
-// truncateName cuts name to maxNameRunes display columns, rune-safe: a UTF-8
+// infoBlockWidthFor is the full display width of the info block (everything
+// after the name field) for a given bar width.
+func infoBlockWidthFor(barWidth int) int { return infoFixedWidth + barWidth }
+
+// barWidthFor picks a bar width that fits termWidth (the renderer width, i.e.
+// terminal columns minus 1) while still leaving ≥10 display cells for the
+// filename, clamped to [minBarWidth, BarWidth]. On wide terminals the full
+// bar is used; on narrow ones the bar — and only the bar — shrinks.
+func barWidthFor(termWidth int) int {
+	bw := termWidth - infoFixedWidth - 1 - 10
+	if bw < minBarWidth {
+		bw = minBarWidth
+	}
+	if bw > BarWidth {
+		bw = BarWidth
+	}
+	return bw
+}
+
+// truncateName cuts name to maxNameRunes display cells, rune-safe: a UTF-8
 // name (CJK, emoji, etc.) is split on codepoint boundaries, never mid-byte, so
-// no mojibake lands on screen (bug §3.4). An "…" ellipsis occupies the last 3
-// runes when trimmed.
+// no mojibake lands on screen (bug §3.4). An "..." ellipsis occupies the last
+// 3 cells when trimmed.
 func truncateName(name string) string {
 	return truncateNameTo(name, maxNameRunes)
 }
 
-// truncateNameTo cuts name to the given max display columns, rune-safe.
+// truncateNameTo cuts name to the given max display cells, rune-safe and wide-
+// aware: CJK/emoji count 2 cells, and the ellipsis reserves 3 cells.
 func truncateNameTo(name string, max int) string {
-	if utf8.RuneCountInString(name) <= max {
+	if max <= 0 || displayWidth(name) <= max {
 		return name
 	}
-	rs := []rune(name)
-	return string(rs[:max-3]) + "..."
+	budget := max - 3
+	if budget < 0 {
+		budget = 0
+	}
+	var b strings.Builder
+	for _, r := range name {
+		w := runeWidth(r)
+		if budget-w < 0 {
+			break
+		}
+		b.WriteRune(r)
+		budget -= w
+	}
+	return b.String() + "..."
+}
+
+// padToCells left-justifies s and pads it with spaces to exactly w display
+// cells (wide runes count double). The caller is expected to have truncated
+// s to ≤w cells already; this only adds the padding fmt's %-*s can't because
+// it pads by runes, not cells.
+func padToCells(s string, w int) string {
+	if d := displayWidth(s); d < w {
+		return s + strings.Repeat(" ", w-d)
+	}
+	return s
 }
 
 // RenderTaskLine formats one per-file line per PRD §8.1, colouring it when
@@ -458,12 +532,15 @@ func truncateNameTo(name string, max int) string {
 // (centred) indeterminate bar. frame is the global frame counter for the
 // pacman face animation (c/C every ~1s).
 func RenderTaskLine(v download.ProgressView, useColor bool) string {
-	return renderTaskLine(v, useColor, -1, 0, 20)
+	return renderTaskLine(v, useColor, -1, 0, 20, BarWidth)
 }
 
-func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int, nameWidth int) string {
+func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int, nameWidth int, barWidth int) string {
 	if nameWidth < 10 {
 		nameWidth = 10
+	}
+	if barWidth < 2 {
+		barWidth = 2
 	}
 	name := v.Filename
 	if name == "" {
@@ -492,7 +569,7 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 		connDisplay = connStr + strings.Repeat(" ", colConns-len(connStr))
 	}
 
-	bar := BarIndeterminate(v.BytesDone, v.TotalSize, BarWidth, indeterminatePos, frame, "")
+	bar := BarIndeterminate(v.BytesDone, v.TotalSize, barWidth, indeterminatePos, frame, "")
 	bar = colorizeBar(bar, useColor)
 	pct := 0
 	if v.TotalSize > 0 {
@@ -505,9 +582,11 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	}
 	// Fixed columns: name | size | speed | ETA | <conn> [<bar>] | pct%
 	// Speed/ETA/size are fitted so a slow→fast or short→long ETA transition
-	// cannot walk the pacman bar and the right-edge percent left/right.
-	line := fmt.Sprintf("%s%-*s  %s  %s  %s  %s[%s]  %3d%%%s",
-		c, nameWidth, name,
+	// cannot walk the pacman bar and the right-edge percent left/right. The
+	// name is padded by display cells (padToCells), not runes, so a wide CJK
+	// filename can't push the info block past the terminal edge.
+	line := fmt.Sprintf("%s%s  %s  %s  %s  %s[%s]  %3d%%%s",
+		c, padToCells(name, nameWidth),
 		fitWidth(size, colSize),
 		fitWidth(speed, colSpeed),
 		fitWidth(eta, colETA),
@@ -577,19 +656,22 @@ func colorizeBarInLine(line string) string {
 //
 //	Total: X/Y completed  |  <speed>/s  |  ETA HH:MM:SS  [====--]  ZZ%
 //
-// When termWidth > 0, the info block (speed/ETA/bar/pct) is right-aligned to
-// match the task line layout.
+// The bar is the full BarWidth (non-TTY output has no width constraint).
 func RenderSummary(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool) string {
-	return renderSummaryWidth(completed, total, speedBps, eta, bytesDone, totalSize, useColor, 0)
+	return renderSummaryWidth(completed, total, speedBps, eta, bytesDone, totalSize, useColor, 0, BarWidth)
 }
 
 // RenderSummaryWidth is like RenderSummary but right-aligns the info block to
-// the given terminal width, matching the pacman-style task line layout.
-func RenderSummaryWidth(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int) string {
-	return renderSummaryWidth(completed, total, speedBps, eta, bytesDone, totalSize, useColor, termWidth)
+// the given terminal width, matching the pacman-style task line layout. barWidth
+// lets the caller shrink the bar on narrow terminals (see barWidthFor).
+func RenderSummaryWidth(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int, barWidth int) string {
+	return renderSummaryWidth(completed, total, speedBps, eta, bytesDone, totalSize, useColor, termWidth, barWidth)
 }
 
-func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int) string {
+func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int, barWidth int) string {
+	if barWidth < 2 {
+		barWidth = 2
+	}
 	sp := fitWidth(FormatSpeed(speedBps), colSpeed)
 	etaStr := fitWidth(FormatDuration(eta), colETA)
 	pct := 0
@@ -597,7 +679,7 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration,
 		pct = min(max(int(float64(bytesDone)/float64(totalSize)*100), 0), 100)
 	}
 	pctStr := fmt.Sprintf("%3d%%", pct)
-	bar := Bar(bytesDone, totalSize, BarWidth)
+	bar := Bar(bytesDone, totalSize, barWidth)
 	if useColor {
 		bar = colorizeBar(bar, true)
 	}

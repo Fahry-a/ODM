@@ -331,25 +331,28 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 
 	// TTY: build lines, truncated to width so wrapping can't desync cursor-up.
 	width := rendererWidth(r.w)
-	// Compute name width so the info block (size/speed/ETA/bar/pct) sits at the
-	// right edge of the terminal, matching the pacman ILoveCandy layout.
-	nameWidth := width - infoBlockWidth - 1 // -1 for leading space
+	// Compute the bar width + name width so the info block
+	// (size/speed/ETA/bar/pct) sits at the right edge of the terminal, matching
+	// the pacman ILoveCandy layout. On narrow terminals the bar shrinks (via
+	// barWidthFor) so the percent column isn't truncated off the edge.
+	barW := barWidthFor(width)
+	nameWidth := width - infoBlockWidthFor(barW) - 1 // -1 for leading space
 	if nameWidth < 10 {
 		nameWidth = 10
 	}
 	lines := make([]string, 0, len(view)+1)
-	pos := bouncePosition(r.indeterminateTick, BarWidth)
+	pos := bouncePosition(r.indeterminateTick, barW)
 	for _, v := range view {
 		if !isActive(v) {
 			continue
 		}
-		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick, nameWidth)
+		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick, nameWidth, barW)
 		lines = append(lines, truncateToWidth(line, width))
 	}
 	// Only show summary when there are tasks — avoids the misleading
 	// "Total: 0/0" before any snapshots arrive.
 	if st.total > 0 {
-		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor, width), width))
+		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor, width, barW), width))
 	}
 
 	// Move cursor up over the previous frame, clearing each row.
@@ -435,7 +438,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 			if !isActive(v) {
 				continue
 			}
-			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick, 40))
+			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick, 40, BarWidth))
 			b.WriteByte('\n')
 		}
 		b.WriteString(summary)

@@ -295,6 +295,72 @@ func TestTask_CancelBeforeStartFailsFast(t *testing.T) {
 	}
 }
 
+// TestTask_ReusesPreProbe pins the single-probe flow: the CLI probes every URL
+// once (for the Balancer) and injects the result via SetProbe; Start must then
+// skip the network probe (no HEAD, no bytes=0-0 request) and download straight
+// from the known size/range verdict.
+func TestTask_ReusesPreProbe(t *testing.T) {
+	var probeReqs atomic.Int64
+	payload := make([]byte, 2048)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead || r.Header.Get("Range") == "bytes=0-0" {
+			probeReqs.Add(1)
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", itoaS(len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		start, end, ok := parseClientRangeS(r.Header.Get("Range"), len(payload))
+		if !ok {
+			start, end = 0, int64(len(payload))-1
+		}
+		w.Header().Set("Content-Range", "bytes "+itoaS(int(start))+"-"+itoaS(int(end))+"/"+itoaS(len(payload)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[start : end+1])
+	}))
+	defer srv.Close()
+
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := cli.Probe(context.Background(), srv.URL) // the "main" probe
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeReqs.Store(0)
+
+	lim, _ := ratelimit.New("")
+	dir := t.TempDir()
+	task := NewTask(TaskID("odm-preprobe"), srv.URL, TaskOptions{
+		OutputName: "out.bin",
+		Dir:        dir,
+		Retry:      0,
+		Timeout:    10 * time.Second,
+		ChunkSize:  1024,
+	}, cli, lim, nil)
+	task.SetProbe(pr)
+
+	if err := task.Start(context.Background(), 1, nil); err != nil {
+		t.Fatalf("download with pre-probe should succeed: %v", err)
+	}
+	if probeReqs.Load() != 0 {
+		t.Fatalf("expected no probe requests after SetProbe, got %d", probeReqs.Load())
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch (len %d want %d)", len(got), len(payload))
+	}
+}
+
 // TestResume_VerifyPassesIntactData pins the positive resume path: intact
 // completed chunks pass the integrity check, so the download resumes (only the
 // missing chunk is fetched) instead of re-downloading everything.
