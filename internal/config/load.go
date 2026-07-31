@@ -14,9 +14,8 @@ import (
 // ordering subtlety that Load alone cannot enforce: pflag must bind its
 // pointer targets to the *same* *Options that the file-stack + URL resolution
 // later mutate, otherwise the values pflag writes during Parse land on a
-// throwaway struct and the CLI's flags are silently dropped (MergeCLI is a
-// no-op hook by design — see godoc on MergeCLI). Setup keeps one Options
-// alive across:
+// throwaway struct and the CLI's flags are silently dropped. Setup keeps one
+// Options alive across:
 //
 //  1. BindFlags      — flag pointers wired into `o`
 //  2. Parse          — pflag fills `o` and records which flags Changed
@@ -97,11 +96,13 @@ func (o *Options) LoadLayers(fs *pflag.FlagSet, positional []string) error {
 		}
 	}
 
-	// 5. Merge explicitly-set CLI flags over the file-stack. No-op hook by
-	// design: pflag already wrote Changed flags into *o during Parse, and we
-	// layered the config files onto that same *o, so changed flags win over
-	// config by construction — no field copy is needed.
-	MergeCLI(o)
+	// 5. There is deliberately no "merge CLI" step here — CLI flags win by
+	// CONSTRUCTION, not by post-hoc merging. pflag already wrote every
+	// explicitly-given flag straight into this *Options during Parse (see
+	// BindFlags), and the Apply calls above skip any key recorded in o.changed
+	// (CaptureChanged). So the file layers applied in steps 2-4 — system →
+	// user → --config, later wins for unchanged keys — layer on top of a
+	// CLI-filled struct and can never clobber a flag the user actually typed.
 
 	// 6. Resolve positional URLs + -i input file, then validate.
 	urls, err := resolveURLs(o, positional)
@@ -111,14 +112,6 @@ func (o *Options) LoadLayers(fs *pflag.FlagSet, positional []string) error {
 	o.URLs = urls
 	return o.Validate()
 }
-
-// MergeCLI is a reserved hook for post-CLI normalisation. It is intentionally a
-// no-op: because pflag writes directly into the *Options pointer targets during
-// Parse (see BindFlags), every explicitly-set CLI flag already overwrote its
-// field before the config-file stack layered underneath — so changed flags win
-// over config by construction. Future flag types needing unfolding (repeatable
-// flags also present in config as CSV, etc.) would live here.
-func MergeCLI(o *Options) {}
 
 // resolveURLs implements §6.4 batch URL parsing:
 //   - positional args present → each arg is one URL (canonical, comma-safe).

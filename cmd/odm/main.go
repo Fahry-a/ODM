@@ -109,8 +109,13 @@ func run(argv []string) error {
 	// Checksum verification is per-task (the engine hashes the actual written
 	// file). With multiple URLs there is one --checksum flag but many files, so
 	// the option only makes sense in single-file mode — clear it so a batch never
-	// hashes every file against the same digest.
+	// hashes every file against the same digest, and tell the user it was dropped
+	// (before the confirmation prompt / any UI renderer; quiet sessions keep
+	// stderr clean for cron/scripts).
 	if len(o.URLs) > 1 {
+		if w := batchChecksumWarning(o); w != "" {
+			fmt.Fprintln(os.Stderr, w)
+		}
 		exec.Checksum = ""
 	}
 	mgr, err := download.NewManager(exec, engineLog)
@@ -243,6 +248,19 @@ func preHelpOrVersion(argv []string) bool {
 		}
 	}
 	return false
+}
+
+// batchChecksumWarning returns the warning to print when --checksum is dropped
+// for a multi-URL batch (one hash cannot cover many files), or "" when no
+// warning is warranted: single-URL runs, no checksum given, or --quiet sessions
+// (where stderr should stay clean for cron/scripts). It is deliberately a pure
+// function of *config.Options so the drop branch is unit-testable without a
+// network round-trip.
+func batchChecksumWarning(o *config.Options) string {
+	if len(o.URLs) > 1 && o.Checksum != "" && !o.Quiet {
+		return "warning: --checksum ignored when downloading multiple URLs (one hash cannot cover multiple files)"
+	}
+	return ""
 }
 
 // buildExecOptions maps *config.Options → download.ExecOptions, converting the

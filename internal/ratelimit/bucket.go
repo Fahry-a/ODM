@@ -125,17 +125,33 @@ func (l *Limiter) Reader(ctx context.Context, r io.Reader) *RateReader {
 }
 
 // RateReader is an io.Reader that throttles its source against the shared
-// Limiter. Read pulls tokens for the bytes it is about to read; we ask the
-// source for up to p bytes and pay for exactly what it returns.
+// Limiter.
+//
+// Throttling is POST-read: Read first lets the source return up to len(p)
+// bytes, then waits for tokens to cover exactly what it got. That means up to
+// one burst (by default ≈1s worth of the configured rate, see New) of bytes can
+// be in flight at any instant across all concurrent readers sharing the
+// Limiter. This is intentional and standard for stream throttling: the token
+// wait back-pressures the caller's NEXT read, so the long-run aggregate stays
+// at the ceiling while the pipe stays full. A pre-read wait would instead idle
+// each connection for a full burst interval on every read, starving throughput
+// on small buffers. The in-flight window is bounded by the burst, so the
+// worst-case overshoot is one burst — never one burst per read.
+//
+// A RateReader is NOT safe for concurrent use: create one per stream and use it
+// from a single goroutine (the engine wraps each connection's own source). The
+// underlying Limiter is shared across many concurrent readers — that sharing is
+// what enforces the global ceiling (§11.4).
 type RateReader struct {
 	src io.Reader
 	l   *Limiter
 	ctx context.Context
 }
 
-// Read implements io.Reader. We delegate the read to src and then wait for
-// tokens matching the bytes received, so the *aggregate* across all readers
-// stays capped regardless of how buffers are sized per-connection.
+// Read implements io.Reader. It delegates the read to src first, then waits
+// for tokens matching the bytes received (post-read throttling — see RateReader
+// for the burst-in-flight semantics). The *aggregate* across all readers stays
+// capped regardless of how buffers are sized per-connection.
 func (rr *RateReader) Read(p []byte) (int, error) {
 	n, err := rr.src.Read(p)
 	if n > 0 && !rr.l.Unlimited() {
