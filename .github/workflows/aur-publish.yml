@@ -130,7 +130,9 @@ jobs:
 
       - name: Clean up generated assets
         working-directory: packaging
-        run: rm -f odm-bin-*.*
+        # makepkg (run as 'builder' in the archlinux container) chowns the whole
+        # workdir, so the plain runner can't remove the versioned files — sudo.
+        run: sudo rm -f odm-bin-*.*
 
       - name: Commit to main
         env:
