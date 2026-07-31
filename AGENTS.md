@@ -64,46 +64,94 @@ GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o build/odm_1.0.0_linux_am
 
 ## Releases
 
-Automated via `.github/workflows/release.yml`. Push a `v*` tag → workflow verifies versions, cross-compiles, and creates a GitHub Release.
+Automated end-to-end. Push a version bump to `main` → `auto-tag.yml` validates
+and tags it → `release.yml` (tag push) verifies versions, cross-compiles, and
+creates the GitHub Release → `aur-publish.yml` ships the AUR package.
 
-**Release checklist (all 3 must match the tag):**
+**Release checklist (all 3 must match the version being released):**
 
 1. `internal/config/config.go:26` — `const Version = "odm/X.Y.Z"`
-2. `internal/download/manager.go:190` — `const Version = "odm/X.Y.Z"`
-3. `packaging/PKGBUILD:10` — `pkgver=X.Y.Z`
+2. `internal/download/manager.go:234` — `const Version = "odm/X.Y.Z"`
+3. `packaging/PKGBUILD:9` — `pkgver=X.Y.Z`
 
-**Release steps:**
+**Release steps (auto-tag flow):**
 
 ```bash
 # 1. Bump versions in all 3 locations above
-# 2. Move [Unreleased] section in CHANGELOG.md → new version header
+# 2. Move the [Unreleased] section in CHANGELOG.md → new "## [X.Y.Z] - YYYY-MM-DD"
 # 3. Commit
 git add -A && git commit -m "release: vX.Y.Z"
+# 4. Push main only — auto-tag.yml creates the tag, then release + AUR follow
+git push origin main
+```
 
-# 4. Tag & push
-git tag vX.Y.Z
+**Manual fallback** (auto-tag skipped or tag needs moving):
+
+```bash
+# Annotated tag with -m: a bare `git tag vX.Y.Z` opens $GIT_EDITOR (vi by
+# default), which fails on machines without it.
+git tag vX.Y.Z -m "release: vX.Y.Z"
 git push origin main && git push origin vX.Y.Z
 ```
 
-**What the workflow does:**
+**What the workflows do:**
 
-1. Extracts version from git tag (strips `v` prefix)
-2. Extracts versions from `config.go`, `manager.go`, `PKGBUILD` — fails if any mismatch
-3. Cross-compiles 6 targets: `linux/{386,amd64,arm,arm64}`, `darwin/{amd64,arm64}`
-4. Parses `CHANGELOG.md` for the version section (Keep a Changelog format)
-5. Generates SHA-256 checksums
-6. Creates GitHub Release via `softprops/action-gh-release@v2`
-   - Pre-release auto-detected if version contains `-` (e.g. `v0.2.0-rc1`)
+1. `auto-tag.yml` — on push to `main`: extracts the version from `config.go`,
+   `manager.go`, `PKGBUILD`; FAILS if the three mismatch; creates the tag only
+   when the version is newer than the latest `v*` tag AND `CHANGELOG.md` has a
+   `## [X.Y.Z]` header. Idempotent — a docs-only push is a no-op.
+2. `release.yml` — on `v*` tag push: extracts version from the tag, re-checks
+   all three version files (fails on mismatch), requires the CHANGELOG entry
+   (fails if missing), cross-compiles 6 targets, generates SHA-256 checksums,
+   and creates the GitHub Release via `softprops/action-gh-release@v3`.
+   Pre-release auto-detected if version contains `-` (e.g. `v0.2.0-rc1`).
+3. `aur-publish.yml` — on Release success: bumps `pkgver`, pulls the real
+   binary checksums from the release, verifies via `makepkg --verifysource`
+   (archlinux docker), publishes to AUR, and commits `PKGBUILD`/`.SRCINFO` back
+   to `main`. That re-push to `main` re-runs `auto-tag.yml`, which skips (tag
+   already exists) — no loop.
+4. `ci.yml` — build/vet/lint/test/race on every push + PR, and a version-
+   consistency check so a partial bump can't land on `main`.
 
 **Binary naming:** `odm_X.Y.Z_<os>_<arch>` (e.g. `odm_0.2.0_linux_amd64`)
 
-**Manual fallback (if needed):**
+**Manual release fallback (if needed):**
 
 ```bash
 gh release create vX.Y.Z --prerelease build/odm_X.Y.Z_* --title "vX.Y.Z" --notes "..."
 ```
 
 Tag format: `v<semver>`. Pre-releases use `--prerelease`.
+
+## Push-to-main (user request)
+
+When the user asks to "push to main" / "release" / "push ke github" (or similar),
+do the full release in one flow — do NOT stop after committing:
+
+1. **Bump the version** — semver, judged from the changes since the last `v*` tag:
+   - new features (even small ones, e.g. chunk requeue, resume integrity checks) → **minor** bump (`1.1.0` → `1.2.0`)
+   - bug fixes only → **patch** bump (`1.1.0` → `1.1.1`)
+   - breaking change → **major** bump
+   Check `git tag -l | sort -V | tail -1` for the last tag and
+   `git log --oneline <last-tag>..HEAD` to see what changed. Update ALL three
+   locations from the release checklist above, plus move the CHANGELOG
+   `[Unreleased]` section under a new `## [X.Y.Z] - YYYY-MM-DD` header.
+2. **Commit + push main only** — `git push origin main`. The `auto-tag.yml`
+   workflow validates the three files + changelog and creates the tag itself.
+3. **Verify the pipeline** — after pushing, confirm the tag was created and the
+   release ran:
+   ```bash
+   git fetch --tags && git tag -l 'v*' | sort -V | tail -1
+   gh run list --workflow=auto-tag.yml --limit 1
+   gh run list --workflow=release.yml --limit 1
+   gh release view "vX.Y.Z"
+   ```
+   If auto-tag skipped (e.g. the version was already tagged or the changelog
+   entry was missing), fix and re-push, or tag manually.
+
+If the version bump is ambiguous (e.g. the repo drifted), pick the most
+conservative bump that the changelog supports and state the reasoning to the
+user. Never push without the version + tag + changelog all aligned.
 
 ## Roadmap (not yet implemented)
 

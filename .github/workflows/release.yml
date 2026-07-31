@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to release (e.g. 0.4.0)"
+        description: "Version to release without the v prefix (e.g. 1.2.0)"
         required: true
         type: string
       overwrite:
@@ -108,8 +108,9 @@ jobs:
           ' CHANGELOG.md)
 
           if [ -z "$NOTES" ]; then
-            echo "::warning::No changelog entry found for $VERSION, using 'Release $VERSION'"
-            NOTES="Release $VERSION"
+            echo "::error::No changelog entry found for $VERSION in CHANGELOG.md"
+            echo "::error::Add a '## [$VERSION]' section before releasing (see AGENTS.md)."
+            exit 1
           fi
 
           echo "$NOTES" > /tmp/release-notes.md

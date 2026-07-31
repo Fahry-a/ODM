@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the ODM release string; baked into --user-agent default & --version.
-const Version = "odm/1.1.0"
+const Version = "odm/1.2.0"
 
 // Defaults mirrors the PRD §6.2 default column.
 const (
