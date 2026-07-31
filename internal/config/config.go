@@ -306,8 +306,8 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.IntVarP(&o.MaxConnection, "max-connections", "m", o.MaxConnection, "Configurable ceiling for -c/-sf; exceeding it warns")
 	// -sf is a 2-char token, which pflag can't bind as a shorthand (shorthands
 	// are single ASCII chars and would split -sf into -s -f). We bind the long
-	// name only and rewrite bare -sf → --split-file in NormalizeArgs (main.go)
-	// so the documented `-sf 4` form keeps working.
+	// name only and rewrite bare -sf → --split-file in NormalizeArgs (this
+	// package, called by Setup) so the documented `-sf 4` form keeps working.
 	fs.IntVar(&o.SplitFile, "split-file", o.SplitFile, "Parallel connections per file during batch downloads (0 = unset)")
 	fs.StringVarP(&o.OutFile, "output", "o", o.OutFile, "Output file name (single-file mode only)")
 	fs.StringVarP(&o.Dir, "dir", "d", o.Dir, "Destination directory")

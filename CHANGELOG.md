@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Data corruption on single-stream downloads with a known size** — when a
+  server reported `Content-Length` but ignored `Range` (always serving 200 with
+  the full body), the engine split the file into multiple chunks, special-cased
+  only chunk 0 as a plain GET, then wrote the *full* body of subsequent chunks
+  at their offset. The result was an oversized, interleaved file that the task
+  nonetheless reported as **completed** (bytesDone over-counted past TotalSize
+  and the error check compared the wrong way), and the `.odm` resume file was
+  deleted. Single-stream downloads now always use exactly one whole-file chunk,
+  and completion is decided by chunk errors rather than a byte-count comparison.
+  (`internal/download/task.go`)
+- **`--checksum` could verify the wrong file** — verification ran against a
+  URL-derived path (`ResolveDest`) instead of the actual written file, so a
+  server-provided `Content-Disposition` filename made the check read a
+  non-existent (or stale) file. The engine now verifies the real output path
+  per-task; with multiple URLs the flag is ignored as before. (`internal/download/task.go`, `cmd/odm/main.go`)
+- **Wrong exit code on ^C / SIGTERM** — cancelling a download returned exit
+  code 1 (general) or 2/3 (network/partial) instead of the documented 4
+  (cancelled), because in-flight tasks were counted as failures. A user-initiated
+  cancel now maps to `ExitCancelled`. (`cmd/odm/main.go`)
+- **`--output/-o` with multiple URLs silently overwrote one file** — every task
+  resolved to the same destination. Now rejected with a clear error.
+  (`cmd/odm/main.go`)
+- **Data race in the rate limiter** — `SetRate` (RPC `changeOption`) wrote the
+  limiter fields while workers read them concurrently. The limiter and per-task
+  limiter are now held atomically. (`internal/ratelimit/bucket.go`,
+  `internal/download/task.go`)
+- **Flaky RPC test** — `TestServer_AddURIAndTellActive` could miss a task whose
+  probe fails faster than the poll loop; it now also polls `tellStopped`.
+  (`internal/rpc/server_test.go`)
+
 ## [1.1.0] - 2026-07-29
 
 > **Dynamic rate limiting, per-task speed caps, mid-flight connection reallocation,

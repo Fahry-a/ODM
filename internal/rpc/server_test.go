@@ -199,7 +199,10 @@ func TestServer_AddURIAndTellActive(t *testing.T) {
 	// tellActive should surface it (it may move between active/waiting since the
 	// empty plan had 0 slots — but Enqueue forces admitNext).
 	_ = id
-	// Poll briefly for it to show up somewhere.
+	// Poll briefly for it to show up somewhere. example.invalid never resolves,
+	// so the probe fails in milliseconds: the task can be gone from active AND
+	// waiting before the first poll and land in stopped — that's why tellStopped
+	// is part of the loop (the earlier active/waiting-only variant was flaky).
 	deadline := time.Now().Add(2 * time.Second)
 	var found bool
 	for time.Now().Before(deadline) {
@@ -213,10 +216,15 @@ func TestServer_AddURIAndTellActive(t *testing.T) {
 			found = true
 			break
 		}
+		r = jsonRPC(t, url, "odm.tellStopped", nil, 4)
+		if rr, ok := r.Result.([]any); ok && len(rr) > 0 {
+			found = true
+			break
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !found {
-		t.Fatalf("added task never appeared in tellActive/tellWaiting")
+		t.Fatalf("added task never appeared in tellActive/tellWaiting/tellStopped")
 	}
 }
 

@@ -46,12 +46,12 @@ const pacFaceFrameDuration = 5
 type Color string
 
 const (
-	colorReset  Color = "\x1b[0m"
-	colorGreen  Color = "\x1b[32m"
-	colorYellow Color = "\x1b[33m"
-	colorRed    Color = "\x1b[31m"
-	colorGrey   Color = "\x1b[90m"
-	colorCyan   Color = "\x1b[36m"
+	colorReset   Color = "\x1b[0m"
+	colorGreen   Color = "\x1b[32m"
+	colorYellow  Color = "\x1b[33m"
+	colorRed     Color = "\x1b[31m"
+	colorGrey    Color = "\x1b[90m"
+	colorCyan    Color = "\x1b[36m"
 	colorMagenta Color = "\x1b[35m"
 )
 
@@ -79,9 +79,9 @@ func stateColor(s download.TaskState, useColor bool) Color {
 // around every frame. Values are fitted to these widths (right-aligned) so
 // the bar stays glued to the right edge of the line.
 const (
-	colSize   = 14 // "999.9M/999.9M" (hybrid done/total)
-	colSpeed  = 11 // "999.9 MiB/s", "1023 B/s"
-	colETA    = 8  // "HH:MM:SS" (was MM:SS = 5)
+	colSize  = 14 // "999.9M/999.9M" (hybrid done/total)
+	colSpeed = 11 // "999.9 MiB/s", "1023 B/s"
+	colETA   = 8  // "HH:MM:SS" (was MM:SS = 5)
 )
 
 // FormatFileSize humanises a byte count (binary, KiB/MiB/GiB/…).
@@ -363,7 +363,7 @@ func truncateVisibleWidth(s string, width int) string {
 		return s
 	}
 	type segment struct {
-		text   string
+		text    string
 		visible bool
 	}
 	var segs []segment

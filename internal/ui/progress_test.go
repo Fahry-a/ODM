@@ -691,10 +691,10 @@ func TestAnsiVisibleWidth(t *testing.T) {
 	}{
 		{"hello", 5},
 		{"", 0},
-		{"\x1b[33mc\x1b[0m", 1},       // colored 'c' = 1 visible cell
-		{"\x1b[32m---\x1b[0m", 3},      // 3 dashes
-		{"\x1b[35m[x4]\x1b[0m", 4},     // [x4] = 4 visible
-		{"\x1b[0m\x1b[33m\x1b[0m", 0},  // just escape codes
+		{"\x1b[33mc\x1b[0m", 1},         // colored 'c' = 1 visible cell
+		{"\x1b[32m---\x1b[0m", 3},       // 3 dashes
+		{"\x1b[35m[x4]\x1b[0m", 4},      // [x4] = 4 visible
+		{"\x1b[0m\x1b[33m\x1b[0m", 0},   // just escape codes
 		{"abc\x1b[31mdef\x1b[0mghi", 9}, // mix: 3 + 3 + 3
 	}
 	for _, tc := range cases {

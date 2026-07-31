@@ -8,7 +8,6 @@ package transport
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -461,6 +460,3 @@ func parseContentRange(cr string) (start, end, total int64, ok bool) {
 	}
 	return st, en, tt, true
 }
-
-// ErrMaxRedirects is returned when the redirect chain exceeds MaxRedirect.
-var ErrMaxRedirects = errors.New("max redirects exceeded")

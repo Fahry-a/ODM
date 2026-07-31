@@ -53,7 +53,7 @@ func run(argv []string) error {
 		return nil // printed already
 	}
 
-	o, fs, err := config.Setup(argv)
+	o, _, err := config.Setup(argv)
 	if err != nil {
 		if err == pflag.ErrHelp {
 			printUsage(os.Stdout)
@@ -63,7 +63,6 @@ func run(argv []string) error {
 		fmt.Fprintln(os.Stderr)
 		return err
 	}
-	_ = fs
 
 	// Leveled logger (§6.2 --log / --log-level). Default level info; a quiet
 	// session with no --log file degrades to a silent engine LogFn so the
@@ -97,10 +96,21 @@ func run(argv []string) error {
 	if len(o.URLs) == 0 {
 		return errExit{code: download.ExitGeneral, msg: "no URLs provided (pass URLs as args, -i <file>, or use --rpc)"}
 	}
+	if o.OutFile != "" && len(o.URLs) > 1 {
+		return errExit{code: download.ExitGeneral,
+			msg: "--output/-o is only valid with a single URL (every task would write the same file)"}
+	}
 
 	exec, err := buildExecOptions(o)
 	if err != nil {
 		return err
+	}
+	// Checksum verification is per-task (the engine hashes the actual written
+	// file). With multiple URLs there is one --checksum flag but many files, so
+	// the option only makes sense in single-file mode — clear it so a batch never
+	// hashes every file against the same digest.
+	if len(o.URLs) > 1 {
+		exec.Checksum = ""
 	}
 	mgr, err := download.NewManager(exec, engineLog)
 	if err != nil {
@@ -183,19 +193,13 @@ func run(argv []string) error {
 	// Final frame so the terminal lands on the completed bars.
 	r.Frame(nil, nil)
 
-	// Checksum verification (single-file, §16 acceptance). Errors here don't
-	// retroactively fail a successful download unless the hash mismatches.
-	if o.Checksum != "" && len(o.URLs) == 1 && failed == 0 {
-		algo, hexStr, _ := strings.Cut(o.Checksum, ":")
-		dest := mgr.ResolveDest(o.URLs[0])
-		if cerr := mgr.VerifyChecksum(dest, algo, hexStr); cerr != nil {
-			logger.Errorf("checksum: %v", cerr)
-			failed++
-			succeeded-- // it didn't actually succeed
-		}
-	}
-
+	// §13 exit-code mapping. A user-initiated ^C / SIGTERM is "cancelled" (4),
+	// not a network/partial failure: the scheduler returns context.Canceled and
+	// the in-flight tasks' partial bytes are preserved for --continue.
 	code := download.ExitCodeFrom(succeeded, failed, 0)
+	if runErr == context.Canceled {
+		code = download.ExitCancelled
+	}
 	printSummary(succeeded, failed, len(o.URLs))
 	if runErr != nil && runErr != context.Canceled {
 		return errExit{code: code, msg: runErr.Error()}
@@ -237,25 +241,25 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		dir, _ = os.Getwd()
 	}
 	return download.ExecOptions{
-		Dir:            dir,
-		OutFile:        o.OutFile,
-		Connections:    o.Connections,
-		MaxConn:        o.MaxConnection,
-		SplitFile:      o.SplitFile,
-		Retry:          o.Retry,
-		RetryWait:      time.Duration(o.RetryWait) * time.Second,
-		Continue:       o.Continue,
-		ChunkSize:      chunk,
-		Timeout:        time.Duration(o.Timeout) * time.Second,
-		MaxRedirect:    o.MaxRedirect,
-		Checksum:       o.Checksum,
-		LimitRate:      o.LimitRate,
-		TaskLimitRate:  o.TaskLimitRate,
-		UserAgent:      o.UserAgent,
-		Headers:        o.Headers,
-		Referer:        o.Referer,
-		Proxy:          o.Proxy,
-		CheckCert:      o.CheckCertificate,
+		Dir:           dir,
+		OutFile:       o.OutFile,
+		Connections:   o.Connections,
+		MaxConn:       o.MaxConnection,
+		SplitFile:     o.SplitFile,
+		Retry:         o.Retry,
+		RetryWait:     time.Duration(o.RetryWait) * time.Second,
+		Continue:      o.Continue,
+		ChunkSize:     chunk,
+		Timeout:       time.Duration(o.Timeout) * time.Second,
+		MaxRedirect:   o.MaxRedirect,
+		Checksum:      o.Checksum,
+		LimitRate:     o.LimitRate,
+		TaskLimitRate: o.TaskLimitRate,
+		UserAgent:     o.UserAgent,
+		Headers:       o.Headers,
+		Referer:       o.Referer,
+		Proxy:         o.Proxy,
+		CheckCert:     o.CheckCertificate,
 	}, nil
 }
 

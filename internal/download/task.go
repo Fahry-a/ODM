@@ -83,12 +83,12 @@ type ProgressView struct {
 //   - worker goroutines, one per allocated connection
 //   - a progress aggregator the UI/RPC poll
 type Task struct {
-	id     TaskID
-	url    string
-	opts   TaskOptions
-	client *transport.Client
-	lim    *ratelimit.Limiter // global rate limiter
-	taskLim *ratelimit.Limiter // per-task rate limiter; nil = unlimited
+	id      TaskID
+	url     string
+	opts    TaskOptions
+	client  *transport.Client
+	lim     *ratelimit.Limiter                // global rate limiter
+	taskLim atomic.Pointer[ratelimit.Limiter] // per-task rate limiter; nil = unlimited
 
 	// resolved after Probe
 	probe   *transport.ProbeResult
@@ -140,7 +140,6 @@ type LogFn = func(level string, format string, args ...any)
 type TaskOptions struct {
 	OutputName    string // "" ⇒ derive from URL
 	Dir           string
-	Connections   int
 	Retry         int
 	RetryWait     time.Duration
 	Continue      bool
@@ -208,16 +207,17 @@ func NewTask(id TaskID, url string, opts TaskOptions, client *transport.Client, 
 		logf = func(level string, format string, args ...any) {}
 	}
 	taskLim, _ := ratelimit.New(opts.TaskLimitRate)
-	return &Task{
-		id:      id,
-		url:     url,
-		opts:    opts,
-		client:  client,
-		lim:     lim,
-		taskLim: taskLim,
-		pauseC:  make(chan struct{}, 1),
-		logf:    logf,
+	t := &Task{
+		id:     id,
+		url:    url,
+		opts:   opts,
+		client: client,
+		lim:    lim,
+		pauseC: make(chan struct{}, 1),
+		logf:   logf,
 	}
+	t.taskLim.Store(taskLim)
+	return t
 }
 
 // ID returns the task id.
@@ -341,8 +341,19 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	}
 	t.outPath = filepath.Join(dir, outName)
 
-	// Probe-derived size check before opening.
-	q := NewChunkQueue(pr.TotalSize, t.opts.ChunkSize)
+	// Probe-derived size check before opening. A SingleStream verdict means the
+	// server won't honour ranged GETs, so the queue MUST hold exactly one
+	// whole-file chunk regardless of the known size — otherwise worker N would
+	// pull chunk N, the server answers the ranged request with the full body,
+	// and that body gets written at the chunk's offset, corrupting the file
+	// (and over-counting bytesDone past TotalSize, which used to let the task
+	// "succeed" on the corrupt output). NewChunkQueue's totalSize<0 branch is
+	// exactly the single whole-file chunk layout we want.
+	qs := pr.TotalSize
+	if pr.SingleStream {
+		qs = -1
+	}
+	q := NewChunkQueue(qs, t.opts.ChunkSize)
 
 	alreadyDone := int64(0)
 	if t.opts.Continue {
@@ -373,6 +384,12 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		// Already complete on disk (resume found everything done).
 		t.bytesDone.Store(pr.TotalSize)
 		t.setState(StateCompleted)
+		if err := t.verifyChecksum(); err != nil {
+			t.logf("error", "checksum: %v", err)
+			t.setState(StateError)
+			t.emitFinal(progressSink)
+			return err
+		}
 		t.emitFinal(progressSink)
 		return t.finish()
 	}
@@ -401,7 +418,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	t.adjustDone = true
 	t.adjustMu.Unlock()
 
-	if t.errors.Load() > 0 && t.bytesDone.Load() < t.totalOrDone() {
+	if t.errors.Load() > 0 {
 		t.setState(StateError)
 		// Persist completed chunks before exiting so partial progress
 		// survives even if the process terminates shortly after this
@@ -411,6 +428,15 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		return fmt.Errorf("task failed: %d chunk errors, %d/%d bytes", t.errors.Load(), t.bytesDone.Load(), t.totalOrDone())
 	}
 	t.setState(StateCompleted)
+	// Checksum verification runs against the actual written file. A mismatch
+	// fails the task even though the transfer itself finished.
+	if err := t.verifyChecksum(); err != nil {
+		t.logf("error", "checksum: %v", err)
+		t.setState(StateError)
+		t.persistControl()
+		t.emitFinal(progressSink)
+		return err
+	}
 	t.emitFinal(progressSink)
 	return t.finish()
 }
@@ -552,8 +578,8 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
 	}
-	if t.taskLim != nil && !t.taskLim.Unlimited() {
-		body = io.NopCloser(t.taskLim.Reader(chunkCtx, body))
+	if tl := t.taskLim.Load(); tl != nil && !tl.Unlimited() {
+		body = io.NopCloser(tl.Reader(chunkCtx, body))
 	}
 
 	// Copy chunk to disk at offset Start using a small buffer; the WriteAt
@@ -599,8 +625,8 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
 	}
-	if t.taskLim != nil && !t.taskLim.Unlimited() {
-		body = io.NopCloser(t.taskLim.Reader(chunkCtx, body))
+	if tl := t.taskLim.Load(); tl != nil && !tl.Unlimited() {
+		body = io.NopCloser(tl.Reader(chunkCtx, body))
 	}
 	buf := make([]byte, 64*1024)
 	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), func(delta int64) {
@@ -711,6 +737,20 @@ func (t *Task) totalOrDone() int64 {
 	return t.bytesDone.Load()
 }
 
+// verifyChecksum runs the --checksum verification against the real output file
+// (t.outPath — the name the server chose via Content-Disposition or the -o
+// override, not a URL-derived guess). No-op when no checksum was requested.
+func (t *Task) verifyChecksum() error {
+	if t.opts.Checksum == "" {
+		return nil
+	}
+	algo, hexStr, ok := strings.Cut(t.opts.Checksum, ":")
+	if !ok || hexStr == "" {
+		return fmt.Errorf("checksum: bad spec %q", t.opts.Checksum)
+	}
+	return verifyChecksum(t.outPath, algo, hexStr)
+}
+
 // finish flushes and persist/removes the control file; an error from the
 // caller already set the state.
 func (t *Task) finish() error {
@@ -764,7 +804,7 @@ func (t *Task) SetTaskRate(spec string) bool {
 	if err != nil {
 		return false
 	}
-	t.taskLim = l
+	t.taskLim.Store(l)
 	return true
 }
 
