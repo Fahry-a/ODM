@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **True SOCKS5 / SOCKS5h proxy support** — `--proxy socks5://…` and
+  `socks5h://…` now speak the SOCKS5 protocol (RFC 1928) instead of falling
+  back to HTTP CONNECT tunnelling. `socks5` resolves hostnames locally and
+  sends the IP to the proxy; `socks5h` sends the hostname for proxy-side DNS.
+  (`internal/transport`, `golang.org/x/net/proxy`)
+- **Per-chunk resume verification** — the `.odm` control file now records a
+  SHA-256 hash per completed chunk; resuming verifies every completed chunk
+  from local disk, so silent disk corruption is caught instead of being
+  resumed into a corrupt file. Legacy control files (no hashes) keep the
+  server-side spot-check. (`internal/storage/resume.go`, `internal/download/task.go`)
+- **Chunk-boundary invariant check** — `NewChunkQueue` validates that chunks
+  are contiguous, non-overlapping, and cover the whole file; a boundary
+  programming error now fails loudly instead of corrupting data silently.
+  (`internal/download/chunkqueue.go`)
+
+### Changed
+- **`--checksum` in batch mode now warns** — when multiple URLs are given the
+  flag is ignored (one hash cannot cover many files); the CLI now prints a
+  warning to stderr instead of dropping it silently. (`cmd/odm/main.go`)
+- **Version is single-sourced** — `config.Version` and `download.Version` are
+  compile-time aliases of `odm/internal/version`; a mismatch is now a build
+  error, and the release checklist is down to two locations (`version.go` +
+  `PKGBUILD`). (`internal/version/version.go`)
+- **`WriteAt` invariant documented** — concurrent writers must use disjoint
+  byte ranges; the engine guarantees this via chunk boundaries. No behavior
+  change, but the contract is now explicit. (`internal/storage/file.go`)
+
+### Fixed
+- **Pause could leave workers stuck forever** — `Unpause` sent once on a
+  buffered channel, waking only ONE of N blocked workers; the rest stayed in
+  the pause gate and `Wait()` hung. Unpause now broadcasts to all workers.
+  Regression-tested with 4 workers. (`internal/download/task.go`,
+  `internal/download/pause_test.go`)
+- **Resume could silently build a mixed-version file** — with per-chunk hashes
+  present, the server-side drift check was skipped entirely; a same-size,
+  no-ETag server-side content change during an interrupted download produced a
+  file part-old part-new, reported as success. Both guarantees now run:
+  local hash verification AND the sampled server compare. (`internal/download/task.go`)
+- **Partial hash coverage no longer discards progress** — a control file
+  written by an older version (no hashes), resumed once, then interrupted
+  again, has hashes only for the new chunks; resuming now falls back to the
+  server compare instead of erroring and re-downloading from scratch.
+  (`internal/download/task.go`)
+- **Resume span computation defaulted chunk size inconsistently** — a
+  non-positive `ChunkSize` in `ExecOptions` would make resume-hash spans
+  invalid and always trigger a full re-download; the 4 MiB default is now
+  shared between queue layout and resume verification. (`internal/download/chunkqueue.go`)
+
 ## [1.2.0] - 2026-07-31
 
 > **Chunk re-queue, resume integrity checks, data-corruption fixes, and a batch

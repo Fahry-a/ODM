@@ -22,21 +22,22 @@ Single binary `cmd/odm/main.go` wires together internal packages. Two execution 
 
 ```
 cmd/odm         → entry point, flag parsing, mode dispatch
-internal/config → CLI flags (pflag) + config file merge; owns Version const
-internal/download → Task lifecycle, chunk queue (work-stealing), Manager, exit codes, 2nd Version const
-internal/transport → HTTP client, Probe (HEAD → ranged GET → single-stream fallback)
+internal/config → CLI flags (pflag) + config file merge
+internal/version → single source of truth for the Version const
+internal/download → Task lifecycle, chunk queue (work-stealing), Manager, exit codes
+internal/transport → HTTP client, Probe (HEAD → ranged GET → single-stream fallback), proxy (http/https/socks5/socks5h)
 internal/scheduler → Connection Balancer (allocation modes A/B/C), Daemon (RPC), Queue
 internal/ui → Pacman/ILoveCandy progress bar, confirmation prompt, terminal sizing
 internal/rpc → JSON-RPC 2.0 + WebSocket server, Broadcaster
 internal/ratelimit → Global token bucket (--limit-rate)
-internal/storage → File WriteAt, resume control files (.odm)
+internal/storage → File WriteAt, resume control files (.odm, per-chunk hashes)
 internal/logging → Leveled logger (--log / --log-level)
 ```
 
 ## Key conventions
 
 - **Module path is `odm`** (not a GitHub URL). Imports look like `odm/internal/config`. Keep it this way.
-- **Version is duplicated** in `internal/config/config.go` and `internal/download/manager.go` — both must match when bumping. This is intentional to avoid an import cycle (see comment at `manager.go:187-189`). Update `packaging/PKGBUILD` `pkgver` too.
+- **Version is single-sourced** in `internal/version/version.go`. `config.Version` and `download.Version` are compile-time aliases (`const Version = version.Version`), so they can never drift — a mismatch is a build error. The only remaining release risk is `packaging/PKGBUILD` `pkgver`, which CI checks stays in sync.
 - **Progress bar format**: `internal/ui/render.go` is the pure rendering layer (`Bar()`, `BarIndeterminate()`, `renderTaskLine()`). `internal/ui/progress.go` owns the stateful `Renderer` (cache, animation tick, TTY redraw loop). Keep `render.go` functions pure/testable — animation state lives in `progress.go`.
 - **Bar width is fixed** at 30 cells (`BarWidth` const). Dots are spaced (`o o o`), face animates `c`↔`C` every ~1s. `barLine()` pads to exactly `width` so the `%` column never shifts. `TestRenderTaskLine_FixedColumns` pins this.
 - **ETA format is `HH:MM:SS`** (8 cells, `colETA=8`). `FormatDuration` caps at `99:59:59`. The download engine's `estimateETA` (`task.go`) must NOT multiply by `time.Second` a second time — the inner expression already yields nanoseconds.
@@ -68,16 +69,18 @@ Automated end-to-end. Push a version bump to `main` → `auto-tag.yml` validates
 and tags it → `release.yml` (tag push) verifies versions, cross-compiles, and
 creates the GitHub Release → `aur-publish.yml` ships the AUR package.
 
-**Release checklist (all 3 must match the version being released):**
+**Release checklist (both must match the version being released):**
 
-1. `internal/config/config.go:26` — `const Version = "odm/X.Y.Z"`
-2. `internal/download/manager.go:234` — `const Version = "odm/X.Y.Z"`
-3. `packaging/PKGBUILD:9` — `pkgver=X.Y.Z`
+1. `internal/version/version.go:14` — `const Version = "odm/X.Y.Z"`
+2. `packaging/PKGBUILD:9` — `pkgver=X.Y.Z`
+
+`config.Version` and `download.Version` are aliases of `version.Version`, so
+they need no separate bump.
 
 **Release steps (auto-tag flow):**
 
 ```bash
-# 1. Bump versions in all 3 locations above
+# 1. Bump the version in the 2 locations above
 # 2. Move the [Unreleased] section in CHANGELOG.md → new "## [X.Y.Z] - YYYY-MM-DD"
 # 3. Commit
 git add -A && git commit -m "release: vX.Y.Z"
@@ -96,25 +99,27 @@ git push origin main && git push origin vX.Y.Z
 
 **What the workflows do:**
 
-1. `auto-tag.yml` — on push to `main`: extracts the version from `config.go`,
-   `manager.go`, `PKGBUILD`; FAILS if the three mismatch; creates an annotated
-   tag only when the version is newer than the latest `v*` tag AND `CHANGELOG.md`
-   has a `## [X.Y.Z]` header. Idempotent — a docs-only push is a no-op. Because
-   a tag pushed with `GITHUB_TOKEN` cannot trigger other workflows (GitHub's
-   recursion guard), it then dispatches `release.yml` explicitly via
-   `workflow_dispatch`.
+1. `auto-tag.yml` — on push to `main`: extracts the version from
+   `internal/version/version.go` and `PKGBUILD`; FAILS if the two mismatch;
+   creates an annotated tag only when the version is newer than the latest
+   `v*` tag AND `CHANGELOG.md` has a `## [X.Y.Z]` header. Idempotent — a
+   docs-only push is a no-op. Because a tag pushed with `GITHUB_TOKEN` cannot
+   trigger other workflows (GitHub's recursion guard), it then dispatches
+   `release.yml` explicitly via `workflow_dispatch`.
 2. `release.yml` — on `v*` tag push: extracts version from the tag, re-checks
-   all three version files (fails on mismatch), requires the CHANGELOG entry
+   both version files (fails on mismatch), requires the CHANGELOG entry
    (fails if missing), cross-compiles 6 targets, generates SHA-256 checksums,
    and creates the GitHub Release via `softprops/action-gh-release@v3`.
    Pre-release auto-detected if version contains `-` (e.g. `v0.2.0-rc1`).
 3. `aur-publish.yml` — on Release success: bumps `pkgver`, pulls the real
    binary checksums from the release, verifies via `makepkg --verifysource`
-   (archlinux docker), publishes to AUR, and commits `PKGBUILD`/`.SRCINFO` back
-   to `main`. That re-push to `main` re-runs `auto-tag.yml`, which skips (tag
+   (archlinux docker), publishes to AUR, and commits `PKGBUILD` back to
+   `main` (`.SRCINFO` is generated by the workflow at publish time and is not
+   tracked). That re-push to `main` re-runs `auto-tag.yml`, which skips (tag
    already exists) — no loop.
 4. `ci.yml` — build/vet/lint/test/race on every push + PR, and a version-
-   consistency check so a partial bump can't land on `main`.
+   consistency check (`internal/version/version.go` vs `pkgver`) so a partial
+   bump can't land on `main`.
 
 **Binary naming:** `odm_X.Y.Z_<os>_<arch>` (e.g. `odm_0.2.0_linux_amd64`)
 
@@ -136,11 +141,11 @@ do the full release in one flow — do NOT stop after committing:
    - bug fixes only → **patch** bump (`1.1.0` → `1.1.1`)
    - breaking change → **major** bump
    Check `git tag -l | sort -V | tail -1` for the last tag and
-   `git log --oneline <last-tag>..HEAD` to see what changed. Update ALL three
+   `git log --oneline <last-tag>..HEAD` to see what changed. Update ALL TWO
    locations from the release checklist above, plus move the CHANGELOG
    `[Unreleased]` section under a new `## [X.Y.Z] - YYYY-MM-DD` header.
 2. **Commit + push main only** — `git push origin main`. The `auto-tag.yml`
-   workflow validates the three files + changelog and creates the tag itself.
+   workflow validates the two files + changelog and creates the tag itself.
 3. **Verify the pipeline** — after pushing, confirm the tag was created and the
    release ran:
    ```bash
@@ -160,11 +165,9 @@ user. Never push without the version + tag + changelog all aligned.
 
 These are deferred — do NOT treat them as bugs:
 
-- **Mid-flight dynamic reallocation** — rebalance connections of chunks
-  already in progress (beyond allocation-time reallocation). Requires live
-  goroutine renegotiation.
-- **`changeOption` mid-flight** — currently an acknowledged no-op
-  (`server.go:187`). The RPC spec lists it but real mutation is deferred.
+- **Mid-flight dynamic reallocation of in-progress chunks** — rebalancing chunks
+  already being downloaded (beyond the implemented connection-count adjustment
+  via `AdjustConns`). Requires live goroutine renegotiation.
 - **Multi-mirror download** — splitting chunks across duplicate URLs for the
   same file. Out of scope for the connection-aggregation value proposition.
 - **BitTorrent / magnet links** — explicitly non-goal for MVP.
@@ -172,5 +175,21 @@ These are deferred — do NOT treat them as bugs:
   point of ODM is multi-connection aggregation over HTTP/1.1. Future implementation
   if demand arises; would require a new Balancer mode that ignores connection
   budget for HTTP/2-capable servers.
-- **Per-task speed limits** — only the global `--limit-rate` exists today.
+- **`changeOption` beyond rate/connections** — implemented since 1.1.0:
+  `max-download-limit`, `max-download-limit-per-task`, and `connections`
+  (mid-flight). Other RPC spec mutations remain deferred.
 - **Reference Web UI** — roadmap item built on the RPC + WebSocket layer.
+
+## Agent workflow
+
+The user's standing preference: **always use the smartest agent for writing or
+fixing code.** Practical pipeline in this repo:
+
+- **@oracle** (read-only, highest reasoning quality) — design, architecture
+  decisions, and an independent review gate over every implementation batch
+  before it is considered done.
+- **@fixer** (write access) — mechanical execution of oracle-vetted, bounded
+  specs; never makes design decisions on its own.
+- Orchestrator — plans lanes, dispatches, and runs the final CI-equivalent
+  verification (`go build`, `go vet`, `golangci-lint`, `go test -race -count=1`).
+- Implementation is not "done" until the oracle review gate has passed.
