@@ -289,6 +289,30 @@ func TestServer_GetGlobalStat(t *testing.T) {
 	}
 }
 
+// TestServer_ShutdownRespondsThenStops pins the shutdown ordering: the "OK"
+// response must be delivered BEFORE the daemon stops (the stop cancels the
+// scheduler and, in runRPC, closes the listener — if it raced the write, the
+// reply could be truncated). The daemon must then actually wind down.
+func TestServer_ShutdownRespondsThenStops(t *testing.T) {
+	hs, srv, stop := startServer(t, "")
+	defer stop()
+	r := jsonRPC(t, hs.URL+"/rpc", "odm.shutdown", nil, 1)
+	if r.Error != nil {
+		t.Fatalf("shutdown error: %v", r.Error)
+	}
+	if r.Result != "OK" {
+		t.Fatalf("want result OK, got %v", r.Result)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.Daemon().Dead() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("daemon did not stop after odm.shutdown")
+}
+
 func TestBroadcasterEvents(t *testing.T) {
 	_, srv, stop := startServer(t, "")
 	defer stop()

@@ -260,6 +260,41 @@ func TestResume_LayoutMismatchFallsBackToFullDownload(t *testing.T) {
 	t.Fatalf("expected a layout-mismatch warning, logs: %v", *msgs)
 }
 
+// TestTask_CancelBeforeStartFailsFast pins the queued-task cancel fix: RPC
+// remove on a task that hasn't started yet used to be a silent no-op (Cancel
+// had no ctx to cancel), so the task would still download once a slot freed.
+// Cancel now flags the task and Start fails fast without touching the server.
+func TestTask_CancelBeforeStartFailsFast(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim, _ := ratelimit.New("")
+	task := NewTask(TaskID("odm-cancel"), srv.URL, TaskOptions{
+		OutputName: "out.bin",
+		Dir:        dir,
+		Retry:      0,
+		Timeout:    10 * time.Second,
+		ChunkSize:  1024,
+	}, cli, lim, nil)
+
+	task.Cancel() // simulates RPC remove while the task was still queued
+	if err := task.Start(context.Background(), 1, nil); err == nil {
+		t.Fatalf("a cancelled task must fail fast, got success")
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("cancelled task must not touch the server (probe/download), got %d requests", hits.Load())
+	}
+}
+
 // TestResume_VerifyPassesIntactData pins the positive resume path: intact
 // completed chunks pass the integrity check, so the download resumes (only the
 // missing chunk is fetched) instead of re-downloading everything.

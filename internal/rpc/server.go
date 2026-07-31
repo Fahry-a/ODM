@@ -143,11 +143,16 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, nil, codeParseError, "batch parse: "+err.Error())
 			return
 		}
+		shutdown := false
 		resp := make([]jsonRPCResponse, 0, len(batch))
 		for _, q := range batch {
+			if q.Method == "odm.shutdown" {
+				shutdown = true
+			}
 			resp = append(resp, s.dispatch(q))
 		}
 		writeJSON(w, resp)
+		s.stopAfterWrite(w, shutdown)
 		return
 	}
 
@@ -157,6 +162,21 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.dispatch(req))
+	s.stopAfterWrite(w, req.Method == "odm.shutdown")
+}
+
+// stopAfterWrite runs the daemon shutdown only after the JSON-RPC response has
+// been written and flushed. Stop cancels the scheduler and — via the Daemon's
+// OnDead hook — closes the listener in runRPC, which makes the process exit; if
+// that happened before the write, the "OK" response would be truncated.
+func (s *Server) stopAfterWrite(w http.ResponseWriter, shutdown bool) {
+	if !shutdown {
+		return
+	}
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.Flush()
+	}
+	s.daemon.Stop()
 }
 
 // dispatch routes a single JSON-RPC request through the method table.
@@ -201,10 +221,8 @@ func (s *Server) dispatch(req jsonRPCRequest) jsonRPCResponse {
 		}
 	case "odm.shutdown":
 		resp.Result = "OK"
-		go func() {
-			s.daemon.Stop()
-			// The CLI main observes the daemon ending and exits the process.
-		}()
+		// The actual daemon stop happens in stopAfterWrite, after handleRPC has
+		// flushed this response, so a client never sees a truncated reply.
 	case "odm.noop":
 		resp.Result = "OK"
 	default:
