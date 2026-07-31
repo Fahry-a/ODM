@@ -2,13 +2,13 @@
 #
 # The "productively lazy" half of the release pipeline: instead of manually
 # running `git tag vX.Y.Z -m "release: vX.Y.Z"`, this workflow watches main.
-# When a push bumps the version in all three version-bearing files AND the
+# When a push bumps the version in both version-bearing files AND the
 # CHANGELOG has an entry for it, an annotated tag is created — and since a
 # GITHUB_TOKEN tag push can't trigger release.yml on its own, release.yml is
 # dispatched explicitly (GitHub Release) → aur-publish.yml (AUR).
 #
 # Safeguards so it never tags the wrong thing:
-#   1. Strict consistency — all three files must carry the SAME version, or the
+#   1. Strict consistency — both files must carry the SAME version, or the
 #      workflow fails loudly (catches "forgot to bump one file" on the push).
 #   2. Idempotency — if vX.Y.Z already exists, or the version is not newer than
 #      the latest existing tag, nothing happens (a normal docs-only push to
@@ -41,32 +41,29 @@ jobs:
         id: code
         run: |
           set -euo pipefail
-          CONFIG_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/config/config.go)
-          MANAGER_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/download/manager.go)
+          VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
           PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
-          if [ -z "$CONFIG_VER" ] || [ -z "$MANAGER_VER" ] || [ -z "$PKGBUILD_VER" ]; then
+          if [ -z "$VERSION_GO" ] || [ -z "$PKGBUILD_VER" ]; then
             echo "::error::Could not extract a version from one of the files"
             exit 1
           fi
-          echo "config=$CONFIG_VER" >> "$GITHUB_OUTPUT"
-          echo "manager=$MANAGER_VER" >> "$GITHUB_OUTPUT"
+          echo "version_go=$VERSION_GO" >> "$GITHUB_OUTPUT"
           echo "pkgbuild=$PKGBUILD_VER" >> "$GITHUB_OUTPUT"
-          echo "Versions: config=$CONFIG_VER manager=$MANAGER_VER pkgbuild=$PKGBUILD_VER"
+          echo "Versions: version.go=$VERSION_GO pkgbuild=$PKGBUILD_VER"
 
       - name: Validate versions match
         id: validate
         run: |
           set -euo pipefail
-          C="${{ steps.code.outputs.config }}"
-          M="${{ steps.code.outputs.manager }}"
+          V="${{ steps.code.outputs.version_go }}"
           P="${{ steps.code.outputs.pkgbuild }}"
-          if [ "$C" != "$M" ] || [ "$C" != "$P" ]; then
-            echo "::error::Version mismatch on main: config=$C manager=$M pkgbuild=$P"
-            echo "::error::Bump all three files together before pushing."
+          if [ "$V" != "$P" ]; then
+            echo "::error::Version mismatch on main: version.go=$V pkgbuild=$P"
+            echo "::error::Bump both files together before pushing."
             exit 1
           fi
-          echo "version=$C" >> "$GITHUB_OUTPUT"
-          echo "All three files match: $C"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Both files match: $V"
 
       - name: Check existing tag / version order
         id: check
