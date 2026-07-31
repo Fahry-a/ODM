@@ -26,6 +26,7 @@ import (
 	"odm/internal/ratelimit"
 	"odm/internal/rpc"
 	"odm/internal/scheduler"
+	"odm/internal/transport"
 	"odm/internal/ui"
 )
 
@@ -126,6 +127,7 @@ func run(argv []string) error {
 
 	files := make([]scheduler.FileInput, 0, len(o.URLs))
 	sizes := make(map[string]int64, len(o.URLs))
+	probes := make(map[string]*transport.ProbeResult, len(o.URLs))
 	probeClient := mgr.Client()
 	for _, u := range o.URLs {
 		// Each probe gets its own timeout so a slow/unresponsive server can't
@@ -144,6 +146,7 @@ func run(argv []string) error {
 		}
 		files = append(files, scheduler.FileInput{URL: u, SupportsRange: pr.SupportsRange})
 		sizes[u] = pr.TotalSize
+		probes[u] = pr
 	}
 
 	plan, err := scheduler.Compute(o.Connections, files, o.SplitFile, o.MaxConnection)
@@ -183,7 +186,21 @@ func run(argv []string) error {
 		}
 	}
 
-	sch := scheduler.NewScheduler(plan, mgr.NewTask, progCB)
+	// TaskMaker that reuses the probe done above (the CLI already probed every
+	// URL for the Balancer), so each Task.Start doesn't probe a second time.
+	// URLs whose probe failed are left without a pre-probe — the task probes
+	// itself when it starts.
+	maker := func(url string, idx int) (*download.Task, int, error) {
+		t, conns, err := mgr.NewTask(url, idx)
+		if err == nil {
+			if pr := probes[url]; pr != nil {
+				t.SetProbe(pr)
+			}
+		}
+		return t, conns, err
+	}
+
+	sch := scheduler.NewScheduler(plan, maker, progCB)
 	uiCtx, uiCancel := context.WithCancel(context.Background())
 	defer uiCancel()
 	go r.RunLoop(uiCtx, 100*time.Millisecond, snap, qSnap)

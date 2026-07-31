@@ -104,6 +104,80 @@ func TestRenderTaskLine_FixedColumns(t *testing.T) {
 	}
 }
 
+// TestBarWidthFor_Adapts pins the narrow-terminal bar shrink: the full 30-cell
+// bar fits from ~96 columns down; below that only the bar (not the columns)
+// gives way, down to the minBarWidth floor.
+func TestBarWidthFor_Adapts(t *testing.T) {
+	cases := []struct {
+		term int
+		want int
+	}{
+		{120, 30}, // roomy → full bar
+		{100, 30},
+		{96, 30}, // first width that still fits the full bar + 10-cell name
+		{95, 29},
+		{80, 14},
+		{60, 10}, // floor
+	}
+	for _, tc := range cases {
+		if got := barWidthFor(tc.term); got != tc.want {
+			t.Errorf("barWidthFor(%d) = %d, want %d", tc.term, got, tc.want)
+		}
+	}
+}
+
+// TestRenderTaskLine_WideRuneNameStaysInBudget pins the wide-rune fix: a CJK
+// filename (2 cells per rune) must be truncated to the name-width CELL budget
+// and padded so the info block lands exactly where it would for an ASCII name —
+// no overflow pushing the percent off the terminal edge.
+func TestRenderTaskLine_WideRuneNameStaysInBudget(t *testing.T) {
+	v := download.ProgressView{
+		Filename:    strings.Repeat("日", 30), // 60 cells worth
+		TotalSize:   120 << 20,
+		Speed:       25 << 20,
+		BytesDone:   86 << 20,
+		Connections: 1,
+		State:       download.StateActive,
+		ETA:         5 * time.Second,
+	}
+	const nameW = 20
+	line := renderTaskLine(v, false, -1, 0, nameW, BarWidth)
+	want := nameW + infoBlockWidthFor(BarWidth)
+	if d := displayWidth(line); d != want {
+		t.Fatalf("line display width %d, want %d\n%q", d, want, line)
+	}
+	if !strings.Contains(line, "...") {
+		t.Fatalf("long wide name must be truncated with ellipsis: %q", line)
+	}
+	// The bar bracket must sit at nameW + (everything before the '[') display
+	// cells — measured in CELLS, not bytes (the CJK name is 3 bytes/rune).
+	bracket := strings.LastIndex(line, "[")
+	if got := displayWidth(line[:bracket]); got != nameW+infoFixedWidth-8 {
+		t.Fatalf("bar bracket at %d cells, want %d\n%q", got, nameW+infoFixedWidth-8, line)
+	}
+}
+
+// TestDisplayWidth_WideRunes pins the cell-aware width helper: CJK and emoji
+// occupy 2 cells, ANSI escapes none.
+func TestDisplayWidth_WideRunes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"abc", 3},
+		{"日", 2},
+		{"日本語", 6},
+		{"a日b", 4},
+		{"😀", 2}, // emoji (U+1F600)
+		{"\x1b[33mc\x1b[0m", 1},
+	}
+	for _, tc := range cases {
+		if got := displayWidth(tc.in); got != tc.want {
+			t.Errorf("displayWidth(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestFormatDuration_FixedWidth(t *testing.T) {
 	cases := []struct {
 		d    time.Duration
@@ -221,23 +295,29 @@ func TestConfirmSingle_Color(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTruncateName_RuneSafe(t *testing.T) {
-	// A 5-codepoint CJK name occupies 15 bytes but 5 runes; trimming to 20
-	// runes leaves it whole. The old byte-based `name[:17]` would have sliced
-	// mid-codepoint and produced mojibake.
+	// A 5-codepoint CJK name occupies 15 bytes but 5 runes; 16 display cells
+	// (6 wide runes × 2 + 4 ASCII) fit under the 20-cell budget, so it is left
+	// whole. The old byte-based `name[:17]` would have sliced mid-codepoint and
+	// produced mojibake.
 	cjk := "日本語のファイル.bin"
 	got := truncateName(cjk)
 	if got != cjk {
 		t.Fatalf("short multibyte name must be unchanged, got %q", got)
 	}
 
-	// A deliberately long multibyte name must still end on a codepoint boundary.
-	long := strings.Repeat("日", 40) // 40 codepoints
+	// A deliberately long multibyte name must still end on a codepoint boundary,
+	// and the budget is display CELLS (CJK = 2 cells each), not runes.
+	long := strings.Repeat("日", 40) // 40 codepoints = 80 cells
 	got = truncateName(long)
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("long name must end with ellipsis, got %q", got)
 	}
-	if rc := countRunes(strings.TrimSuffix(got, "...")); rc != maxNameRunes-3 {
-		t.Fatalf("truncated body must be %d runes, got %d (got=%q)", maxNameRunes-3, rc, got)
+	if d := displayWidth(got); d > maxNameRunes {
+		t.Fatalf("truncated name exceeds the %d-cell budget: %d cells (got=%q)", maxNameRunes, d, got)
+	}
+	// (maxNameRunes-3) = 17 cells for the body → 8 wide runes (16 cells) + 3-cell "…".
+	if rc := countRunes(strings.TrimSuffix(got, "...")); rc != 8 {
+		t.Fatalf("truncated body must be 8 wide runes (17 cells / 2), got %d (got=%q)", rc, got)
 	}
 	// And it must re-encode cleanly (no invalid UTF-8 / replacement bytes).
 	for _, b := range []byte(got) {

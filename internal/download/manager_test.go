@@ -214,6 +214,42 @@ var _ = transport.SkipBody
 
 var _ = io.Discard
 
+// TestDropTerminalTasks_PrunesOldestFirst pins the registry retention policy:
+// once over the cap, terminal (completed/error) tasks are dropped lowest id
+// first, while live/queued tasks are never touched.
+func TestDropTerminalTasks_PrunesOldestFirst(t *testing.T) {
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5e9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id string, s TaskState) *Task {
+		tt := NewTask(TaskID(id), "http://example.invalid", TaskOptions{}, cli, nil, nil)
+		tt.setState(s)
+		return tt
+	}
+	reg := map[TaskID]*Task{
+		"odm-001": mk("odm-001", StateCompleted),
+		"odm-002": mk("odm-002", StateError),
+		"odm-003": mk("odm-003", StateCompleted),
+		"odm-004": mk("odm-004", StateActive),
+		"odm-005": mk("odm-005", StateQueued),
+	}
+	dropTerminalTasks(reg, 2)
+	if len(reg) != 3 {
+		t.Fatalf("want 3 entries after pruning 2, got %d", len(reg))
+	}
+	for _, gone := range []string{"odm-001", "odm-002"} {
+		if _, ok := reg[TaskID(gone)]; ok {
+			t.Fatalf("%s (oldest terminal) should have been pruned", gone)
+		}
+	}
+	for _, kept := range []string{"odm-003", "odm-004", "odm-005"} {
+		if _, ok := reg[TaskID(kept)]; !ok {
+			t.Fatalf("%s should be retained", kept)
+		}
+	}
+}
+
 // serveSlowRange streams a ranged resource in fixed-size non-overlapping pieces
 // with a delay between writes, so one chunk takes several ~100ms progress-tick
 // windows to transfer. This is what exposes the "bar frozen at 0/0 during a long

@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -121,16 +122,48 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 	return t, conns, nil
 }
 
-// track inserts a task into the manager's registry (used by RPC tellActive).
+// maxTrackedTasks bounds the Manager's task registry. The registry backs RPC
+// id lookups (tellStatus/pause/remove/changeOption) and would otherwise grow
+// without limit over a long-lived daemon's lifetime. Once the cap is exceeded,
+// terminal tasks (completed/error — no longer actionable) are pruned oldest
+// first; live/queued tasks are never dropped.
+var maxTrackedTasks = 1000
+
+// track inserts a task into the manager's registry (used by RPC tellActive),
+// pruning the oldest terminal entries once the cap is exceeded.
 func (m *Manager) track(id TaskID, t *Task) {
 	for {
 		cur := m.mu.Load()
 		nv := make(map[TaskID]*Task, len(*cur)+1)
 		maps.Copy(nv, *cur)
 		nv[id] = t
+		if len(nv) > maxTrackedTasks {
+			dropTerminalTasks(nv, len(nv)-maxTrackedTasks)
+		}
 		if m.mu.CompareAndSwap(cur, &nv) {
 			return
 		}
+	}
+}
+
+// dropTerminalTasks removes up to n registry entries whose state is terminal,
+// lowest id first. Terminal tasks can no longer be paused/removed, so dropping
+// them only affects tellStatus for very old tasks — the price of a bounded
+// registry. If fewer than n are terminal (e.g. most are still running) the map
+// stays slightly over the cap rather than dropping live work.
+func dropTerminalTasks(m map[TaskID]*Task, n int) {
+	if n <= 0 {
+		return
+	}
+	ids := make([]TaskID, 0, len(m))
+	for id, t := range m {
+		if s := t.State(); s == StateCompleted || s == StateError {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for i := 0; i < n && i < len(ids); i++ {
+		delete(m, ids[i])
 	}
 }
 
@@ -198,7 +231,7 @@ const (
 // Version is the ODM release string; surfaced over RPC (odm.getVersion) and used
 // in the default User-Agent. Defined here (not import cycling from config) so
 // the engine + RPC layer can read it without depending on config at runtime.
-const Version = "odm/1.1.0"
+const Version = "odm/1.2.0"
 
 // ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {

@@ -1,5 +1,5 @@
-# Binary
-odm
+# Binary (anchored to repo root — a bare `odm` would also ignore cmd/odm/)
+/odm
 
 # Go build artifacts
 *.exe

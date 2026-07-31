@@ -121,3 +121,48 @@ func TestAdmission_NeverExceedsSlotBudget(t *testing.T) {
 		t.Fatalf("admission overshot the slot budget: %d concurrent requests for 1 slot", m)
 	}
 }
+
+// TestStoppedRetentionIsBounded pins the tellStopped retention cap: a daemon
+// with many finished tasks must not keep every one in memory — the stopped
+// list is bounded to maxStoppedTasks, oldest dropped first.
+func TestStoppedRetentionIsBounded(t *testing.T) {
+	old := maxStoppedTasks
+	maxStoppedTasks = 2
+	defer func() { maxStoppedTasks = old }()
+
+	mgr, err := download.NewManager(download.ExecOptions{
+		Dir:         t.TempDir(),
+		Connections: 1,
+		ChunkSize:   4096,
+		Retry:       0,
+		Timeout:     5 * time.Second,
+		MaxRedirect: 3,
+		CheckCert:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	sch := NewEmptyScheduler(1, mgr.NewTask, nil)
+	d := NewDaemon(sch, mgr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+
+	for range 4 {
+		if _, err := d.AddURL("http://example.invalid/x", 1); err != nil {
+			t.Fatalf("AddURL: %v", err)
+		}
+	}
+
+	// All four fail fast on the unresolvable URL; once the queue has drained,
+	// the stopped list must be exactly the cap (2), not 4.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.sch.LiveCount() == 0 && d.sch.QueuedCount() == 0 && len(d.sch.StoppedViews()) == 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stopped list not bounded: live=%d queued=%d stopped=%d",
+		d.sch.LiveCount(), d.sch.QueuedCount(), len(d.sch.StoppedViews()))
+}
