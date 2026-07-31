@@ -46,30 +46,23 @@ jobs:
       - name: Extract version from code
         id: code
         run: |
-          CONFIG_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/config/config.go)
-          MANAGER_VER=$(grep -oP 'const Version = "odm/\K[^"]+' internal/download/manager.go)
+          VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
           PKGBUILD_VER=$(grep -oP 'pkgver=\K.*' packaging/PKGBUILD)
-          echo "config=$CONFIG_VER" >> "$GITHUB_OUTPUT"
-          echo "manager=$MANAGER_VER" >> "$GITHUB_OUTPUT"
+          echo "version_go=$VERSION_GO" >> "$GITHUB_OUTPUT"
           echo "pkgbuild=$PKGBUILD_VER" >> "$GITHUB_OUTPUT"
-          echo "Code versions: config=$CONFIG_VER manager=$MANAGER_VER pkgbuild=$PKGBUILD_VER"
+          echo "Code versions: version.go=$VERSION_GO pkgbuild=$PKGBUILD_VER"
 
       - name: Verify versions match
         run: |
           TAG="${{ steps.tag.outputs.version }}"
-          CONFIG="${{ steps.code.outputs.config }}"
-          MANAGER="${{ steps.code.outputs.manager }}"
+          VERSION_GO="${{ steps.code.outputs.version_go }}"
           PKGBUILD="${{ steps.code.outputs.pkgbuild }}"
 
-          echo "Comparing: tag=$TAG vs config=$CONFIG vs manager=$MANAGER vs pkgbuild=$PKGBUILD"
+          echo "Comparing: tag=$TAG vs version.go=$VERSION_GO vs pkgbuild=$PKGBUILD"
 
           FAIL=0
-          if [ "$TAG" != "$CONFIG" ]; then
-            echo "::error::Tag ($TAG) does not match internal/config/config.go ($CONFIG)"
-            FAIL=1
-          fi
-          if [ "$TAG" != "$MANAGER" ]; then
-            echo "::error::Tag ($TAG) does not match internal/download/manager.go ($MANAGER)"
+          if [ "$TAG" != "$VERSION_GO" ]; then
+            echo "::error::Tag ($TAG) does not match internal/version/version.go ($VERSION_GO)"
             FAIL=1
           fi
           if [ "$TAG" != "$PKGBUILD" ]; then
@@ -78,7 +71,7 @@ jobs:
           fi
 
           if [ "$FAIL" -eq 1 ]; then
-            echo "::error::Version mismatch detected. Bump all versions before tagging."
+            echo "::error::Version mismatch detected. Bump both versions before tagging."
             exit 1
           fi
 

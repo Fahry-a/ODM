@@ -20,6 +20,7 @@ import (
 
 	"odm/internal/ratelimit"
 	"odm/internal/transport"
+	"odm/internal/version"
 )
 
 // Manager glues transport + tasks + scheduler together for the CLI path and is
@@ -131,6 +132,12 @@ var maxTrackedTasks = 1000
 
 // track inserts a task into the manager's registry (used by RPC tellActive),
 // pruning the oldest terminal entries once the cap is exceeded.
+//
+// The copy-on-write CAS map swap is acceptable here because track() runs only
+// on task creation (RPC addUri / batch builds), never on hot download paths —
+// the O(n) map copy per call is cheap relative to the work a new task triggers.
+// Reads (Task/Tasks via m.mu.Load) stay lock-free, which is what matters for
+// the per-tick RPC status polling.
 func (m *Manager) track(id TaskID, t *Task) {
 	for {
 		cur := m.mu.Load()
@@ -229,9 +236,10 @@ const (
 )
 
 // Version is the ODM release string; surfaced over RPC (odm.getVersion) and used
-// in the default User-Agent. Defined here (not import cycling from config) so
-// the engine + RPC layer can read it without depending on config at runtime.
-const Version = "odm/1.2.0"
+// in the default User-Agent. Single-sourced from odm/internal/version, so this
+// const and config.Version are aliases of the same value — a mismatch is now a
+// compile-time error, not a release risk.
+const Version = version.Version
 
 // ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {
