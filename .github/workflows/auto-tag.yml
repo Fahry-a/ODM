@@ -102,6 +102,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # git tag -a needs a committer identity, which bare runners don't have.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           VERSION="${{ steps.validate.outputs.version }}"
           git tag -a "v$VERSION" -m "release: v$VERSION"
           git push origin "v$VERSION"
