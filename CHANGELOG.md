@@ -52,6 +52,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completed-offset list grows with each chunk). It now flushes at most every 16
   chunks or 2 seconds, and concurrent worker writes are serialized so the file
   can't be corrupted by interleaved temp-writes. (`internal/download/task.go`)
+- **RPC `remove` now works on queued tasks** — a task cancelled before it
+  started used to be a silent no-op (`Cancel` had no context to cancel), so it
+  would still download once a slot freed. Cancel now flags the task and `Start`
+  fails fast without touching the server. (`internal/download/task.go`)
+- **Scheduler slot admission is atomic** — the free-slot check, queue pop and
+  live-map insert now happen in one critical section, so a concurrent RPC
+  `Enqueue` and the Run loop can no longer both pass the check and over-subscribe
+  slots by one. The completion channel is also created in the constructor,
+  fixing a latent daemon race where `Enqueue` could read it while `Run` assigned
+  it. (`internal/scheduler/queue.go`)
+- **WebSocket subscribers no longer leak on write failure** — a broken client
+  whose write failed but whose read side stayed open left the read-loop
+  goroutine running until the socket died; both loops now signal each other to
+  exit. (`internal/rpc/ws.go`)
+- **`odm.shutdown` replies before stopping** — the daemon stop used to run
+  concurrently with the response write, risking a truncated "OK"; the response
+  is now flushed first, then the daemon winds down. (`internal/rpc/server.go`)
+- **0-byte completed/error tasks render in the per-file list** — an empty file
+  (or a failed probe) vanished from the list while still counting in the
+  summary; terminal states now always display. (`internal/ui/progress.go`)
 
 ## [1.1.0] - 2026-07-29
 

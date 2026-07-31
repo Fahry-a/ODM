@@ -71,6 +71,7 @@ func NewScheduler(plan *Plan, maker TaskMaker, prog ProgressCB) *Scheduler {
 		slots: len(plan.Parallel),
 		prog:  prog,
 		live:  map[download.TaskID]*scheduledTask{},
+		compl: make(chan scheduledTask, 1),
 	}
 }
 
@@ -100,6 +101,7 @@ func NewEmptyScheduler(slots int, maker TaskMaker, prog ProgressCB) *Scheduler {
 		slots:  slots,
 		prog:   prog,
 		live:   map[download.TaskID]*scheduledTask{},
+		compl:  make(chan scheduledTask, 1),
 		isIdle: true,
 	}
 	// Permanent hold on wg so Run() stays parked (idle) until the daemon's ctx
@@ -110,9 +112,12 @@ func NewEmptyScheduler(slots int, maker TaskMaker, prog ProgressCB) *Scheduler {
 
 // Run blocks until every task (parallel + queued) finishes, or ctx is cancelled.
 // Returns aggregate succeeded/failed counts.
+//
+// s.compl is created by the constructors, not here: the RPC daemon can Enqueue
+// a task (and its launch goroutine starts reading s.compl) the instant Start
+// returns, racing Run's setup — assigning the channel here would be a data race
+// between Run and the first admitted task.
 func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) {
-	s.compl = make(chan scheduledTask, len(s.plan.Parallel)+len(s.plan.Queued)+1)
-
 	// Build the queue (everything starts as "waiting" until a slot is granted).
 	for _, a := range s.plan.Queued {
 		t, _, mErr := s.maker(a.URL, -1)
@@ -120,7 +125,9 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 			atomic.AddInt32(&s.failed, 1)
 			continue
 		}
+		s.mu.Lock()
 		s.queued = append(s.queued, &scheduledTask{task: t, conns: a.Connections})
+		s.mu.Unlock()
 	}
 
 	// Admit up to `slots` initial tasks.
@@ -190,15 +197,18 @@ func (s *Scheduler) releaseIdle() {
 // startOne launches a task with its allocated conns. When it finishes it posts
 // itself to s.compl and decrements the WaitGroup.
 func (s *Scheduler) startOne(ctx context.Context, st *scheduledTask) {
-	// Override the task's connection count with the Balancer's per-file
-	// allocation. The TaskMaker returns the global -c default; the Balancer
-	// may have redistributed the budget (Mode B: 1/file, Mode C: SF/file).
 	st.task.SetConns(st.conns)
 
 	s.mu.Lock()
 	s.live[st.task.ID()] = st
 	s.mu.Unlock()
 
+	s.launch(ctx, st)
+}
+
+// launch runs the task goroutine (the WaitGroup was already counted by the
+// caller) and reports its completion back on s.compl.
+func (s *Scheduler) launch(ctx context.Context, st *scheduledTask) {
 	go func() {
 		defer s.wg.Done()
 		_ = st.task.Start(ctx, st.conns, func(download.ProgressView) { s.emitThrottled() })
@@ -273,8 +283,12 @@ func (s *Scheduler) StoppedViews() []download.ProgressView {
 	return out
 }
 
-// admitNext starts one queued task if there's a free slot. Free-slot check is
-// purely "live < slots"; with sequential completions that's correct and cheap.
+// admitNext starts one queued task if there's a free slot. The free-slot check,
+// the queue pop and the live-map insert happen in ONE critical section, so two
+// concurrent admitters (the Run loop and an RPC Enqueue) can't both pass the
+// check before either has registered its task — that TOCTOU used to let live
+// temporarily exceed slots by one. With the slot reserved atomically, later
+// completions and the slot count stay consistent.
 func (s *Scheduler) admitNext(ctx context.Context) {
 	s.mu.Lock()
 	if len(s.queued) == 0 || len(s.live) >= s.slots {
@@ -283,10 +297,12 @@ func (s *Scheduler) admitNext(ctx context.Context) {
 	}
 	nxt := s.queued[0]
 	s.queued = s.queued[1:]
+	nxt.task.SetConns(nxt.conns)
+	s.live[nxt.task.ID()] = nxt
 	s.mu.Unlock()
 
 	s.wg.Add(1)
-	s.startOne(ctx, nxt)
+	s.launch(ctx, nxt)
 }
 
 // emit forwards a snapshot to the progress callback (nil-safe).

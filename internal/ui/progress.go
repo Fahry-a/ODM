@@ -294,12 +294,15 @@ func aggregate(view []download.ProgressView) viewStats {
 
 // isActive reports whether a task should be rendered in the per-file list.
 // Tasks that haven't started producing data yet (0 bytes, 0 speed) are hidden
-// to avoid cluttering the display with zombie lines that flash briefly.
+// to avoid cluttering the display with zombie lines that flash briefly — but a
+// task that reached a terminal state IS shown even at 0 bytes, otherwise an
+// empty file (or a failed probe) would vanish from the list while still
+// counting toward the summary.
 func isActive(v download.ProgressView) bool {
-	if v.BytesDone == 0 && v.Speed == 0 {
-		return false
+	if v.State == download.StateCompleted || v.State == download.StateError {
+		return true
 	}
-	return true
+	return v.BytesDone != 0 || v.Speed != 0
 }
 
 // Frame renders the full set of task lines + summary, overwriting the previous

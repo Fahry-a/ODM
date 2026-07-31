@@ -64,12 +64,20 @@ func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
 	b.subscribers[sub] = struct{}{}
 	b.mu.Unlock()
 
+	// stop closes sub.drop exactly once. Both loops call it on exit so a failed
+	// write unblocks the read loop (and vice versa) — otherwise a half-closed
+	// connection would leak the read goroutine until the socket actually died.
+	var dropOnce sync.Once
+	stop := func() { dropOnce.Do(func() { close(sub.drop) }) }
+
+	// Pump loop: forward queued events until the connection dies or drop fires.
 	go func() {
 		defer func() {
 			b.mu.Lock()
 			delete(b.subscribers, sub)
 			b.mu.Unlock()
 			_ = c.Close()
+			stop()
 		}()
 		for {
 			select {
@@ -85,13 +93,12 @@ func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
 				return
 			}
 		}
-		// We don't read incoming frames; this is a pure event feed.
 	}()
-	// Read loop: discard inbound messages, exit on close/error.
+	// Read loop: discard inbound frames, exit on close/error.
 	go func() {
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
-				close(sub.drop)
+				stop()
 				return
 			}
 		}

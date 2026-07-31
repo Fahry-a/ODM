@@ -125,9 +125,10 @@ type Task struct {
 	rmMu sync.Mutex
 
 	// lifecycle
-	cancel context.CancelFunc
-	pauseC chan struct{}
-	logf   LogFn
+	cancel    context.CancelFunc
+	cancelled atomic.Bool // set by Cancel; Start fails fast if cancelled while queued
+	pauseC    chan struct{}
+	logf      LogFn
 
 	mu     sync.Mutex // guards state transitions & control-file writes
 	paused bool
@@ -323,6 +324,15 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	ctx, cancel := context.WithCancel(ctx)
 	t.cancel = cancel
 	defer cancel()
+	// A task removed via RPC while still queued never reached Start before;
+	// Cancel had no ctx to cancel. If it was cancelled, fail fast instead of
+	// downloading a file the caller no longer wants.
+	if t.cancelled.Load() {
+		cancel()
+		t.setState(StateError)
+		t.emitFinal(progressSink)
+		return fmt.Errorf("task cancelled before start")
+	}
 	t.startAt = time.Now()
 	t.setState(StateActive)
 	t.baseCtx = ctx
@@ -931,6 +941,7 @@ func (t *Task) Unpause() {
 	t.setState(StateActive)
 }
 func (t *Task) Cancel() {
+	t.cancelled.Store(true)
 	if t.cancel != nil {
 		t.cancel()
 	}
