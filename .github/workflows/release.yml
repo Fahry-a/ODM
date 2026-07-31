@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # needed to dispatch aur-publish.yml (gh workflow run)
 
 jobs:
   release:
@@ -151,3 +152,15 @@ jobs:
             build/checksums.txt
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
+
+      - name: Dispatch AUR publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          # workflow_dispatch is exempt from GitHub's recursion guard (the same
+          # reason auto-tag.yml dispatches this workflow explicitly), so this
+          # reliably starts aur-publish.yml where a workflow_run chain would be
+          # suppressed for GITHUB_TOKEN-triggered runs.
+          gh workflow run aur-publish.yml -f "tag=v${VERSION}" --ref main
+          echo "Dispatched aur-publish.yml for v$VERSION"

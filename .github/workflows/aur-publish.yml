@@ -1,10 +1,6 @@
 name: Publish AUR
 
 on:
-  workflow_run:
-    workflows: ["Release"]
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       tag:
@@ -17,35 +13,19 @@ permissions:
 
 jobs:
   aur-publish:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # fetch all tags so we can resolve the release commit
+          fetch-depth: 0 # full history (commit-to-main rebases onto origin/main)
 
       - name: Resolve version tag
         id: version
         env:
           INPUT_TAG: ${{ inputs.tag }}
-          RUN_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG="$INPUT_TAG"
-          else
-            # Resolve the released version from the commit the Release run used.
-            # head_branch is unreliable for tag-triggered workflow_runs (it can
-            # be the tag, a branch, or empty depending on how the release was
-            # fired). git describe finds the nearest reachable v* tag, which is
-            # the exact tag for a tag-push release and the release tag on the
-            # branch for a workflow_dispatch release.
-            TAG=$(git describe --tags --abbrev=0 "$RUN_SHA" 2>/dev/null || true)
-            if [ -z "$TAG" ]; then
-              echo "::error::No reachable v* tag from workflow run commit $RUN_SHA"
-              exit 1
-            fi
-          fi
+          TAG="$INPUT_TAG"
           if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
             exit 1

@@ -5,7 +5,10 @@
 # When a push bumps the version in both version-bearing files AND the
 # CHANGELOG has an entry for it, an annotated tag is created — and since a
 # GITHUB_TOKEN tag push can't trigger release.yml on its own, release.yml is
-# dispatched explicitly (GitHub Release) → aur-publish.yml (AUR).
+# dispatched explicitly. The recursion guard suppresses workflow_run chains
+# off GITHUB_TOKEN-triggered runs too, so release.yml likewise dispatches
+# aur-publish.yml explicitly — full chain: auto-tag → release.yml
+# (GitHub Release) → aur-publish.yml (AUR).
 #
 # Safeguards so it never tags the wrong thing:
 #   1. Strict consistency — both files must carry the SAME version, or the
