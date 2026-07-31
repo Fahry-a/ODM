@@ -1,6 +1,7 @@
 package download
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 )
@@ -32,6 +33,12 @@ type ChunkQueue struct {
 	total     int64       // sum of completed chunk sizes
 }
 
+// defaultChunkSize is used when the caller specifies no chunk size (or a
+// non-positive one). Defined once because both the queue splitter and the
+// resume hash verifier (chunkSpan) must agree on the effective chunk
+// boundaries — a mismatch would compute the wrong span for a completed chunk.
+const defaultChunkSize = 4 * 1024 * 1024
+
 // NewChunkQueue builds the chunk list for a file of totalSize using chunkSize
 // bytes per chunk (§11.1). If totalSize<0 (sizeless stream) the queue has a
 // single "whole file" chunk (Start=0 End=-1, Index=0) — the single-stream
@@ -43,7 +50,7 @@ func NewChunkQueue(totalSize, chunkSize int64) *ChunkQueue {
 		return q
 	}
 	if chunkSize < 1 {
-		chunkSize = 4 * 1024 * 1024
+		chunkSize = defaultChunkSize
 	}
 	if totalSize == 0 {
 		// Empty file: nothing to download. Zero chunks.
@@ -60,7 +67,44 @@ func NewChunkQueue(totalSize, chunkSize int64) *ChunkQueue {
 		start = end + 1
 		idx++
 	}
+	q.validateChunks(totalSize)
 	return q
+}
+
+// validateChunks asserts the chunk-boundary invariant NewChunkQueue must
+// produce: every chunk has Start >= 0 and End >= Start-1, chunks are strictly
+// contiguous (next.Start == prev.End+1), and together they cover exactly
+// [0, totalSize) with no gaps or overlaps.
+//
+// This is a programming-error guard, not a runtime error path: the generation
+// loop above is provably correct, so a violation means a future change to the
+// splitting logic (or a bad caller-supplied chunkSize) broke the invariant. The
+// right failure mode is a panic, because a queue with overlapping or gapped
+// chunks would silently corrupt the output file through concurrent WriteAt
+// (see storage.File.WriteAt's disjoint-range contract) — and the panic message
+// names the exact chunk and offset so the bug is immediately diagnosable.
+func (q *ChunkQueue) validateChunks(totalSize int64) {
+	for i, c := range q.chunks {
+		if c.Start < 0 {
+			panic(fmt.Sprintf("odm: chunk boundary invariant violated: chunk %d Start=%d < 0", i, c.Start))
+		}
+		if c.End < c.Start-1 {
+			panic(fmt.Sprintf("odm: chunk boundary invariant violated: chunk %d End=%d < Start-1 (%d)", i, c.End, c.Start))
+		}
+		if i == 0 {
+			if c.Start != 0 {
+				panic(fmt.Sprintf("odm: chunk boundary invariant violated: first chunk Start=%d, want 0", c.Start))
+			}
+		} else {
+			prev := q.chunks[i-1]
+			if c.Start != prev.End+1 {
+				panic(fmt.Sprintf("odm: chunk boundary invariant violated: chunk %d Start=%d, want prev.End+1=%d (gap or overlap)", i, c.Start, prev.End+1))
+			}
+		}
+		if i == len(q.chunks)-1 && c.End != totalSize-1 {
+			panic(fmt.Sprintf("odm: chunk boundary invariant violated: last chunk End=%d, want %d", c.End, totalSize-1))
+		}
+	}
 }
 
 // ResetCompletedOffsets pre-seeds the completed set with byte-offsets already

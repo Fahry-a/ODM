@@ -161,6 +161,103 @@ func TestSaveControl_NoLeftoverTmp(t *testing.T) {
 	}
 }
 
+// TestSaveLoadControl_ChunkHashesRoundTrip verifies that per-chunk hashes
+// survive a Save → Load cycle — the resume-verification path depends on this
+// fidelity. JSON map keys marshal as strings and unmarshal back to int64.
+func TestSaveLoadControl_ChunkHashesRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "hashed.bin")
+	in := &ControlFile{
+		URL:       "https://example.com/hashed.bin",
+		TotalSize: 1024,
+		ChunkSize: 256,
+		Completed: []int64{0, 256},
+		ChunkHashes: map[int64]string{
+			0:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	}
+	if err := SaveControl(dest, in); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	out, err := LoadControl(dest)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !reflect.DeepEqual(out.ChunkHashes, in.ChunkHashes) {
+		t.Fatalf("ChunkHashes round-trip mismatch\nin  = %v\nout = %v", in.ChunkHashes, out.ChunkHashes)
+	}
+	if !reflect.DeepEqual(out.Completed, in.Completed) {
+		t.Fatalf("Completed round-trip mismatch\nin  = %v\nout = %v", in.Completed, out.Completed)
+	}
+}
+
+// TestLoadControl_LegacyWithoutChunkHashes: a v0.x-era control file that has no
+// chunk_hashes key must load with a nil map (legacy), leaving resume to fall
+// back to the server-side sample compare, and must not disturb Completed.
+func TestLoadControl_LegacyWithoutChunkHashes(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "legacy.bin")
+	legacy := `{
+  "url": "https://example.com/legacy.bin",
+  "total_size": 1024,
+  "chunk_size": 256,
+  "completed": [0, 256]
+}`
+	if err := os.WriteFile(ControlPath(dest), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cf, err := LoadControl(dest)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cf.ChunkHashes != nil {
+		t.Fatalf("legacy file should load with nil ChunkHashes, got %v", cf.ChunkHashes)
+	}
+	if !reflect.DeepEqual(cf.Completed, []int64{0, 256}) {
+		t.Fatalf("Completed = %v, want [0 256]", cf.Completed)
+	}
+}
+
+// TestControlFile_ChunkHashHelpers pins SetChunkHash/ChunkHash: lazy map
+// creation, exact key round-trip, and safe read on a nil (legacy) map.
+func TestControlFile_ChunkHashHelpers(t *testing.T) {
+	var cf ControlFile
+	if _, ok := cf.ChunkHash(0); ok {
+		t.Fatalf("legacy nil map must report not-found")
+	}
+	cf.SetChunkHash(4096, "deadbeef")
+	if got, ok := cf.ChunkHash(4096); !ok || got != "deadbeef" {
+		t.Fatalf("ChunkHash(4096) = %q, %v; want deadbeef, true", got, ok)
+	}
+	if _, ok := cf.ChunkHash(8192); ok {
+		t.Fatalf("unset offset must report not-found")
+	}
+}
+
+// TestSaveControl_OmitsEmptyChunkHashes: omitempty must drop a nil hash map
+// from the JSON entirely so new files stay backward-compatible with readers
+// that predate the field.
+func TestSaveControl_OmitsEmptyChunkHashes(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "f.bin")
+	cf := &ControlFile{URL: "u", TotalSize: 10, ChunkSize: 2, Completed: []int64{0}}
+	if err := SaveControl(dest, cf); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	b, err := os.ReadFile(ControlPath(dest))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("not parseable JSON: %v", err)
+	}
+	if _, ok := raw["chunk_hashes"]; ok {
+		t.Fatalf("chunk_hashes should be omitempty'd when nil, got: %v", raw)
+	}
+}
+
 // TestRemoveControl_Idempotent: deleting twice (or deleting a non-existent
 // file) must succeed — the engine calls this defensively on completion.
 func TestRemoveControl_Idempotent(t *testing.T) {

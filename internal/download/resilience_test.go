@@ -3,6 +3,8 @@ package download
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"odm/internal/ratelimit"
+	"odm/internal/storage"
 	"odm/internal/transport"
 )
 
@@ -428,5 +431,410 @@ func TestResume_VerifyPassesIntactData(t *testing.T) {
 	}
 	if sawVerify {
 		t.Fatalf("intact data must pass the integrity check, logs: %v", *msgs)
+	}
+}
+
+// TestResume_HashVerifyPassesIntactData pins the per-chunk hash resume path:
+// an interrupted download persists ChunkHashes in its control file; on resume,
+// intact completed chunks pass the local-disk hash verification, so only the
+// missing chunk is fetched and the final file is byte-identical.
+func TestResume_HashVerifyPassesIntactData(t *testing.T) {
+	payload := make([]byte, 4*1024) // 4 chunks of 1 KiB
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	failSrv := serveFlakyChunk(t, payload, 3*1024, 1<<30)
+	defer failSrv.Close()
+	goodSrv := serveRangeServer(t, payload)
+	defer goodSrv.Close()
+
+	dir := t.TempDir()
+	newMgr := func(server string, logf downloadLogFn) *Manager {
+		t.Helper()
+		m, err := NewManager(ExecOptions{
+			Dir:         dir,
+			OutFile:     "out.bin",
+			Connections: 1,
+			Retry:       0,
+			RetryWait:   5 * time.Millisecond,
+			Continue:    true,
+			ChunkSize:   1024,
+			Timeout:     5 * time.Second,
+			MaxRedirect: 3,
+			CheckCert:   true,
+		}, logf)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		return m
+	}
+
+	// Pass 1: chunk 3 permanently fails → control file persists with hashes
+	// for chunks 0..2.
+	if err := newMgr(failSrv.URL, nil).Run(context.Background(), failSrv.URL, 1); err == nil {
+		t.Fatalf("pass 1 should fail on the always-failing chunk")
+	}
+	path := filepath.Join(dir, "out.bin")
+	cf, err := storage.LoadControl(path)
+	if err != nil {
+		t.Fatalf("load control: %v", err)
+	}
+	if len(cf.ChunkHashes) != 3 {
+		t.Fatalf("expected 3 recorded chunk hashes after the interrupted pass, got %d (map=%v)",
+			len(cf.ChunkHashes), cf.ChunkHashes)
+	}
+	if len(cf.Completed) != 3 {
+		t.Fatalf("Completed = %v, want 3 entries", cf.Completed)
+	}
+
+	// Pass 2: intact data must pass the hash check and resume (no re-download).
+	logf, msgs, mu := captureLog()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := newMgr(goodSrv.URL, logf).Run(ctx, goodSrv.URL, 1); err != nil {
+		t.Fatalf("pass 2 resume should succeed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("final content mismatch (len %d want %d)", len(got), len(payload))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	sawResume, sawVerify := false, false
+	for _, m := range *msgs {
+		if strings.Contains(m, "resuming") {
+			sawResume = true
+		}
+		if strings.Contains(m, "resume integrity check failed") {
+			sawVerify = true
+		}
+	}
+	if !sawResume {
+		t.Fatalf("expected the resume path to be taken, logs: %v", *msgs)
+	}
+	if sawVerify {
+		t.Fatalf("intact data must pass the hash integrity check, logs: %v", *msgs)
+	}
+}
+
+// TestResume_HashDetectsCorruptChunk pins the per-chunk hash resume check:
+// when an interrupted download's control file carries ChunkHashes, a corrupt
+// on-disk completed chunk must be caught by hashing the LOCAL bytes (no server
+// round-trip needed) and the engine must re-download from scratch.
+func TestResume_HashDetectsCorruptChunk(t *testing.T) {
+	payload := make([]byte, 4*1024) // 4 chunks of 1 KiB
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	failSrv := serveFlakyChunk(t, payload, 3*1024, 1<<30) // chunk 3 always fails
+	defer failSrv.Close()
+	goodSrv := serveRangeServer(t, payload)
+	defer goodSrv.Close()
+
+	dir := t.TempDir()
+	newMgr := func(server string, logf downloadLogFn) *Manager {
+		t.Helper()
+		m, err := NewManager(ExecOptions{
+			Dir:         dir,
+			OutFile:     "out.bin",
+			Connections: 1,
+			Retry:       0,
+			RetryWait:   5 * time.Millisecond,
+			Continue:    true,
+			ChunkSize:   1024,
+			Timeout:     5 * time.Second,
+			MaxRedirect: 3,
+			CheckCert:   true,
+		}, logf)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		return m
+	}
+
+	// Pass 1: chunk 3 permanently fails → task errors, control file persists
+	// with per-chunk hashes for chunks 0..2.
+	if err := newMgr(failSrv.URL, nil).Run(context.Background(), failSrv.URL, 1); err == nil {
+		t.Fatalf("pass 1 should fail on the always-failing chunk")
+	}
+	path := filepath.Join(dir, "out.bin")
+	cf, err := storage.LoadControl(path)
+	if err != nil {
+		t.Fatalf("load control: %v", err)
+	}
+	if len(cf.ChunkHashes) != 3 {
+		t.Fatalf("expected 3 recorded chunk hashes, got %d (map=%v)", len(cf.ChunkHashes), cf.ChunkHashes)
+	}
+
+	// Corrupt one byte inside the completed chunk 1 region (offset 1024-2047).
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b[1500] ^= 0xFF
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 2: resume must detect the corrupt chunk via its recorded hash and
+	// re-download everything from scratch.
+	logf, msgs, mu := captureLog()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := newMgr(goodSrv.URL, logf).Run(ctx, goodSrv.URL, 1); err != nil {
+		t.Fatalf("pass 2 should succeed after re-download: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("final content mismatch (len %d want %d)", len(got), len(payload))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, m := range *msgs {
+		if strings.Contains(m, "resume integrity check failed") {
+			return
+		}
+	}
+	t.Fatalf("expected a resume integrity warning, logs: %v", *msgs)
+}
+
+// TestResume_LegacyControlFile_UsesServerCompare pins backward compatibility:
+// a hand-written v0.x control file WITHOUT ChunkHashes must still resume
+// through the legacy server-side sample compare (not the hash path) and
+// complete byte-identically.
+func TestResume_LegacyControlFile_UsesServerCompare(t *testing.T) {
+	payload := make([]byte, 4*1024) // 4 chunks of 1 KiB
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	srv := serveRangeServer(t, payload)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.bin")
+
+	// Hand-write a legacy control file claiming chunks 0..2 are done, and put
+	// those chunks' (correct) bytes on disk ourselves — exactly what an old
+	// interrupted download would have left behind.
+	if err := os.WriteFile(path, payload[:3*1024], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacy := fmt.Sprintf(`{
+  "url": %q,
+  "total_size": %d,
+  "chunk_size": 1024,
+  "completed": [0, 1024, 2048]
+}`, srv.URL, len(payload))
+	if err := os.WriteFile(path+".odm", []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	logf, msgs, mu := captureLog()
+	m, err := NewManager(ExecOptions{
+		Dir:         dir,
+		OutFile:     "out.bin",
+		Connections: 1,
+		Retry:       0,
+		RetryWait:   5 * time.Millisecond,
+		Continue:    true,
+		ChunkSize:   1024,
+		Timeout:     5 * time.Second,
+		MaxRedirect: 3,
+		CheckCert:   true,
+	}, logf)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.Run(ctx, srv.URL, 1); err != nil {
+		t.Fatalf("legacy resume should succeed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("final content mismatch (len %d want %d)", len(got), len(payload))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	sawResume, sawVerify := false, false
+	for _, m := range *msgs {
+		if strings.Contains(m, "resuming") {
+			sawResume = true
+		}
+		if strings.Contains(m, "resume integrity check failed") {
+			sawVerify = true
+		}
+	}
+	if !sawResume {
+		t.Fatalf("expected the resume path to be taken (legacy fallback), logs: %v", *msgs)
+	}
+	if sawVerify {
+		t.Fatalf("intact legacy data must pass the server-compare check, logs: %v", *msgs)
+	}
+}
+
+// TestResume_HashPathStillDetectsServerDrift pins the M1 regression: a resume
+// with full per-chunk hash coverage must STILL run the sampled server-side
+// compare. A server that replaced the file with same-size, no-ETag content
+// goes unnoticed by the local hashes (they match the ORIGINAL bytes on disk),
+// so only the server compare can catch the drift — otherwise the resume would
+// stitch old completed chunks to the new tail and report success on a mixed,
+// corrupt file. The final file must byte-match the NEW payload exactly.
+func TestResume_HashPathStillDetectsServerDrift(t *testing.T) {
+	// F1: payload served during the interrupted first pass.
+	f1 := make([]byte, 4*1024)
+	for i := range f1 {
+		f1[i] = byte(i % 251)
+	}
+	// F2: same size, no ETag, differs from F1 at every byte.
+	f2 := make([]byte, len(f1))
+	for i := range f2 {
+		f2[i] = f1[i] ^ 0xFF
+	}
+	failSrv := serveFlakyChunk(t, f1, 3*1024, 1<<30) // pass 1: chunk 3 always fails
+	defer failSrv.Close()
+	goodSrv := serveRangeServer(t, f2) // pass 2: different payload, same size, no ETag
+	defer goodSrv.Close()
+
+	dir := t.TempDir()
+	newMgr := func(server string, logf downloadLogFn) *Manager {
+		t.Helper()
+		m, err := NewManager(ExecOptions{
+			Dir:         dir,
+			OutFile:     "out.bin",
+			Connections: 1,
+			Retry:       0,
+			RetryWait:   5 * time.Millisecond,
+			Continue:    true,
+			ChunkSize:   1024,
+			Timeout:     5 * time.Second,
+			MaxRedirect: 3,
+			CheckCert:   true,
+		}, logf)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		return m
+	}
+
+	// Pass 1: interrupted with hashes recorded for chunks 0..2 of F1.
+	if err := newMgr(failSrv.URL, nil).Run(context.Background(), failSrv.URL, 1); err == nil {
+		t.Fatalf("pass 1 should fail on the always-failing chunk")
+	}
+	path := filepath.Join(dir, "out.bin")
+	cf, err := storage.LoadControl(path)
+	if err != nil {
+		t.Fatalf("load control: %v", err)
+	}
+	if len(cf.ChunkHashes) != 3 {
+		t.Fatalf("expected 3 recorded chunk hashes, got %d (map=%v)", len(cf.ChunkHashes), cf.ChunkHashes)
+	}
+
+	// Pass 2: same size, no ETag, different bytes. The local hashes still
+	// match (disk holds F1's chunks), so ONLY the server-side compare can
+	// catch the drift. It must trigger a full re-download from scratch.
+	logf, msgs, mu := captureLog()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := newMgr(goodSrv.URL, logf).Run(ctx, goodSrv.URL, 1); err != nil {
+		t.Fatalf("pass 2 should succeed after re-download: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, f2) {
+		t.Fatalf("final content must byte-match F2 exactly — a mixed old/new file means the server drift went undetected")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, m := range *msgs {
+		if strings.Contains(m, "resume integrity check failed") {
+			return
+		}
+	}
+	t.Fatalf("expected a resume integrity warning (server drift), logs: %v", *msgs)
+}
+
+// TestResume_PartialHashCoverageFallsBackToServerCompare pins the S1 fix: a
+// control file whose ChunkHashes cover only SOME completed chunks (e.g. a
+// hash-less v1.x file that was resumed once — new chunks got hashes, legacy
+// completed chunks didn't — then interrupted again) must NOT fail the resume.
+// With partial coverage the engine must fall back to the legacy server-side
+// compare for the whole set; treating the gap as fatal would wipe intact
+// legacy progress and re-download from scratch.
+func TestResume_PartialHashCoverageFallsBackToServerCompare(t *testing.T) {
+	payload := make([]byte, 4*1024) // 4 chunks of 1 KiB
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	srv := serveRangeServer(t, payload)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.bin")
+
+	// On disk: correct bytes for chunks 0..2 (completed during an earlier run).
+	if err := os.WriteFile(path, payload[:3*1024], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Control file: chunks 0..2 completed, but only chunk 0 carries a hash.
+	hash0 := sha256.Sum256(payload[:1024])
+	cf := &storage.ControlFile{
+		URL:         srv.URL,
+		TotalSize:   int64(len(payload)),
+		ChunkSize:   1024,
+		Completed:   []int64{0, 1024, 2048},
+		ChunkHashes: map[int64]string{0: hex.EncodeToString(hash0[:])},
+	}
+	if err := storage.SaveControl(path, cf); err != nil {
+		t.Fatalf("save control: %v", err)
+	}
+
+	logf, msgs, mu := captureLog()
+	m, err := NewManager(ExecOptions{
+		Dir:         dir,
+		OutFile:     "out.bin",
+		Connections: 1,
+		Retry:       0,
+		RetryWait:   5 * time.Millisecond,
+		Continue:    true,
+		ChunkSize:   1024,
+		Timeout:     5 * time.Second,
+		MaxRedirect: 3,
+		CheckCert:   true,
+	}, logf)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.Run(ctx, srv.URL, 1); err != nil {
+		t.Fatalf("partial-coverage resume should succeed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("final content mismatch (len %d want %d)", len(got), len(payload))
+	}
+	// The resume must NOT have fallen back to a full re-download: the missing
+	// hash for chunk 1024 is a coverage gap, not corruption.
+	mu.Lock()
+	defer mu.Unlock()
+	for _, m := range *msgs {
+		if strings.Contains(m, "resume integrity check failed") {
+			t.Fatalf("partial hash coverage must fall back to the server compare, not fail the resume; logs: %v", *msgs)
+		}
 	}
 }
