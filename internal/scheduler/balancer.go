@@ -10,7 +10,6 @@
 package scheduler
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 )
@@ -267,6 +266,3 @@ func (p *Plan) SortPlan() {
 		return p.Parallel[i].Connections > p.Parallel[j].Connections
 	})
 }
-
-// ErrNoURLs is a sentinel returned by Compute when the file list is empty.
-var ErrNoURLs = errors.New("no URLs provided")

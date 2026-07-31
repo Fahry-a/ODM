@@ -242,6 +242,3 @@ func (d *Daemon) TellStopped() []download.ProgressView {
 func (d *Daemon) OnComplete(f func(download.ProgressView)) {
 	d.sch.OnComplete(f)
 }
-
-// Manager delegated to public method NeedsReplacing. Manager.findTask is
-// defined here since Daemon is in the scheduler package already.

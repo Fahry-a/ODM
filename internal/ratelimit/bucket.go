@@ -18,15 +18,19 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"golang.org/x/time/rate"
 )
 
-// Limiter is the shared global rate limiter. A nil Limiter or one with lr==nil
-// means "unlimited": Acquire/Reader are cheap no-ops.
+// Limiter is the shared global rate limiter. The underlying *rate.Limiter is
+// held in an atomic pointer so SetRate (RPC changeOption) can swap it while
+// workers are concurrently calling Acquire/Reader — a plain field would be a
+// data race between the RPC goroutine and every active download worker. A nil
+// loaded pointer means "unlimited": Acquire/Reader are cheap no-ops.
 type Limiter struct {
-	lr    *rate.Limiter // nil ⇒ unlimited
-	bytes int64         // configured rate (bytes/sec), 0 = unlimited
+	lr    atomic.Pointer[rate.Limiter]
+	bytes atomic.Int64 // configured rate (bytes/sec), 0 = unlimited
 }
 
 // New builds a Limiter from a --limit-rate string ("5M", "500K", "0"/""/off =
@@ -46,23 +50,32 @@ func New(spec string) (*Limiter, error) {
 	}
 	// Burst = bps so a burst up to 1s of the cap is allowed (matches x/time/rate
 	// ergonomics; the long-run average stays at bps).
-	return &Limiter{lr: rate.NewLimiter(rate.Limit(bps), int(bps)), bytes: bps}, nil
+	l := &Limiter{}
+	l.bytes.Store(bps)
+	l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
+	return l, nil
 }
 
 // BytesPerSec returns the configured rate, or 0 when unlimited.
-func (l *Limiter) BytesPerSec() int64 { return l.bytes }
+func (l *Limiter) BytesPerSec() int64 {
+	if l == nil {
+		return 0
+	}
+	return l.bytes.Load()
+}
 
 // Unlimited reports whether the limiter is disabled.
-func (l *Limiter) Unlimited() bool { return l == nil || l.lr == nil }
+func (l *Limiter) Unlimited() bool { return l == nil || l.lr.Load() == nil }
 
 // SetRate updates the global rate limit at runtime. spec is the same format as
-// New ("5M", "500K", "off"/""=unlimited). Safe for concurrent use — x/time/rate
-// Limiter.SetLimit and SetBurst are goroutine-safe.
+// New ("5M", "500K", "off"/""=unlimited). Safe for concurrent use — the limiter
+// itself is swapped/stored atomically, and x/time/rate's SetLimit/SetBurst are
+// goroutine-safe.
 func (l *Limiter) SetRate(spec string) error {
 	spec = strings.TrimSpace(spec)
 	if spec == "" || strings.EqualFold(spec, "off") || spec == "0" {
-		l.lr = nil
-		l.bytes = 0
+		l.lr.Store(nil)
+		l.bytes.Store(0)
 		return nil
 	}
 	bps, err := ParseRate(spec)
@@ -70,17 +83,18 @@ func (l *Limiter) SetRate(spec string) error {
 		return err
 	}
 	if bps <= 0 {
-		l.lr = nil
-		l.bytes = 0
+		l.lr.Store(nil)
+		l.bytes.Store(0)
 		return nil
 	}
-	l.bytes = bps
-	if l.lr == nil {
+	l.bytes.Store(bps)
+	cur := l.lr.Load()
+	if cur == nil {
 		// was unlimited; create a fresh limiter
-		l.lr = rate.NewLimiter(rate.Limit(bps), int(bps))
+		l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
 	} else {
-		l.lr.SetLimit(rate.Limit(bps))
-		l.lr.SetBurst(int(bps))
+		cur.SetLimit(rate.Limit(bps))
+		cur.SetBurst(int(bps))
 	}
 	return nil
 }
@@ -91,7 +105,8 @@ func (l *Limiter) Acquire(ctx context.Context, n int) error {
 	if l.Unlimited() || n <= 0 {
 		return nil
 	}
-	if err := l.lr.WaitN(ctx, min(n, l.lr.Burst())); err != nil {
+	lr := l.lr.Load()
+	if err := lr.WaitN(ctx, min(n, lr.Burst())); err != nil {
 		return fmt.Errorf("rate: %w", err)
 	}
 	return nil

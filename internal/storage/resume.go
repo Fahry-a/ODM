@@ -31,12 +31,12 @@ type ControlFile struct {
 	Completed []int64 `json:"completed"` // sorted chunk-byte-offsets already written
 
 	// Extended fields (v0.2.0+) — all omitempty for backward compat with v0.1.0 files
-	CreatedAt   time.Time `json:"created_at,omitempty"`    // when this control file was first written
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`    // last checkpoint timestamp
-	Connections int       `json:"connections,omitempty"`   // parallel connections used
-	UserAgent   string    `json:"user_agent,omitempty"`    // UA sent to server
-	ODMVersion  string    `json:"odm_version,omitempty"`   // version that created this file
-	Checksum    string    `json:"checksum,omitempty"`      // "algo:hex" if --checksum was used
+	CreatedAt   time.Time `json:"created_at,omitempty"`  // when this control file was first written
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`  // last checkpoint timestamp
+	Connections int       `json:"connections,omitempty"` // parallel connections used
+	UserAgent   string    `json:"user_agent,omitempty"`  // UA sent to server
+	ODMVersion  string    `json:"odm_version,omitempty"` // version that created this file
+	Checksum    string    `json:"checksum,omitempty"`    // "algo:hex" if --checksum was used
 }
 
 // NoControlFile is returned by LoadControl when the `.odm` file is absent.

@@ -45,7 +45,7 @@ internal/logging → Leveled logger (--log / --log-level)
 
 ## Testing quirks
 
-- `internal/rpc` tests start real httptest servers with real downloads; they take several seconds under `-race`. `TestServer_AddURIAndTellActive` was previously documented as flaky but passes consistently in recent runs (the test uses a 2 s tolerant poll loop + checks both `tellActive` and `tellWaiting`).
+- `internal/rpc` tests start real httptest servers with real downloads; they take several seconds under `-race`. `TestServer_AddURIAndTellActive` polled only `tellActive`/`tellWaiting` and was flaky because the task (an unresolvable `example.invalid`) can move from waiting to stopped between 20ms polls; it now also polls `tellStopped` and is deterministic.
 - `internal/download` tests use httptest servers with real chunk downloads; they take several seconds under `-race`.
 - `internal/storage` tests use `t.TempDir()` and concurrent goroutines to stress `WriteAt` non-overlap.
 - `internal/logging` tests swap the unexported `from`/`file` fields to capture output in a buffer (same-package test access).

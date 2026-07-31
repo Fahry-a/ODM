@@ -38,25 +38,25 @@ type Manager struct {
 // ExecOptions is the subset of *config.Options the Manager exercises during a
 // download. Mirrors TaskOptions + a couple of batch-level knobs.
 type ExecOptions struct {
-	Dir         string
-	OutFile     string // single-file override (-o)
-	Connections int
-	MaxConn     int
-	SplitFile   int
-	Retry       int
-	RetryWait   time.Duration
-	Continue    bool
-	ChunkSize   int64
-	Timeout     time.Duration
-	MaxRedirect int
-	Checksum       string // "algo:hex" or ""
-	LimitRate      string // "5M"/"500K"/""=unlimited
-	TaskLimitRate  string // "2M"/""=unlimited — per-task cap
-	UserAgent      string
-	Headers     []string
-	Referer     string
-	Proxy       string
-	CheckCert   bool
+	Dir           string
+	OutFile       string // single-file override (-o)
+	Connections   int
+	MaxConn       int
+	SplitFile     int
+	Retry         int
+	RetryWait     time.Duration
+	Continue      bool
+	ChunkSize     int64
+	Timeout       time.Duration
+	MaxRedirect   int
+	Checksum      string // "algo:hex" or ""
+	LimitRate     string // "5M"/"500K"/""=unlimited
+	TaskLimitRate string // "2M"/""=unlimited — per-task cap
+	UserAgent     string
+	Headers       []string
+	Referer       string
+	Proxy         string
+	CheckCert     bool
 }
 
 // NewManager builds a Manager. The underlying transport.Client + rate limiter
@@ -107,7 +107,6 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 	t := NewTask(id, url, TaskOptions{
 		OutputName:    m.opts.OutFile,
 		Dir:           m.opts.Dir,
-		Connections:   m.opts.Connections,
 		Retry:         m.opts.Retry,
 		RetryWait:     m.opts.RetryWait,
 		Continue:      m.opts.Continue,
@@ -153,6 +152,14 @@ func (m *Manager) Task(id TaskID) *Task {
 // VerifyChecksum streams the downloaded file through the requested hash and
 // compares against the expected hex digest. Returns nil on match.
 func (m *Manager) VerifyChecksum(path, algo, expectHex string) error {
+	return verifyChecksum(path, algo, expectHex)
+}
+
+// verifyChecksum is the shared checksum core: hash the file at path and compare
+// against expectHex. Used by Manager.VerifyChecksum and by Task (which verifies
+// the actual written file — including a Content-Disposition-derived name — so a
+// server-side rename can't make the CLI check the wrong path).
+func verifyChecksum(path, algo, expectHex string) error {
 	var h hash.Hash
 	switch strings.ToLower(algo) {
 	case "md5":
