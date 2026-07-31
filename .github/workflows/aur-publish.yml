@@ -118,9 +118,9 @@ jobs:
           pkgbuild: packaging/PKGBUILD
           assets: |
             packaging/.SRCINFO
-            packaging/*.1
-            packaging/*.conf.example
-            packaging/*.service
+            packaging/odm-bin-*.1
+            packaging/odm-bin-*.conf.example
+            packaging/odm-bin-*.service
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
