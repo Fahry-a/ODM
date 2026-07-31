@@ -164,6 +164,35 @@ func TestFile_ConcurrentWriteAt_NoOverlap(t *testing.T) {
 			}
 		}
 	}
+
+	// Full-file assertion: the concatenation of all disjoint spans must be
+	// exactly what was written, byte-identical.
+	got, err := io.ReadAll(mustReader(t, f.Path()))
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+	if len(got) != chunk*chunks {
+		t.Fatalf("final size = %d, want %d", len(got), chunk*chunks)
+	}
+	for i := 0; i < chunks; i++ {
+		want := byte('A' + i%26)
+		for j := 0; j < chunk; j++ {
+			if got[i*chunk+j] != want {
+				t.Fatalf("full-file byte %d = %#x, want %#x", i*chunk+j, got[i*chunk+j], want)
+			}
+		}
+	}
+}
+
+// mustReader opens path for reading or fails the test.
+func mustReader(t *testing.T, path string) io.Reader {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
 }
 
 // TestFile_Reader re-opens the destination for sequential reads (the

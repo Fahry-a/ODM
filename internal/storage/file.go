@@ -52,8 +52,17 @@ func OpenForWrite(dir, name string, size int64) (*File, error) {
 	return &File{path: path, f: f, size: size}, nil
 }
 
-// WriteAt writes b at the given offset. Safe for concurrent use across workers
-// writing distinct offsets (non-overlapping chunks).
+// WriteAt writes b at the given offset. Safe for concurrent use ONLY when
+// callers write non-overlapping byte ranges: the download engine guarantees
+// this via chunk boundaries (see ChunkQueue), so no mutex serializes the
+// writes. This is a deliberate design choice — os.File.WriteAt positions each
+// write at its offset via the kernel, giving zero-copy lock-free throughput.
+//
+// Overlapping concurrent writes would corrupt data silently (no error is
+// raised; the last writer wins per byte), so callers MUST NOT overlap. If the
+// disjoint-range invariant is ever broken, the failure mode is silent file
+// corruption, not a crash — that is why NewChunkQueue panics on any chunk
+// layout that could produce overlapping writes.
 func (w *File) WriteAt(b []byte, off int64) (int, error) {
 	n, err := w.f.WriteAt(b, off)
 	return n, err

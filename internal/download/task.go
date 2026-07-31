@@ -3,9 +3,13 @@ package download
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -130,8 +134,15 @@ type Task struct {
 	pauseC    chan struct{}
 	logf      LogFn
 
-	mu     sync.Mutex // guards state transitions & control-file writes
+	mu     sync.Mutex // guards state transitions, control-file writes, and chunkHashes
 	paused bool
+
+	// chunkHashes records the SHA-256 of each successfully completed chunk's
+	// bytes, keyed by the chunk's Start offset. Guarded by mu (store happens
+	// once per completed chunk, never on the copy hot loop). Checkpoints
+	// persist these alongside CompletedOffsets so a resume can verify all
+	// completed chunks against local disk.
+	chunkHashes map[int64]string
 
 	// mid-flight reallocation
 	connTarget atomic.Int32 // desired connection count (≤ conns for drain)
@@ -220,13 +231,14 @@ func NewTask(id TaskID, url string, opts TaskOptions, client *transport.Client, 
 	}
 	taskLim, _ := ratelimit.New(opts.TaskLimitRate)
 	t := &Task{
-		id:     id,
-		url:    url,
-		opts:   opts,
-		client: client,
-		lim:    lim,
-		pauseC: make(chan struct{}, 1),
-		logf:   logf,
+		id:          id,
+		url:         url,
+		opts:        opts,
+		client:      client,
+		lim:         lim,
+		pauseC:      make(chan struct{}),
+		chunkHashes: map[int64]string{},
+		logf:        logf,
 	}
 	t.taskLim.Store(taskLim)
 	return t
@@ -275,6 +287,11 @@ func (t *Task) SupportsRange() bool { return t.probe != nil && t.probe.SupportsR
 
 // State reports the current lifecycle state (snapshot through the atomic).
 func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
+
+// Connections reports the number of live worker connections. Unlike
+// Snapshot().Connections this reads only the atomic counter — it never touches
+// the probe result — so it is safe to poll while a task is still probing.
+func (t *Task) Connections() int { return int(t.conns.Load()) }
 
 // SetConns overrides the task's connection count. Used by the Scheduler to
 // apply the Balancer's per-file allocation, which may differ from the global
@@ -392,10 +409,13 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		qs = -1
 	}
 	q := NewChunkQueue(qs, t.opts.ChunkSize)
+	t.queue = q // set early: resume restore/verification below reads the queue
 
 	alreadyDone := int64(0)
+	var controlFile *storage.ControlFile
 	if t.opts.Continue {
 		if cf, cerr := storage.LoadControl(t.outPath); cerr == nil {
+			controlFile = cf
 			// ETag validation: if both are non-empty and don't match, the file
 			// changed on the server — do NOT resume stale chunks.
 			if cf.ETag != "" && pr.ETag != "" && cf.ETag != pr.ETag {
@@ -410,6 +430,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 					alreadyDone = 0
 				} else {
 					t.bytesDone.Store(alreadyDone)
+					// Carry the recorded hashes into this run so checkpoints keep
+					// persisting them (otherwise the next resume would silently
+					// downgrade to the legacy server-compare fallback).
+					t.restoreChunkHashes(cf)
 					t.logf("info", "resuming %s: %d bytes already written", outName, alreadyDone)
 				}
 			}
@@ -424,16 +448,20 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	}
 	t.disk = disk
 	defer disk.Close()
-	t.queue = q
 
 	if alreadyDone > 0 {
-		// Resume integrity check: spot-check completed chunks against the server
-		// so a silently-changed file (no ETag to detect it) or corrupt/stale
-		// on-disk bytes can't be resumed into a corrupt result. Any mismatch →
+		// Resume integrity check: verify the completed chunks are intact before
+		// trusting them. Two complementary checks — per-chunk SHA-256 hashes
+		// verify every completed chunk against local disk (catches local
+		// corruption), and the sampled server-side compare detects server drift
+		// (a same-size replacement the ETag check can't see). Legacy control
+		// files (no hashes) rely on the server compare alone. Any mismatch →
 		// full re-download.
-		if err := t.verifyResumedChunks(ctx); err != nil {
+		if err := t.verifyResumedData(ctx, controlFile); err != nil {
 			t.logf("warn", "resume integrity check failed (%v) — re-downloading from scratch", err)
 			alreadyDone = 0
+			t.bytesDone.Store(0)
+			t.clearChunkHashes()
 			q = NewChunkQueue(qs, t.opts.ChunkSize)
 			t.queue = q
 		}
@@ -531,13 +559,9 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 			return
 		}
 
-		if t.isPaused() {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.unpauseSignal():
-			}
-		}
+		// Block while paused. Broadcast-close wake-up: Unpause releases every
+		// worker blocked here, not just one (see Pause/Unpause).
+		t.pauseGate(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -600,8 +624,13 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 			}
 		}
 		t.setState(StateActive)
-		err := t.fetchAndWrite(ctx, c, sink)
+		// Per-attempt hasher: every byte written to disk is fed through it, but
+		// the digest is only recorded on a fully-successful attempt — a hash is
+		// never stored for a partially-written chunk.
+		h := sha256.New()
+		err := t.fetchAndWrite(ctx, c, sink, h)
 		if err == nil {
+			t.storeChunkHash(c.Start, hex.EncodeToString(h.Sum(nil)))
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -614,8 +643,9 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 }
 
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
-// by the global limiter and accounting bytes into progress.
-func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView)) error {
+// by the global limiter and accounting bytes into progress. h receives every
+// byte written to disk so the caller can record the chunk's SHA-256 on success.
+func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView), h hash.Hash) error {
 	// Per-chunk timeout prevents a stalled connection from hanging a worker
 	// forever. Each chunk gets Timeout*10 to complete (default 300s = 5 min).
 	// If the timeout fires, the chunk is retried by the caller (downloadChunk).
@@ -628,7 +658,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 
 	// Sizeless single-stream chunk: plain GET, no Range.
 	if t.probe.TotalSize < 0 || (t.probe.SingleStream && c.Start == 0 && c.Index == 0) {
-		return t.fetchWhole(chunkCtx, c, sink)
+		return t.fetchWhole(chunkCtx, c, sink, h)
 	}
 
 	end := c.End
@@ -653,7 +683,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	// positions the write at Start regardless of the file pointer.
 	buf := make([]byte, 64*1024)
 	var off int64
-	n, err := copyChunkFrom(body, t.disk, c.Start, buf, &off, func(delta int64) {
+	n, err := copyChunkFrom(body, t.disk, c.Start, buf, &off, h, func(delta int64) {
 		t.noteBytes(delta, sink)
 	})
 	if err != nil {
@@ -670,7 +700,8 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 // fetchWhole handles the sizeless or range-less single-stream case (§11.2):
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
-func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView)) error {
+// h receives every byte written to disk (the whole-file chunk's SHA-256).
+func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash) error {
 	// Per-chunk timeout prevents a stalled connection from hanging forever.
 	chunkTimeout := t.opts.Timeout * 10
 	if chunkTimeout <= 0 {
@@ -696,21 +727,26 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView))
 		body = io.NopCloser(tl.Reader(chunkCtx, body))
 	}
 	buf := make([]byte, 64*1024)
-	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), func(delta int64) {
+	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), h, func(delta int64) {
 		t.noteBytes(delta, sink)
 	})
 	return err
 }
 
 // copyChunkFrom copies r into w.WriteAt at base offset, advancing a local
-// offset counter, calling onProgress for each read's delta. Returns total n.
-func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, onProgress func(int64)) (int64, error) {
+// offset counter, feeding every written byte through h (may be nil), and
+// calling onProgress for each read's delta. Returns total n.
+func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64)) (int64, error) {
 	var total int64
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			if _, werr := w.WriteAt(buf[:n], base+*off); werr != nil {
 				return total, werr
+			}
+			if h != nil {
+				// sha256.Write never fails; ignore the count/error.
+				_, _ = h.Write(buf[:n])
 			}
 			*off += int64(n)
 			total += int64(n)
@@ -865,13 +901,18 @@ func (t *Task) persistControl() {
 		t.controlCreatedAt = now
 	}
 	t.lastPersist = now
+	completed := t.queue.completedOffsetsLocked()
 	cf := &storage.ControlFile{
 		URL:       t.url,
 		FinalURL:  t.probe.FinalURL,
 		TotalSize: t.probe.TotalSize,
 		ChunkSize: t.opts.ChunkSize,
 		ETag:      t.probe.ETag,
-		Completed: t.queue.completedOffsetsLocked(),
+		Completed: completed,
+		// Per-chunk SHA-256 hashes for resume verification — only for chunks
+		// recorded as completed (a hash can exist for a chunk whose bytes were
+		// written but that never reached MarkDone; those must not be trusted).
+		ChunkHashes: t.snapshotChunkHashes(completed),
 		// Extended metadata
 		CreatedAt:   t.controlCreatedAt,
 		UpdatedAt:   now,
@@ -926,6 +967,176 @@ func (t *Task) verifyResumedChunks(ctx context.Context) error {
 	return nil
 }
 
+// storeChunkHash records the SHA-256 hex digest of a successfully completed
+// chunk, keyed by its Start offset. Guarded by t.mu — the same lock
+// persistControl holds when reading the map, so no second mutex is needed.
+// This runs once per completed chunk, never on the copy hot loop.
+func (t *Task) storeChunkHash(start int64, sum string) {
+	t.mu.Lock()
+	t.chunkHashes[start] = sum
+	t.mu.Unlock()
+}
+
+// clearChunkHashes drops all recorded hashes — used when a resume integrity
+// check fails and the download restarts from scratch, so stale hashes can't
+// leak into the fresh run's checkpoints.
+func (t *Task) clearChunkHashes() {
+	t.mu.Lock()
+	t.chunkHashes = make(map[int64]string)
+	t.mu.Unlock()
+}
+
+// restoreChunkHashes seeds the in-memory hash map from a control file being
+// resumed, so hashes of previously-completed chunks survive into subsequent
+// checkpoints instead of being dropped (which would downgrade the next resume
+// to the legacy server-compare fallback). Only hashes for offsets the queue
+// actually accepted as completed are carried over. Caller holds no lock.
+func (t *Task) restoreChunkHashes(cf *storage.ControlFile) {
+	if len(cf.ChunkHashes) == 0 || t.queue == nil {
+		return
+	}
+	done := t.queue.completedOffsetsLocked()
+	t.mu.Lock()
+	for _, off := range done {
+		if sum, ok := cf.ChunkHashes[off]; ok {
+			t.chunkHashes[off] = sum
+		}
+	}
+	t.mu.Unlock()
+}
+
+// snapshotChunkHashes returns the recorded hashes for the given completed
+// offsets — the subset of t.chunkHashes that has actually been marked done.
+// Called from persistControl with t.mu held.
+func (t *Task) snapshotChunkHashes(completed []int64) map[int64]string {
+	if len(t.chunkHashes) == 0 {
+		return nil
+	}
+	out := make(map[int64]string, len(completed))
+	for _, off := range completed {
+		if sum, ok := t.chunkHashes[off]; ok {
+			out[off] = sum
+		}
+	}
+	return out
+}
+
+// verifyResumedData checks the integrity of completed chunks before a resume
+// trusts them. It composes TWO independent guarantees:
+//
+//   - Local disk integrity: when every completed chunk has a recorded per-chunk
+//     SHA-256 hash (control files written by this version), each completed
+//     chunk's on-disk bytes are hashed and compared — catching local
+//     corruption/truncation with no network traffic. Partial coverage (e.g. a
+//     hash-less legacy control file that was resumed once: new chunks get
+//     hashes, legacy completed chunks don't) does NOT fail the resume; it
+//     simply downgrades to the legacy server-side compare.
+//
+//   - Server drift: the sampled server-side compare (verifyResumedChunks)
+//     detects that the server replaced the file with same-size content since
+//     the original download. The stored hashes are of the ORIGINAL bytes, so
+//     they cannot catch such a replacement by themselves — this is why the
+//     two checks are complementary, never alternatives. It no-ops for
+//     single-stream/sizeless downloads.
+//
+// Either failure → the caller re-downloads from scratch.
+func (t *Task) verifyResumedData(ctx context.Context, cf *storage.ControlFile) error {
+	// Local disk integrity, per-chunk hashes (only when coverage is complete).
+	if t.hasFullHashCoverage(cf) {
+		if err := t.verifyResumedHashes(cf); err != nil {
+			return err
+		}
+	}
+	// Server drift, sampled compare — independent of hashes.
+	return t.verifyResumedChunks(ctx)
+}
+
+// hasFullHashCoverage reports whether every completed chunk in cf has a
+// recorded per-chunk hash — the precondition for hash-based local
+// verification. Partial coverage must not fail a resume: it just falls back
+// to the legacy server-side compare for the whole set.
+func (t *Task) hasFullHashCoverage(cf *storage.ControlFile) bool {
+	if cf == nil || len(cf.ChunkHashes) == 0 {
+		return false
+	}
+	for off := range cf.CompletedOffsets() {
+		if _, ok := cf.ChunkHash(off); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// verifyResumedHashes verifies every completed chunk recorded in cf against
+// the on-disk bytes, using the per-chunk SHA-256 hashes captured while the
+// chunk was first downloaded and persisted in the control file. This catches
+// LOCAL corruption of already-written chunks — flipped/zero-filled bytes,
+// truncation, a partial write. Server-side drift is covered separately by
+// verifyResumedChunks (the stored hashes are of the original bytes, so they
+// cannot detect a same-size replacement). A single mismatch fails the whole
+// resume so the caller re-downloads from scratch.
+func (t *Task) verifyResumedHashes(cf *storage.ControlFile) error {
+	if t.probe == nil || t.probe.TotalSize <= 0 {
+		return nil
+	}
+	offsets := cf.CompletedOffsets()
+	starts := make([]int64, 0, len(offsets))
+	for off := range offsets {
+		starts = append(starts, off)
+	}
+	// Deterministic order: error diagnostics should name a stable chunk, not
+	// whichever map iteration happened to visit first.
+	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
+	buf := make([]byte, 64*1024)
+	for _, off := range starts {
+		want, ok := cf.ChunkHash(off)
+		if !ok {
+			return fmt.Errorf("resume hash check at %d: no recorded hash for completed chunk", off)
+		}
+		start, end := t.chunkSpan(off)
+		if end < start {
+			return fmt.Errorf("resume hash check at %d: invalid span [%d, %d]", off, start, end)
+		}
+		h := sha256.New()
+		for pos := start; pos <= end; {
+			n := int64(len(buf))
+			if pos+n-1 > end {
+				n = end - pos + 1
+			}
+			if _, err := t.disk.ReadAt(buf[:n], pos); err != nil {
+				return fmt.Errorf("resume hash check at %d: read: %w", off, err)
+			}
+			_, _ = h.Write(buf[:n])
+			pos += n
+		}
+		if hex.EncodeToString(h.Sum(nil)) != want {
+			return fmt.Errorf("resume hash check at %d: on-disk data differs from recorded hash", off)
+		}
+	}
+	return nil
+}
+
+// chunkSpan returns the byte span [start, end] that a chunk beginning at
+// `start` occupies in the current layout, mirroring NewChunkQueue's split
+// arithmetic. The single-stream whole-file chunk (Start=0, End=-1) spans the
+// entire known size.
+func (t *Task) chunkSpan(start int64) (int64, int64) {
+	if t.probe.SingleStream {
+		return 0, t.probe.TotalSize - 1
+	}
+	// Mirror NewChunkQueue's silent default: a non-positive ChunkSize would
+	// otherwise produce end = start-1 and spuriously fail every hash verify.
+	cs := t.opts.ChunkSize
+	if cs < 1 {
+		cs = defaultChunkSize
+	}
+	end := start + cs - 1
+	if t.probe.TotalSize > 0 && end >= t.probe.TotalSize {
+		end = t.probe.TotalSize - 1
+	}
+	return start, end
+}
+
 // SetTaskRate updates the per-task rate limit at runtime. spec="" or "off" →
 // unlimited. Used by RPC changeOption with "max-download-limit-per-task". Safe
 // for concurrent use: creates a new limiter atomically (readers snapshot
@@ -941,34 +1152,73 @@ func (t *Task) SetTaskRate(spec string) bool {
 }
 
 // Pause / Unpause are RPC-facing hooks (§10. pause/unpause).
+//
+// The pause mechanism is a broadcast-close wake-up, NOT a one-shot signal:
+//   - Pause sets the `paused` flag; workers rendezvous in pauseGate (below),
+//     which blocks on the current pauseC channel.
+//   - Unpause clears the flag, CLOSES pauseC, and installs a fresh channel.
+//     Close is a broadcast: every worker blocked in pauseGate wakes, re-checks
+//     the flag under t.mu, and proceeds. A single send on a buffered(1) channel
+//     would instead wake only ONE of N blocked workers and leave the rest
+//     blocked forever (Start's workerWg.Wait would never return) — that is the
+//     bug this design replaces. The fresh channel ensures the next Pause has
+//     an open channel for workers to block on again (a closed channel would
+//     let them spin instead of sleeping).
+//
+// The gate reads the channel atomically with the flag (under t.mu), so a
+// worker can never block on a channel that a concurrent Unpause has already
+// closed-and-replaced. See pauseGate.
 func (t *Task) Pause() {
 	t.mu.Lock()
 	t.paused = true
 	t.mu.Unlock()
 	t.setState(StatePaused)
 }
+
 func (t *Task) Unpause() {
 	t.mu.Lock()
-	t.paused = false
-	t.mu.Unlock()
-	select {
-	case t.pauseC <- struct{}{}:
-	default:
+	if t.paused {
+		t.paused = false
+		close(t.pauseC)                    // broadcast: wake ALL workers in pauseGate
+		t.pauseC = make(chan struct{})     // fresh channel for the next pause cycle
 	}
+	t.mu.Unlock()
 	t.setState(StateActive)
 }
+
+// pauseGate blocks the calling worker while the task is paused, returning when
+// the task is unpaused (or ctx is cancelled). It is the worker-loop pause
+// gate: a worker that reaches it while paused sleeps on pauseC instead of
+// burning CPU or draining the queue.
+//
+// Correctness: the channel is read under t.mu — atomically with the `paused`
+// flag — so the wait target is always the channel current for this pause
+// cycle. Unpause closes that channel (waking every waiter) before replacing
+// it, so no worker can be left sleeping on a stale channel after unpausing.
+// The `for t.paused` re-check handles a pause that races the wake-up: a worker
+// woken by a close re-locks, sees paused==true (a new Pause won the race),
+// and blocks on the freshly-installed channel.
+func (t *Task) pauseGate(ctx context.Context) {
+	t.mu.Lock()
+	for t.paused {
+		ch := t.pauseC
+		t.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+		}
+		t.mu.Lock()
+	}
+	t.mu.Unlock()
+}
+
 func (t *Task) Cancel() {
 	t.cancelled.Store(true)
 	if t.cancel != nil {
 		t.cancel()
 	}
 }
-func (t *Task) isPaused() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.paused
-}
-func (t *Task) unpauseSignal() <-chan struct{} { return t.pauseC }
 
 // ListCompletedOffsetsLocked is used by persistControl; name says locked but
 // the chunkqueue method is itself locked, this just bridges naming.

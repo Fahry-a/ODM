@@ -21,6 +21,13 @@ import (
 //   - UserAgent: the UA string sent to the server (consistency on resume)
 //   - ODMVersion: which ODM version created this file (compatibility)
 //   - Checksum: file hash if known from --checksum flag (integrity on resume)
+//
+// ChunkHashes records the lowercase hex SHA-256 of every completed chunk's
+// bytes, keyed by the chunk's Start byte offset. A resume verifies these
+// against local disk to catch on-disk corruption of already-written chunks;
+// server-side drift (a same-size replacement the ETag check can't see) is
+// caught by the sampled server-side compare. Legacy files without the map
+// fall back to that server-side compare for everything.
 type ControlFile struct {
 	// Core fields (v0.1.0)
 	URL       string  `json:"url"`
@@ -37,6 +44,13 @@ type ControlFile struct {
 	UserAgent   string    `json:"user_agent,omitempty"`  // UA sent to server
 	ODMVersion  string    `json:"odm_version,omitempty"` // version that created this file
 	Checksum    string    `json:"checksum,omitempty"`    // "algo:hex" if --checksum was used
+
+	// ChunkHashes: per-chunk SHA-256 digests for resume verification.
+	// Key = chunk Start byte offset, value = lowercase hex sha256 of that
+	// chunk's bytes. JSON map keys marshal as strings, so map[int64]string
+	// round-trips cleanly. Missing map (nil) = legacy control file; resume
+	// falls back to the server-side sample compare.
+	ChunkHashes map[int64]string `json:"chunk_hashes,omitempty"`
 }
 
 // NoControlFile is returned by LoadControl when the `.odm` file is absent.
@@ -100,6 +114,23 @@ func (cf *ControlFile) CompletedOffsets() map[int64]struct{} {
 		m[off] = struct{}{}
 	}
 	return m
+}
+
+// SetChunkHash records the lowercase-hex SHA-256 of a completed chunk's bytes,
+// keyed by the chunk's Start byte offset. The map is created lazily so legacy
+// control files (no hashes) stay nil until a hash is actually stored.
+func (cf *ControlFile) SetChunkHash(start int64, sum string) {
+	if cf.ChunkHashes == nil {
+		cf.ChunkHashes = make(map[int64]string)
+	}
+	cf.ChunkHashes[start] = sum
+}
+
+// ChunkHash returns the recorded hash for the chunk starting at `start`, if
+// present. Reading a nil map is safe — legacy files simply report not-found.
+func (cf *ControlFile) ChunkHash(start int64) (string, bool) {
+	sum, ok := cf.ChunkHashes[start]
+	return sum, ok
 }
 
 // DirOf is a small helper used by callers that build destPath via filepath.Join.
