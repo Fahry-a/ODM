@@ -28,6 +28,7 @@ import (
 	"odm/internal/scheduler"
 	"odm/internal/transport"
 	"odm/internal/ui"
+	"odm/internal/version"
 )
 
 func main() {
@@ -243,7 +244,7 @@ func preHelpOrVersion(argv []string) bool {
 			printUsage(os.Stdout)
 			return true
 		case "-V", "--version":
-			fmt.Println(download.Version)
+			fmt.Println(version.Version)
 			return true
 		}
 	}
@@ -570,5 +571,5 @@ URLs, -i is recommended.
 
 Exit codes: 0 ok | 1 bad args | 2 network (all retries exhausted) | 3 partial |
             4 cancelled.
-`, download.Version, download.Version)
+`, version.Version, version.Version)
 }

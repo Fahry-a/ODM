@@ -117,10 +117,10 @@ func TestPause_UnpauseWakesAllWorkers(t *testing.T) {
 	// directly (not Snapshot, which also reads the probe result and would race
 	// with Start's in-flight probe).
 	deadline := time.Now().Add(10 * time.Second)
-	for tk.Connections() != workers {
+	for tk.conns.Load() != int32(workers) {
 		if time.Now().After(deadline) {
 			t.Fatalf("workers never reached %d (conns=%d, state=%s)",
-				workers, tk.Connections(), tk.State())
+				workers, tk.conns.Load(), tk.State())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

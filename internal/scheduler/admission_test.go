@@ -61,6 +61,16 @@ func serveSlowSized(t *testing.T, payload []byte, step int, drip time.Duration) 
 	return srv, &max
 }
 
+// liveQueuedCounts is a race-free count of the scheduler's live/queued maps.
+// len(LiveViews())/len(QueuedViews()) would work but snapshot each task, and
+// Snapshot reads the task's probe result while Start may still be writing it
+// (see task.go Snapshot vs Start) — the poll loop below would race.
+func liveQueuedCounts(s *Scheduler) (live, queued int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.live), len(s.queued)
+}
+
 // TestAdmission_NeverExceedsSlotBudget guards the admitNext fix: the free-slot
 // check, the queue pop and the live-map insert must happen in one critical
 // section. Previously an RPC Enqueue and the Run loop could both pass the
@@ -108,14 +118,16 @@ func TestAdmission_NeverExceedsSlotBudget(t *testing.T) {
 	// Wait for both tasks to drain through the single slot.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if d.sch.LiveCount() == 0 && d.sch.QueuedCount() == 0 && len(d.sch.StoppedViews()) >= 2 {
+		l, q := liveQueuedCounts(d.sch)
+		if l == 0 && q == 0 && len(d.sch.StoppedViews()) >= 2 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if len(d.sch.StoppedViews()) < 2 {
+		l, q := liveQueuedCounts(d.sch)
 		t.Fatalf("tasks never drained: live=%d queued=%d stopped=%d",
-			d.sch.LiveCount(), d.sch.QueuedCount(), len(d.sch.StoppedViews()))
+			l, q, len(d.sch.StoppedViews()))
 	}
 	if m := max.Load(); m > 1 {
 		t.Fatalf("admission overshot the slot budget: %d concurrent requests for 1 slot", m)
@@ -158,11 +170,13 @@ func TestStoppedRetentionIsBounded(t *testing.T) {
 	// the stopped list must be exactly the cap (2), not 4.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if d.sch.LiveCount() == 0 && d.sch.QueuedCount() == 0 && len(d.sch.StoppedViews()) == 2 {
+		l, q := liveQueuedCounts(d.sch)
+		if l == 0 && q == 0 && len(d.sch.StoppedViews()) == 2 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	l, q := liveQueuedCounts(d.sch)
 	t.Fatalf("stopped list not bounded: live=%d queued=%d stopped=%d",
-		d.sch.LiveCount(), d.sch.QueuedCount(), len(d.sch.StoppedViews()))
+		l, q, len(d.sch.StoppedViews()))
 }

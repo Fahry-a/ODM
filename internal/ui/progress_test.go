@@ -46,7 +46,7 @@ func TestRenderTaskLine_Format(t *testing.T) {
 		Filename: "linux-cachyos", TotalSize: 120 << 20, Speed: 25 << 20,
 		BytesDone: 86 << 20, Connections: 16, State: download.StateActive, ETA: 5 * time.Second,
 	}
-	line := RenderTaskLine(v, false)
+	line := renderTaskLine(v, false, -1, 0, 20, BarWidth)
 	for _, want := range []string{"linux-cachyos", "86.0M/120.0M", "x16", "71%", "%"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %s", want, line)
@@ -88,10 +88,10 @@ func TestRenderTaskLine_FixedColumns(t *testing.T) {
 		return i
 	}
 
-	ref := RenderTaskLine(variants[0], false)
+	ref := renderTaskLine(variants[0], false, -1, 0, 20, BarWidth)
 	refBar, refPct, refLen := barIdx(ref), pctIdx(ref), len([]rune(ref))
 	for _, v := range variants {
-		line := RenderTaskLine(v, false)
+		line := renderTaskLine(v, false, -1, 0, 20, BarWidth)
 		if got := barIdx(line); got != refBar {
 			t.Fatalf("bar column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refBar, got, ref, line)
 		}
@@ -300,7 +300,7 @@ func TestTruncateName_RuneSafe(t *testing.T) {
 	// whole. The old byte-based `name[:17]` would have sliced mid-codepoint and
 	// produced mojibake.
 	cjk := "日本語のファイル.bin"
-	got := truncateName(cjk)
+	got := truncateNameTo(cjk, 20)
 	if got != cjk {
 		t.Fatalf("short multibyte name must be unchanged, got %q", got)
 	}
@@ -308,12 +308,12 @@ func TestTruncateName_RuneSafe(t *testing.T) {
 	// A deliberately long multibyte name must still end on a codepoint boundary,
 	// and the budget is display CELLS (CJK = 2 cells each), not runes.
 	long := strings.Repeat("日", 40) // 40 codepoints = 80 cells
-	got = truncateName(long)
+	got = truncateNameTo(long, 20)
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("long name must end with ellipsis, got %q", got)
 	}
-	if d := displayWidth(got); d > maxNameRunes {
-		t.Fatalf("truncated name exceeds the %d-cell budget: %d cells (got=%q)", maxNameRunes, d, got)
+	if d := displayWidth(got); d > 20 {
+		t.Fatalf("truncated name exceeds the %d-cell budget: %d cells (got=%q)", 20, d, got)
 	}
 	// (maxNameRunes-3) = 17 cells for the body → 8 wide runes (16 cells) + 3-cell "…".
 	if rc := countRunes(strings.TrimSuffix(got, "...")); rc != 8 {
@@ -778,9 +778,9 @@ func TestAnsiVisibleWidth(t *testing.T) {
 		{"abc\x1b[31mdef\x1b[0mghi", 9}, // mix: 3 + 3 + 3
 	}
 	for _, tc := range cases {
-		got := ansiVisibleWidth(tc.s)
+		got := displayWidth(tc.s)
 		if got != tc.want {
-			t.Fatalf("ansiVisibleWidth(%q) = %d, want %d", tc.s, got, tc.want)
+			t.Fatalf("displayWidth(%q) = %d, want %d", tc.s, got, tc.want)
 		}
 	}
 }
@@ -789,15 +789,15 @@ func TestTruncateVisibleWidth(t *testing.T) {
 	colored := "\x1b[33mc\x1b[0m o o o o o o o o o"
 	// Visible: "c o o o o o o o o o" = 19 chars. Truncate to 5 → "c o o " + reset.
 	got := truncateVisibleWidth(colored, 5)
-	if ansiVisibleWidth(got) != 5 {
-		t.Fatalf("truncateVisibleWidth(_, 5): visible width = %d, want 5", ansiVisibleWidth(got))
+	if displayWidth(got) != 5 {
+		t.Fatalf("truncateVisibleWidth(_, 5): visible width = %d, want 5", displayWidth(got))
 	}
 	// The result must not end with an unclosed color (reset must be present
 	// if the last segment was a visible char inside a color span).
 	// Check: the last visible char should not be preceded by an unreset color.
 	// Simple check: if the string contains any color code, the part after the
 	// last visible char must either be plain or have a reset.
-	if ansiVisibleWidth(got) > 0 {
+	if displayWidth(got) > 0 {
 		// Verify no partial escape sequences by checking valid UTF-8.
 		if !utf8.ValidString(got) {
 			t.Fatalf("truncated colored string is not valid UTF-8: %q", got)
@@ -812,8 +812,8 @@ func TestTruncateVisibleWidth(t *testing.T) {
 
 	// Width >= visible: returns unchanged.
 	got = truncateVisibleWidth("\x1b[33mab\x1b[0m", 10)
-	if ansiVisibleWidth(got) != 2 {
-		t.Fatalf("should not truncate when width >= visible: got visible width %d", ansiVisibleWidth(got))
+	if displayWidth(got) != 2 {
+		t.Fatalf("should not truncate when width >= visible: got visible width %d", displayWidth(got))
 	}
 }
 
@@ -822,7 +822,7 @@ func TestTruncateToWidth_AnsiAware(t *testing.T) {
 	// truncateToWidth must preserve ANSI codes intact.
 	line := "\x1b[33mlinux-cachyos        \x1b[0m  500.0 MiB  \x1b[33m  1.9 MiB/s\x1b[0m  00:04:18  [\x1b[35mx16 \x1b[0m\x1b[33mc\x1b[0m\x1b[32m----\x1b[0m\x1b[36m o o\x1b[0m]  \x1b[33m  1%\x1b[0m"
 	got := truncateToWidth(line, 80)
-	visible := ansiVisibleWidth(got)
+	visible := displayWidth(got)
 	if visible > 80 {
 		t.Fatalf("truncateToWidth should limit visible width to 80, got %d", visible)
 	}

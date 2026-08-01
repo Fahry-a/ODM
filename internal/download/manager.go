@@ -6,7 +6,6 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -20,7 +19,6 @@ import (
 
 	"odm/internal/ratelimit"
 	"odm/internal/transport"
-	"odm/internal/version"
 )
 
 // Manager glues transport + tasks + scheduler together for the CLI path and is
@@ -94,9 +92,6 @@ func (m *Manager) Client() *transport.Client { return m.client }
 
 // Limiter exposes the global limiter.
 func (m *Manager) Limiter() *ratelimit.Limiter { return m.lim }
-
-// Opts exposes the manager's options (tests + RPC inspect them).
-func (m *Manager) Opts() ExecOptions { return m.opts }
 
 // NewTask is the TaskMaker the Scheduler calls. It produces a Task bound to the
 // Manager's client + limiter and records it in the task map so the RPC layer
@@ -189,16 +184,10 @@ func (m *Manager) Task(id TaskID) *Task {
 	return cur[id]
 }
 
-// VerifyChecksum streams the downloaded file through the requested hash and
-// compares against the expected hex digest. Returns nil on match.
-func (m *Manager) VerifyChecksum(path, algo, expectHex string) error {
-	return verifyChecksum(path, algo, expectHex)
-}
-
 // verifyChecksum is the shared checksum core: hash the file at path and compare
-// against expectHex. Used by Manager.VerifyChecksum and by Task (which verifies
-// the actual written file — including a Content-Disposition-derived name — so a
-// server-side rename can't make the CLI check the wrong path).
+// against expectHex. Used by Task (which verifies the actual written file —
+// including a Content-Disposition-derived name — so a server-side rename can't
+// make the CLI check the wrong path).
 func verifyChecksum(path, algo, expectHex string) error {
 	var h hash.Hash
 	switch strings.ToLower(algo) {
@@ -235,12 +224,6 @@ const (
 	ExitCancelled = 4
 )
 
-// Version is the ODM release string; surfaced over RPC (odm.getVersion) and used
-// in the default User-Agent. Single-sourced from odm/internal/version, so this
-// const and config.Version are aliases of the same value — a mismatch is now a
-// compile-time error, not a release risk.
-const Version = version.Version
-
 // ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {
 	switch {
@@ -269,9 +252,6 @@ func (m *Manager) ResolveDest(url string) string {
 	}
 	return filepath.Join(m.opts.Dir, name)
 }
-
-// ErrNoTasks is returned by bootstrap helpers when there's nothing to schedule.
-var ErrNoTasks = errors.New("no tasks to schedule")
 
 // Run is a convenience wrapper used by tests: it runs a single task directly
 // (Mode A path) on the given URL+conns and returns its error. The CLI flow

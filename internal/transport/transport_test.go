@@ -133,15 +133,15 @@ func TestGetRange_PartialContent(t *testing.T) {
 	srv := serveRange(t, payload, false)
 	defer srv.Close()
 	c, _ := NewClient(ClientConfig{MaxRedirect: 5})
-	rr, err := c.GetRange(context.Background(), srv.URL, 4, 7)
+	resp, err := c.GetRange(context.Background(), srv.URL, 4, 7)
 	if err != nil {
 		t.Fatalf("GetRange: %v", err)
 	}
-	defer rr.Resp.Body.Close()
-	if !rr.SupportsRange {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
 		t.Fatalf("expected 206 partial content")
 	}
-	got, _ := io.ReadAll(rr.Resp.Body)
+	got, _ := io.ReadAll(resp.Body)
 	if string(got) != "4567" {
 		t.Fatalf("want '4567', got %q", got)
 	}
@@ -430,15 +430,15 @@ func TestSocks5ProxyDownload(t *testing.T) {
 	// locally and send an IP address to the proxy.
 	originURL, _ := url.Parse(origin.URL)
 	target := "http://localhost:" + originURL.Port() + "/"
-	rr, err := c.GetRange(context.Background(), target, 0, -1)
+	resp, err := c.GetRange(context.Background(), target, 0, -1)
 	if err != nil {
 		t.Fatalf("GetRange through socks5: %v", err)
 	}
-	defer rr.Resp.Body.Close()
-	if !rr.SupportsRange {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
 		t.Fatal("expected a 206 ranged response through the proxy")
 	}
-	got, _ := io.ReadAll(rr.Resp.Body)
+	got, _ := io.ReadAll(resp.Body)
 	if string(got) != string(payload) {
 		t.Fatalf("download through socks5: got %q, want %q", got, payload)
 	}
@@ -475,12 +475,12 @@ func TestSocks5hProxySideDNS(t *testing.T) {
 
 	originURL, _ := url.Parse(origin.URL)
 	target := "http://" + fakeHost + ":" + originURL.Port() + "/"
-	rr, err := c.GetRange(context.Background(), target, 0, int64(len(payload)-1))
+	resp, err := c.GetRange(context.Background(), target, 0, int64(len(payload)-1))
 	if err != nil {
 		t.Fatalf("GetRange through socks5h: %v", err)
 	}
-	defer rr.Resp.Body.Close()
-	got, _ := io.ReadAll(rr.Resp.Body)
+	defer resp.Body.Close()
+	got, _ := io.ReadAll(resp.Body)
 	if string(got) != string(payload) {
 		t.Fatalf("download through socks5h: got %q, want %q", got, payload)
 	}
@@ -521,13 +521,13 @@ func TestHTTPProxyStillWiredViaTransportProxy(t *testing.T) {
 
 func TestSocks5ProxyInvalidURL(t *testing.T) {
 	for _, u := range []string{
-		"socks5://",           // missing host
-		"socks5://:1080",      // empty host
-		"socks5://127.0.0.1:0", // port out of range
+		"socks5://",                // missing host
+		"socks5://:1080",           // empty host
+		"socks5://127.0.0.1:0",     // port out of range
 		"socks5://127.0.0.1:99999", // port out of range (strconv/65535 check in newSocks5Dialer)
-		"socks5h://[::1",      // url.Parse rejects
-		"socks5://host:notaport", // url.Parse rejects
-		"ftp://example.com",   // unsupported scheme
+		"socks5h://[::1",           // url.Parse rejects
+		"socks5://host:notaport",   // url.Parse rejects
+		"ftp://example.com",        // unsupported scheme
 	} {
 		if _, err := NewClient(ClientConfig{Proxy: u}); err == nil {
 			t.Errorf("NewClient(Proxy=%q): expected an error, got nil", u)

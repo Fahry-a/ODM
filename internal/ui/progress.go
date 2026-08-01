@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,18 +87,11 @@ func (c *cursor) ordered() []download.ProgressView {
 		leftovers = append(leftovers, v)
 	}
 	// deterministic: by id so the same set always renders the same way.
-	sortByID(leftovers)
+	slices.SortStableFunc(leftovers, func(a, b download.ProgressView) int {
+		return strings.Compare(string(a.ID), string(b.ID))
+	})
 	out = append(out, leftovers...)
 	return out
-}
-
-func sortByID(vs []download.ProgressView) {
-	// simple insertion sort — the leftover set is tiny (a few retired tasks).
-	for i := 1; i < len(vs); i++ {
-		for j := i; j > 0 && string(vs[j].ID) < string(vs[j-1].ID); j-- {
-			vs[j], vs[j-1] = vs[j-1], vs[j]
-		}
-	}
 }
 
 // Renderer owns the live redraw state:
@@ -383,7 +377,7 @@ func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	if ansiVisibleWidth(s) <= width {
+	if displayWidth(s) <= width {
 		return s
 	}
 	return truncateVisibleWidth(s, width)

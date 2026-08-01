@@ -211,7 +211,7 @@ func (s *Scheduler) startOne(ctx context.Context, st *scheduledTask) {
 func (s *Scheduler) launch(ctx context.Context, st *scheduledTask) {
 	go func() {
 		defer s.wg.Done()
-		_ = st.task.Start(ctx, st.conns, func(download.ProgressView) { s.emitThrottled() })
+		_ = st.task.Start(ctx, st.conns, func(download.ProgressView) { s.emit() })
 		s.compl <- *st
 	}()
 }
@@ -338,15 +338,6 @@ func (s *Scheduler) emit() {
 	s.prog(live, queued)
 }
 
-// emitThrottled is the per-task progress hook used inside Start's sink; we
-// coalesce by forwarding straight to emit. The Manager also runs a higher-level
-// ticker, so per-chunk spam is naturally limited by the manager's flusher.
-func (s *Scheduler) emitThrottled() {
-	s.emit()
-}
-
 // SucceededCount/FailedCount expose live tallies (used by getGlobalStat RPC).
 func (s *Scheduler) SucceededCount() int { return int(atomic.LoadInt32(&s.succeeded)) }
 func (s *Scheduler) FailedCount() int    { return int(atomic.LoadInt32(&s.failed)) }
-func (s *Scheduler) LiveCount() int      { s.mu.Lock(); defer s.mu.Unlock(); return len(s.live) }
-func (s *Scheduler) QueuedCount() int    { s.mu.Lock(); defer s.mu.Unlock(); return len(s.queued) }

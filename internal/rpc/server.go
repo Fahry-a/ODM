@@ -10,6 +10,7 @@ import (
 
 	"odm/internal/download"
 	"odm/internal/scheduler"
+	"odm/internal/version"
 )
 
 // Server is the JSON-RPC 2.0 + WebSocket RPC surface (PRD §10). It owns a
@@ -19,18 +20,6 @@ type Server struct {
 	daemon *scheduler.Daemon
 	bc     *Broadcaster
 	secret string // "" ⇒ no auth required (still strongly discouraged to bind to 0.0.0.0 then)
-}
-
-// NewServer wires a Daemon + secret + a freshly-built Broadcaster. Use
-// NewServerWithBroadcaster instead when the caller needs the Broadcaster before
-// the Daemon exists (the RPC server wires the scheduler's progress callback to
-// a Broadcaster that must be the same one the Server later emits on).
-func NewServer(daemon *scheduler.Daemon, secret string) *Server {
-	return &Server{
-		daemon: daemon,
-		bc:     NewBroadcaster(),
-		secret: secret,
-	}
 }
 
 // NewServerWithBroadcaster is like NewServer but adopts a pre-built Broadcaster
@@ -57,17 +46,6 @@ func (s *Server) OnTaskComplete(v download.ProgressView) {
 	}
 	// Any non-completed terminal state (error/cancelled) reads as an error event.
 	s.bc.Broadcast(Event{Method: "onDownloadError", Params: dbSnapshot(v)})
-}
-
-// BroadcastProgress fans one onDownloadProgress event per snapshot to every
-// WebSocket subscriber (PRD §10.3). runRPC wires the scheduler's progress
-// callback to this so GUIs get live bytes-done/speed. The caller is expected to
-// throttle (the engine already throttles per-chunk snapshots; runRPC adds a
-// coarse time throttle so a large batch doesn't flood the socket).
-func (s *Server) BroadcastProgress(live []download.ProgressView) {
-	for _, v := range live {
-		s.bc.Broadcast(Event{Method: "onDownloadProgress", Params: dbSnapshot(v)})
-	}
 }
 
 // Broadcaster exposes the event fan-out (the engine emits via it; tests assert).
@@ -215,7 +193,7 @@ func (s *Server) dispatch(req jsonRPCRequest) jsonRPCResponse {
 		}
 	case "odm.getVersion":
 		resp.Result = map[string]any{
-			"version": download.Version,
+			"version": version.Version,
 			"enabledFeatures": []string{"Multi-Connection", "Range-Download",
 				"Resume", "Batch", "Checksum", "RateLimit-Agent", "TLS"},
 		}
@@ -248,22 +226,6 @@ func stripToken(p []any) []any {
 	return p
 }
 
-func parseIntParam(v any) (int, error) {
-	switch n := v.(type) {
-	case float64:
-		return int(n), nil
-	case int:
-		return n, nil
-	case string:
-		i, err := strconv.Atoi(n)
-		if err != nil {
-			return 0, fmt.Errorf("not an integer: %q", n)
-		}
-		return i, nil
-	}
-	return 0, fmt.Errorf("not a number")
-}
-
 func strParam(p []any, idx int) (string, error) {
 	if idx >= len(p) {
 		return "", fmt.Errorf("missing param %d", idx)
@@ -283,6 +245,12 @@ func intParam(p []any, idx int) (int, error) {
 		return int(v), nil
 	case int:
 		return v, nil
+	case string:
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("not an integer: %q", v)
+		}
+		return i, nil
 	}
 	return 0, fmt.Errorf("param %d not a number", idx)
 }
@@ -449,7 +417,7 @@ func (s *Server) methodChangeOption(req *jsonRPCRequest, resp *jsonRPCResponse) 
 				return *resp
 			}
 		case "connections":
-			nc, err := parseIntParam(v)
+			nc, err := intParam([]any{v}, 0)
 			if err != nil {
 				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be an integer"}
 				return *resp

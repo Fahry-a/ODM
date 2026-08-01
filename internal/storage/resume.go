@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -116,72 +115,9 @@ func (cf *ControlFile) CompletedOffsets() map[int64]struct{} {
 	return m
 }
 
-// SetChunkHash records the lowercase-hex SHA-256 of a completed chunk's bytes,
-// keyed by the chunk's Start byte offset. The map is created lazily so legacy
-// control files (no hashes) stay nil until a hash is actually stored.
-func (cf *ControlFile) SetChunkHash(start int64, sum string) {
-	if cf.ChunkHashes == nil {
-		cf.ChunkHashes = make(map[int64]string)
-	}
-	cf.ChunkHashes[start] = sum
-}
-
 // ChunkHash returns the recorded hash for the chunk starting at `start`, if
 // present. Reading a nil map is safe — legacy files simply report not-found.
 func (cf *ControlFile) ChunkHash(start int64) (string, bool) {
 	sum, ok := cf.ChunkHashes[start]
 	return sum, ok
-}
-
-// DirOf is a small helper used by callers that build destPath via filepath.Join.
-func DirOf(p string) string { return filepath.Dir(p) }
-
-// BytesDone returns the sum of completed chunk sizes. chunkSize and totalSize
-// are needed to compute partial-chunk bytes (the last chunk may be shorter).
-func (cf *ControlFile) BytesDone(chunkSize, totalSize int64) int64 {
-	if totalSize <= 0 {
-		return 0
-	}
-	var done int64
-	for _, off := range cf.Completed {
-		end := off + chunkSize - 1
-		if end >= totalSize {
-			end = totalSize - 1
-		}
-		done += end - off + 1
-	}
-	return done
-}
-
-// FractionDone returns completed bytes / totalSize as a float64 in [0, 1].
-func (cf *ControlFile) FractionDone(chunkSize, totalSize int64) float64 {
-	if totalSize <= 0 {
-		return 0
-	}
-	return float64(cf.BytesDone(chunkSize, totalSize)) / float64(totalSize)
-}
-
-// Age returns how long ago the control file was last updated. Returns 0 if
-// UpdatedAt is not set (v0.1.0 files).
-func (cf *ControlFile) Age() time.Duration {
-	if cf.UpdatedAt.IsZero() {
-		return 0
-	}
-	return time.Since(cf.UpdatedAt)
-}
-
-// Summary returns a one-line human-readable status string for logging, e.g.:
-// "42/100 chunks (42.0%) | 3 connections | updated 5s ago"
-func (cf *ControlFile) Summary(chunkSize, totalSize int64) string {
-	chunks := len(cf.Completed)
-	frac := cf.FractionDone(chunkSize, totalSize)
-	connStr := "n/a"
-	if cf.Connections > 0 {
-		connStr = fmt.Sprintf("%d connections", cf.Connections)
-	}
-	ageStr := "n/a"
-	if !cf.UpdatedAt.IsZero() {
-		ageStr = fmt.Sprintf("%s ago", cf.Age().Truncate(time.Second))
-	}
-	return fmt.Sprintf("%d chunks (%.1f%%) | %s | updated %s", chunks, frac*100, connStr, ageStr)
 }

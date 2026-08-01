@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-01
+
+### Removed
+- Dead-code sweep (~570 lines): unused accessors, wrappers and helpers across
+  the internal packages — `Manager.Opts`/`VerifyChecksum`/`ErrNoTasks`,
+  `Task.Filename`/`SupportsRange`/`Connections`/`getCurrent`,
+  `ChunkQueue.Remaining`/`CompletedCount`/`validateChunks`,
+  `Scheduler.SortPlan`/`emitThrottled`/`LiveCount`/`QueuedCount`,
+  `rpc.BroadcastProgress`/`NewServer`/`codeInvalidRequest`/`parseIntParam`,
+  `storage.Size`/`Path`/`Reader` + control-file helpers,
+  `config.Default`, `Limiter.BytesPerSec`, `ui.RenderTaskLine`/`truncateName`/
+  `ansiVisibleWidth`, and the `config.Version`/`download.Version` aliases.
+
+### Changed
+- Content-Disposition parsing now uses stdlib `mime.ParseMediaType`;
+  `GetRange` returns `*http.Response` directly (dead fields dropped).
+- `ui` sorting uses `slices.SortStableFunc`; `ParseRate` accepts
+  lowercase-`b` suffixes (e.g. `5Kb`).
+- `Logger.file` is typed `*os.File`, fixing a latent panic if a non-file
+  writer were ever substituted.
+
 ## [1.3.0] - 2026-08-01
 
 ### Added

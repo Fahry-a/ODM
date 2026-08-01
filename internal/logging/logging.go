@@ -57,7 +57,7 @@ type Logger struct {
 	mu      sync.Mutex
 	level   Level
 	out     io.Writer // primary (stderr)
-	file    io.Writer // optional mirror (the --log file); nil ⇒ none
+	file    *os.File  // optional mirror (the --log file); nil ⇒ none
 	from    *log.Logger
 	fileLog *log.Logger
 }
@@ -130,10 +130,7 @@ func (l *Logger) Close() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	c, ok := l.file.(io.Closer)
+	f := l.file
 	l.file = nil
-	if !ok {
-		return nil
-	}
-	return c.Close()
+	return f.Close()
 }

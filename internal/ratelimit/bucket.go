@@ -56,14 +56,6 @@ func New(spec string) (*Limiter, error) {
 	return l, nil
 }
 
-// BytesPerSec returns the configured rate, or 0 when unlimited.
-func (l *Limiter) BytesPerSec() int64 {
-	if l == nil {
-		return 0
-	}
-	return l.bytes.Load()
-}
-
 // Unlimited reports whether the limiter is disabled.
 func (l *Limiter) Unlimited() bool { return l == nil || l.lr.Load() == nil }
 
@@ -172,27 +164,31 @@ func ParseRate(spec string) (int64, error) {
 	}
 	// strip trailing "/s" or "/S" if present
 	if strings.HasSuffix(s, "/s") || strings.HasSuffix(s, "/S") {
-		s = s[:len(s)-2]
+		s = strings.TrimSpace(s[:len(s)-2])
 	}
-	s = strings.TrimSpace(s)
 	mult := int64(1)
+	trim := 0
+	u := strings.ToUpper(s)
 	switch {
-	case strings.HasSuffix(s, "K") || strings.HasSuffix(s, "k") || strings.HasSuffix(s, "KB") || strings.HasSuffix(s, "kb"):
-		mult = 1024
-	case strings.HasSuffix(s, "M") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "MB") || strings.HasSuffix(s, "mb"):
-		mult = 1024 * 1024
-	case strings.HasSuffix(s, "G") || strings.HasSuffix(s, "g") || strings.HasSuffix(s, "GB") || strings.HasSuffix(s, "gb"):
-		mult = 1024 * 1024 * 1024
-	case strings.HasSuffix(s, "T") || strings.HasSuffix(s, "t") || strings.HasSuffix(s, "TB") || strings.HasSuffix(s, "tb"):
-		mult = 1024 * 1024 * 1024 * 1024
+	case strings.HasSuffix(u, "KB"):
+		mult, trim = 1024, 2
+	case strings.HasSuffix(u, "K"):
+		mult, trim = 1024, 1
+	case strings.HasSuffix(u, "MB"):
+		mult, trim = 1024*1024, 2
+	case strings.HasSuffix(u, "M"):
+		mult, trim = 1024*1024, 1
+	case strings.HasSuffix(u, "GB"):
+		mult, trim = 1024*1024*1024, 2
+	case strings.HasSuffix(u, "G"):
+		mult, trim = 1024*1024*1024, 1
+	case strings.HasSuffix(u, "TB"):
+		mult, trim = 1024*1024*1024*1024, 2
+	case strings.HasSuffix(u, "T"):
+		mult, trim = 1024*1024*1024*1024, 1
 	}
-	// remove the suffix chars from s for parsing the numeric part
-	trim := []string{"KB", "kb", "K", "k", "MB", "mb", "M", "m", "GB", "gb", "G", "g", "TB", "tb", "T", "t"}
-	for _, t := range trim {
-		if strings.HasSuffix(s, t) {
-			s = s[:len(s)-len(t)]
-			break
-		}
+	if trim > 0 {
+		s = s[:len(s)-trim]
 	}
 	s = strings.TrimSpace(s)
 	v, err := strconv.ParseFloat(s, 64)

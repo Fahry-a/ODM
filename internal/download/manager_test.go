@@ -143,8 +143,9 @@ func TestManager_SingleFile(t *testing.T) {
 		t.Fatalf("content mismatch (first diff bytes)")
 	}
 
-	// Checksum verify via the manager API.
-	if err := m.VerifyChecksum(filepath.Join(dir, "out.bin"), "sha256", hex.EncodeToString(wantSHA[:])); err != nil {
+	// Checksum verify via the package-level helper (same path/algo/expectHex
+	// the Manager's tasks use on completion).
+	if err := verifyChecksum(filepath.Join(dir, "out.bin"), "sha256", hex.EncodeToString(wantSHA[:])); err != nil {
 		t.Fatalf("checksum: %v", err)
 	}
 }

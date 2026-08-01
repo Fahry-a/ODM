@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -253,57 +254,15 @@ func SkipBody(r io.ReadCloser) {
 	_ = r.Close()
 }
 
-// parseContentDisposition extracts the filename parameter from a
-// Content-Disposition response header. Supports both quoted and unquoted
-// filename= values per RFC 6266:
-//
-//	Content-Disposition: attachment; filename="foo.bin"
-//	Content-Disposition: attachment; filename=foo.bin
-//	Content-Disposition: attachment; filename*=UTF-8''foo.bin
-//
-// Returns "" when no usable filename is found.
-func parseContentDisposition(v string) string {
+// contentDispositionFilename extracts the filename parameter of a
+// Content-Disposition header via the stdlib (handles quoted, unquoted and
+// RFC 5987 filename*= forms).
+func contentDispositionFilename(v string) string {
 	if v == "" {
 		return ""
 	}
-	// Try filename*= (RFC 5987) first — it takes precedence.
-	_, after, ok := strings.Cut(v, "filename*=")
-	if ok {
-		// Skip charset and language: charset'lang'value
-		if sq := strings.IndexByte(after, '\''); sq >= 0 {
-			after = after[sq+1:]
-			if sq2 := strings.IndexByte(after, '\''); sq2 >= 0 {
-				after = after[sq2+1:]
-			}
-		}
-		if after != "" {
-			after = strings.TrimSpace(after)
-			if len(after) > 0 && after[len(after)-1] == ';' {
-				after = after[:len(after)-1]
-			}
-			return after
-		}
-	}
-	// Try filename= (RFC 6266).
-	_, after, ok = strings.Cut(v, "filename=")
-	if !ok {
-		return ""
-	}
-	after = strings.TrimSpace(after)
-	if len(after) > 0 && after[0] == '"' {
-		// Quoted: filename="foo.bin"
-		end := strings.IndexByte(after[1:], '"')
-		if end >= 0 {
-			return after[1 : 1+end]
-		}
-	}
-	// Unquoted: filename=foo.bin  (up to ';' or end)
-	if i := strings.IndexByte(after, ';'); i >= 0 {
-		after = after[:i]
-	}
-	after = strings.TrimSpace(after)
-	if after != "" {
-		return after
+	if _, params, err := mime.ParseMediaType(v); err == nil {
+		return params["filename"]
 	}
 	return ""
 }
@@ -322,7 +281,7 @@ func (c *Client) Probe(ctx context.Context, rawURL string) (*ProbeResult, error)
 		pr.FinalURL = r.Request.URL.String()
 		pr.StatusCode = r.StatusCode
 		pr.ETag = r.Header.Get("ETag")
-		pr.Filename = parseContentDisposition(r.Header.Get("Content-Disposition"))
+		pr.Filename = contentDispositionFilename(r.Header.Get("Content-Disposition"))
 		if r.StatusCode >= 200 && r.StatusCode < 300 {
 			if cl := r.Header.Get("Content-Length"); cl != "" {
 				if v, perr := strconv.ParseInt(cl, 10, 64); perr == nil {
@@ -364,7 +323,7 @@ func (c *Client) Probe(ctx context.Context, rawURL string) (*ProbeResult, error)
 	pr.StatusCode = r.StatusCode
 	pr.ETag = r.Header.Get("ETag")
 	if pr.Filename == "" {
-		pr.Filename = parseContentDisposition(r.Header.Get("Content-Disposition"))
+		pr.Filename = contentDispositionFilename(r.Header.Get("Content-Disposition"))
 	}
 
 	switch {
@@ -463,17 +422,9 @@ func parseRangeTotal(cr string) int64 {
 
 // GetRange issues a ranged GET for [start, end] inclusive (end<0 means
 // end-of-file). Returns the open response; the caller owns Body. On a server
-// that ignores Range (responds 200), SupportsRange on the response is false and
-// the caller should treat the whole body as byte 0 onward (single-stream
-// degeneration, §11.2).
-type RangeResult struct {
-	Resp          *http.Response
-	SupportsRange bool  // 206?
-	Offset        int64 // byte offset the returned body corresponds to
-	TotalSize     int64
-}
-
-func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64) (*RangeResult, error) {
+// that ignores Range (responds 200), the caller should treat the whole body as
+// byte 0 onward (single-stream degeneration, §11.2).
+func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64) (*http.Response, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, rawURL)
 	if err != nil {
 		return nil, err
@@ -491,49 +442,5 @@ func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64) 
 		SkipBody(r.Body)
 		return nil, fmt.Errorf("GetRange: status %d for %s", r.StatusCode, rawURL)
 	}
-	rr := &RangeResult{Resp: r, Offset: start}
-	rr.SupportsRange = r.StatusCode == http.StatusPartialContent
-	// Reconcile actual offset from Content-Range if present (server may have
-	// adjusted the start).
-	if cr := r.Header.Get("Content-Range"); cr != "" {
-		if st, _, tot, ok := parseContentRange(cr); ok {
-			rr.Offset = st
-			rr.TotalSize = tot
-		}
-	}
-	if !rr.SupportsRange {
-		rr.Offset = 0 // whole body is byte 0 onward
-		if cl := r.Header.Get("Content-Length"); cl != "" {
-			if v, _ := strconv.ParseInt(cl, 10, 64); v > 0 {
-				rr.TotalSize = v
-			}
-		}
-	}
-	return rr, nil
-}
-
-// parseContentRange parses "bytes <start>-<end>/<total>".
-func parseContentRange(cr string) (start, end, total int64, ok bool) {
-	_, spec, found := strings.Cut(cr, " ")
-	if !found {
-		return 0, 0, 0, false
-	}
-	rng, tot, hasTot := strings.Cut(spec, "/")
-	s, e, rngOk := strings.Cut(rng, "-")
-	if !rngOk {
-		return 0, 0, 0, false
-	}
-	st, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil {
-		return 0, 0, 0, false
-	}
-	en, err := strconv.ParseInt(strings.TrimSpace(e), 10, 64)
-	if err != nil {
-		return 0, 0, 0, false
-	}
-	var tt int64 = -1
-	if hasTot {
-		tt, _ = strconv.ParseInt(strings.TrimSpace(tot), 10, 64)
-	}
-	return st, en, tt, true
+	return r, nil
 }

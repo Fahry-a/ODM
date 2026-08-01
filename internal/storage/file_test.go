@@ -22,18 +22,12 @@ func TestOpenForWrite_Preallocates(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 
-	if got := f.Size(); got != size {
-		t.Fatalf("Size = %d, want %d", got, size)
-	}
-	info, err := os.Stat(f.Path())
+	info, err := os.Stat(filepath.Join(dir, "blob.bin"))
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if info.Size() != size {
 		t.Fatalf("on-disk size = %d, want pre-allocated %d", info.Size(), size)
-	}
-	if pr := filepath.Clean(f.Path()); filepath.Dir(pr) != dir {
-		t.Fatalf("Path unexpected dir: %q", pr)
 	}
 }
 
@@ -47,10 +41,7 @@ func TestOpenForWrite_SizelessStream(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 
-	if f.Size() != -1 {
-		t.Fatalf("Size = %d, want -1 (sizeless)", f.Size())
-	}
-	info, err := os.Stat(f.Path())
+	info, err := os.Stat(filepath.Join(dir, "stream.dat"))
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
@@ -60,7 +51,7 @@ func TestOpenForWrite_SizelessStream(t *testing.T) {
 	if _, err := f.WriteAt([]byte("hello"), 0); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	info, err = os.Stat(f.Path())
+	info, err = os.Stat(filepath.Join(dir, "stream.dat"))
 	if err != nil {
 		t.Fatalf("stat after write: %v", err)
 	}
@@ -167,7 +158,7 @@ func TestFile_ConcurrentWriteAt_NoOverlap(t *testing.T) {
 
 	// Full-file assertion: the concatenation of all disjoint spans must be
 	// exactly what was written, byte-identical.
-	got, err := io.ReadAll(mustReader(t, f.Path()))
+	got, err := io.ReadAll(mustReader(t, filepath.Join(dir, "concurrent.bin")))
 	if err != nil {
 		t.Fatalf("read all: %v", err)
 	}
@@ -193,32 +184,6 @@ func mustReader(t *testing.T, path string) io.Reader {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 	return f
-}
-
-// TestFile_Reader re-opens the destination for sequential reads (the
-// checksum verifier uses this).
-func TestFile_Reader(t *testing.T) {
-	dir := t.TempDir()
-	f, err := OpenForWrite(dir, "rdr.bin", -1)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-	if _, err := f.WriteAt([]byte("checksum me"), 0); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	r, err := f.Reader()
-	if err != nil {
-		t.Fatalf("reader: %v", err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("readall: %v", err)
-	}
-	if string(got) != "checksum me" {
-		t.Fatalf("got %q", got)
-	}
 }
 
 // TestFile_CloseIdempotent: calling Close twice must not error (the engine
