@@ -1,3 +1,17 @@
+# Publish AUR — two modes:
+#
+# 1. RELEASE mode (workflow_dispatch, dispatched by release.yml after a new
+#    GitHub Release): bumps pkgver, pulls the real binary checksums from the
+#    release, resets pkgrel to 1, verifies via makepkg, publishes to AUR, and
+#    commits PKGBUILD back to main.
+#
+# 2. REPUBLISH mode (push to packaging/PKGBUILD): the version was already
+#    released; only bump pkgrel and republish. Skips silently when there is
+#    nothing to do — untagged version (new versions go through auto-tag →
+#    release.yml), or the local PKGBUILD is byte-identical to upstream AUR
+#    (defensive loop guard on top of GitHub's recursion guard, which already
+#    prevents GITHUB_TOKEN commit-backs from re-triggering this workflow).
+
 name: Publish AUR
 
 on:
@@ -7,9 +21,17 @@ on:
         description: "Version tag to publish (e.g. v1.2.0)"
         required: true
         type: string
+  push:
+    branches: [main]
+    paths:
+      - packaging/PKGBUILD
 
 permissions:
   contents: write
+
+concurrency:
+  group: aur-publish
+  cancel-in-progress: false
 
 jobs:
   aur-publish:
@@ -17,31 +39,93 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # full history (commit-to-main rebases onto origin/main)
+          fetch-depth: 0 # full history + all tags (tag check, commit-to-main rebase)
 
-      - name: Resolve version tag
+      - name: Prepare (resolve mode, version, and upstream state)
         id: version
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          TAG="$INPUT_TAG"
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
-            exit 1
+          MODE="republish"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="release"
           fi
-          VERSION="${TAG#v}"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+          PKGNAME=$(grep -oP '^pkgname=\K.*' packaging/PKGBUILD)
+
+          if [ "$MODE" = "release" ]; then
+            TAG="$INPUT_TAG"
+            if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
+              exit 1
+            fi
+            VERSION="${TAG#v}"
+          else
+            VERSION=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
+            if [ -z "$VERSION" ]; then
+              echo "::error::Could not read pkgver from packaging/PKGBUILD"
+              exit 1
+            fi
+            TAG="v$VERSION"
+
+            # Skip when this version was never released by the pipeline —
+            # a new version goes through auto-tag → release.yml instead.
+            if ! git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "No tag $TAG (new version) — release pipeline handles this; skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Compare against upstream AUR. Identical PKGBUILD = nothing to
+            # publish; this is the defensive loop guard (on top of GitHub's
+            # recursion guard for GITHUB_TOKEN commit-backs).
+            AUR_DIR="$(mktemp -d)"
+            if git clone -q --depth=1 "https://aur.archlinux.org/${PKGNAME}.git" "$AUR_DIR" 2>/dev/null; then
+              if cmp -s packaging/PKGBUILD "$AUR_DIR/PKGBUILD"; then
+                echo "Local PKGBUILD identical to upstream AUR — nothing to publish; skipping"
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "up_pkgver=$(grep -oP '^pkgver=\K.*' "$AUR_DIR/PKGBUILD" || true)" >> "$GITHUB_OUTPUT"
+              echo "up_pkgrel=$(grep -oP '^pkgrel=\K.*' "$AUR_DIR/PKGBUILD" || true)" >> "$GITHUB_OUTPUT"
+            else
+              echo "Upstream AUR clone failed (never published?) — publishing as-is"
+              echo "up_pkgver=" >> "$GITHUB_OUTPUT"
+              echo "up_pkgrel=" >> "$GITHUB_OUTPUT"
+            fi
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Mode=$MODE version=$VERSION tag=$TAG"
 
-      - name: Update PKGBUILD pkgver
+      - name: Update PKGBUILD version metadata
+        if: steps.version.outputs.skip != 'true'
         working-directory: packaging
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+          if [ "${{ steps.version.outputs.mode }}" = "release" ]; then
+            # New version: always reset pkgrel to 1 — never inherit a bumped
+            # pkgrel from earlier republishes (would publish 1.4.0-3).
+            sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+            echo "pkgrel reset to 1"
+          else
+            LOCAL_REL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
+            UP_REL="${{ steps.version.outputs.up_pkgrel }}"
+            if [ -n "$UP_REL" ] && [ "$UP_REL" -ge "$LOCAL_REL" ] 2>/dev/null; then
+              NEW_REL=$((UP_REL + 1))
+              sed -i "s/^pkgrel=.*/pkgrel=${NEW_REL}/" PKGBUILD
+              echo "Bumped pkgrel: ${LOCAL_REL} -> ${NEW_REL}"
+            else
+              echo "pkgrel ${LOCAL_REL} already above upstream (${UP_REL:-none}) — keeping"
+            fi
+          fi
 
       - name: Copy bundled files with versioned names
+        if: steps.version.outputs.skip != 'true'
         working-directory: packaging
         run: |
           set -euo pipefail
@@ -53,6 +137,7 @@ jobs:
           cp ../LICENSE "${PKGNAME}-${VERSION}.LICENSE"
 
       - name: Get binary checksum and update PKGBUILD
+        if: steps.version.outputs.skip != 'true' && github.event_name == 'workflow_dispatch'
         working-directory: packaging
         run: |
           set -euo pipefail
@@ -75,6 +160,7 @@ jobs:
           python3 ../scripts/update-aur-checksums.py
 
       - name: Verify checksums and regenerate .SRCINFO
+        if: steps.version.outputs.skip != 'true'
         working-directory: packaging
         run: |
           set -euo pipefail
@@ -86,6 +172,7 @@ jobs:
           "
 
       - name: Validate
+        if: steps.version.outputs.skip != 'true'
         working-directory: packaging
         run: |
           set -euo pipefail
@@ -95,6 +182,7 @@ jobs:
           [ "$errors" -eq 0 ] || exit 1
 
       - name: Publish AUR
+        if: steps.version.outputs.skip != 'true'
         working-directory: packaging
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
@@ -107,12 +195,14 @@ jobs:
         run: bash ../scripts/aur-sync.sh "$VERSION"
 
       - name: Clean up generated assets
+        if: steps.version.outputs.skip != 'true'
         working-directory: packaging
         # makepkg (run as 'builder' in the archlinux container) chowns the whole
         # workdir, so the plain runner can't remove the versioned files — sudo.
         run: sudo rm -f odm-bin-*.*
 
       - name: Commit to main
+        if: steps.version.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -125,10 +215,19 @@ jobs:
           # explicitly. A bare `git push` only works on a branch checkout; the
           # default checkout here is detached, so an explicit branch+refspec is
           # required to land the commit on main.
+          # Snapshot the bumped PKGBUILD: if a queued prior republish already
+          # committed a pkgrel bump to main, `git checkout -B` would refuse to
+          # overwrite our working-tree edit. Restore it after the checkout.
+          cp packaging/PKGBUILD /tmp/PKGBUILD.bumped
           git checkout -B aur-publish origin/main
+          cp /tmp/PKGBUILD.bumped packaging/PKGBUILD
           git add packaging/PKGBUILD
           if ! git diff --cached --quiet; then
-            git commit -m "chore(aur): update PKGBUILD for v${{ steps.version.outputs.version }}"
+            COMMIT_MSG="chore(aur): update PKGBUILD for v${{ steps.version.outputs.version }}"
+            if [ "${{ steps.version.outputs.mode }}" = "republish" ]; then
+              COMMIT_MSG="chore(aur): bump pkgrel for v${{ steps.version.outputs.version }}"
+            fi
+            git commit -m "$COMMIT_MSG"
             git push --force-with-lease origin aur-publish:main
           else
             echo "No changes to commit"
