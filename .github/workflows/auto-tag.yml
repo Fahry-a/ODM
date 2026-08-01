@@ -121,7 +121,9 @@ jobs:
           # A tag pushed with GITHUB_TOKEN does NOT trigger other workflows
           # (GitHub's recursion guard) — the push above alone would never start
           # release.yml. Dispatch it explicitly instead; workflow_dispatch is
-          # one of the few events GITHUB_TOKEN is allowed to raise.
+          # one of the few events GITHUB_TOKEN is allowed to raise. Dispatch on
+          # the tag ref itself so Release builds the exact tagged source, not
+          # main's latest (which could have advanced past the tag).
           VERSION="${{ steps.validate.outputs.version }}"
-          gh workflow run release.yml -f "tag=$VERSION" --ref main
+          gh workflow run release.yml -f "tag=$VERSION" --ref "v$VERSION"
           echo "Dispatched release.yml for v$VERSION"
