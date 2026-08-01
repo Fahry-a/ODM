@@ -71,6 +71,9 @@ check() {
         armv7h) _bin="${pkgname}-${pkgver}-linux_arm" ;;
         aarch64) _bin="${pkgname}-${pkgver}-linux_arm64" ;;
     esac
+    # The downloaded binary is not executable on arrival (the download agent
+    # writes plain files), so grant +x before running it.
+    chmod +x "$srcdir/$_bin"
     "$srcdir/$_bin" --version | grep -qF "$pkgver"
 }
 
