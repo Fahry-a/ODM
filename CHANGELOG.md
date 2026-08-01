@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **HTTP/2 silent-collapse** — `ForceAttemptHTTP2` was `true` and `TLSNextProto`
+  was unset, so Go's ALPN negotiation could collapse N worker connections into
+  1 HTTP/2 multiplexed connection. The Balancer's N-connection allocation became
+  meaningless with no warning. h2 is now unconditionally disabled via
+  `ForceAttemptHTTP2: false` + empty `TLSNextProto`. (`internal/transport/transport.go`)
+
+### Changed
+- `progressThrottler` moved from `cmd/odm/main.go` to `internal/rpc/throttler.go`
+  (exported as `ProgressThrottler`); no behavior change.
+
 ## [1.3.1] - 2026-08-01
 
 ### Removed
@@ -418,7 +429,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/Fahry-a/ODM/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/Fahry-a/ODM/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/Fahry-a/ODM/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Fahry-a/ODM/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/Fahry-a/ODM/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Fahry-a/ODM/compare/v0.3.0...v1.0.0

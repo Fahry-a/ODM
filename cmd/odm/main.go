@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -389,8 +388,8 @@ func runRPC(o *config.Options, engineLog download.LogFn, logger *logging.Logger)
 	// onDownloadProgress, onDownloadStart and onDownloadComplete all go to the
 	// same subscribers (PRD §10.3).
 	bc := rpc.NewBroadcaster()
-	progTh := newProgressThrottler(bc)
-	sch := scheduler.NewEmptyScheduler(slots, mgr.NewTask, progTh.forward)
+	progTh := rpc.NewProgressThrottler(bc)
+	sch := scheduler.NewEmptyScheduler(slots, mgr.NewTask, progTh.Forward)
 	daemon := scheduler.NewDaemon(sch, mgr)
 	srv := rpc.NewServerWithBroadcaster(daemon, o.RPCSecret, bc)
 
@@ -457,41 +456,6 @@ func secretWord(s string) string {
 		return "off"
 	}
 	return "on"
-}
-
-// progressThrottler coalesces the scheduler's high-frequency progress snapshots
-// into coarse WebSocket events so a large batch doesn't flood subscribers. It
-// forwards one onDownloadProgress event per live task at most once per interval;
-// snapshots between ticks are dropped (the next tick re-reads fresh state from
-// the engine, so no progress is lost — only intermediate ones).
-type progressThrottler struct {
-	bc   *rpc.Broadcaster
-	mu   sync.Mutex
-	last time.Time
-}
-
-// newProgressThrottler wraps bc with a ~250ms emission floor.
-func newProgressThrottler(bc *rpc.Broadcaster) *progressThrottler {
-	return &progressThrottler{bc: bc}
-}
-
-// forward is the scheduler.ProgressCB wired into NewEmptyScheduler. It emits
-// onDownloadProgress for every live task at most once per tick; queued tasks
-// are not forwarded (they have no live bytes yet) to keep the feed meaningful.
-func (p *progressThrottler) forward(live, _ []download.ProgressView) {
-	p.mu.Lock()
-	if time.Since(p.last) < 250*time.Millisecond {
-		p.mu.Unlock()
-		return
-	}
-	p.last = time.Now()
-	p.mu.Unlock()
-	for _, v := range live {
-		p.bc.Broadcast(rpc.Event{
-			Method: "onDownloadProgress",
-			Params: rpc.SnapshotParams(v),
-		})
-	}
 }
 
 // errExit carries a §13 exit code without touching os.Exit, so run() stays

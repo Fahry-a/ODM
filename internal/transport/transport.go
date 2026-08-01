@@ -81,8 +81,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		TLSClientConfig:       tlsConf,
 		TLSHandshakeTimeout:   cfg.Timeout,
 		ResponseHeaderTimeout: cfg.Timeout,
-		ForceAttemptHTTP2:     true, // degrade gracefully against HTTP/2-only servers (PRD §15)
-		DisableCompression:    false,
+		// ponytail: ForceAttemptHTTP2=false + empty TLSNextProto = unconditional h2 disable.
+		// ODM's value prop is multi-connection aggregation over HTTP/1.1. If the server
+		// negotiates h2 via ALPN, Go collapses N worker requests into 1 TCP connection
+		// with N streams — the Balancer's N-connection allocation becomes meaningless
+		// and the user gets zero benefit from -c without any warning. Empty TLSNextProto
+		// prevents the client from advertising h2 in the ALPN list at all.
+		ForceAttemptHTTP2: false,
+		TLSNextProto:      make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		DisableCompression: false,
 		// Generous pooling for multi-connection downloads.
 		MaxIdleConns:        512,
 		MaxIdleConnsPerHost: 64,
