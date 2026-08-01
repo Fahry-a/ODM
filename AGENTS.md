@@ -37,7 +37,7 @@ internal/logging → Leveled logger (--log / --log-level)
 ## Key conventions
 
 - **Module path is `odm`** (not a GitHub URL). Imports look like `odm/internal/config`. Keep it this way.
-- **Version is single-sourced** in `internal/version/version.go`. `config.Version` and `download.Version` are compile-time aliases (`const Version = version.Version`), so they can never drift — a mismatch is a build error. The only remaining release risk is `packaging/PKGBUILD` `pkgver`, which CI checks stays in sync.
+- **Version is single-sourced** in `internal/version/version.go`, imported directly by `config` (default User-Agent), `download` (control-file metadata) and `rpc` (getVersion) — no aliases, so nothing can drift. The only remaining release risk is `packaging/PKGBUILD` `pkgver`, which CI checks stays in sync.
 - **Progress bar format**: `internal/ui/render.go` is the pure rendering layer (`Bar()`, `BarIndeterminate()`, `renderTaskLine()`). `internal/ui/progress.go` owns the stateful `Renderer` (cache, animation tick, TTY redraw loop). Keep `render.go` functions pure/testable — animation state lives in `progress.go`.
 - **Bar width is fixed** at 30 cells (`BarWidth` const). Dots are spaced (`o o o`), face animates `c`↔`C` every ~1s. `barLine()` pads to exactly `width` so the `%` column never shifts. `TestRenderTaskLine_FixedColumns` pins this.
 - **ETA format is `HH:MM:SS`** (8 cells, `colETA=8`). `FormatDuration` caps at `99:59:59`. The download engine's `estimateETA` (`task.go`) must NOT multiply by `time.Second` a second time — the inner expression already yields nanoseconds.
@@ -74,8 +74,8 @@ creates the GitHub Release → `aur-publish.yml` ships the AUR package.
 1. `internal/version/version.go:14` — `const Version = "odm/X.Y.Z"`
 2. `packaging/PKGBUILD:9` — `pkgver=X.Y.Z`
 
-`config.Version` and `download.Version` are aliases of `version.Version`, so
-they need no separate bump.
+No separate bump needed — `version.Version` is the only source, imported
+directly by the packages that need it.
 
 **Release steps (auto-tag flow):**
 
@@ -218,16 +218,15 @@ These are deferred — do NOT treat them as bugs:
   (mid-flight). Other RPC spec mutations remain deferred.
 - **Reference Web UI** — roadmap item built on the RPC + WebSocket layer.
 
-## Agent workflow
+## graphify
 
-The user's standing preference: **always use the smartest agent for writing or
-fixing code.** Practical pipeline in this repo:
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
-- **@oracle** (read-only, highest reasoning quality) — design, architecture
-  decisions, and an independent review gate over every implementation batch
-  before it is considered done.
-- **@fixer** (write access) — mechanical execution of oracle-vetted, bounded
-  specs; never makes design decisions on its own.
-- Orchestrator — plans lanes, dispatches, and runs the final CI-equivalent
-  verification (`go build`, `go vet`, `golangci-lint`, `go test -race -count=1`).
-- Implementation is not "done" until the oracle review gate has passed.
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

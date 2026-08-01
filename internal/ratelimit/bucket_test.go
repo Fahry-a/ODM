@@ -17,6 +17,7 @@ func TestParseRate(t *testing.T) {
 		"1.5M":  int64(1.5 * 1024 * 1024),
 		"5MB/s": 5 * 1024 * 1024,
 		"5M/s":  5 * 1024 * 1024,
+		"5Kb":   5 * 1024, // lowercase-b suffix: accepted since the single-pass rewrite
 	}
 	for in, want := range cases {
 		got, err := ParseRate(in)
@@ -64,8 +65,8 @@ func TestReader_Throttles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.BytesPerSec() != 1024 {
-		t.Fatalf("rate want 1024 got %d", l.BytesPerSec())
+	if l.bytes.Load() != 1024 {
+		t.Fatalf("rate want 1024 got %d", l.bytes.Load())
 	}
 	// First Acquire(consumes burst bytes) → near-instant.
 	start := time.Now()

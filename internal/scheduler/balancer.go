@@ -11,7 +11,6 @@ package scheduler
 
 import (
 	"fmt"
-	"sort"
 )
 
 // DefaultMaxConnections is the PRD default for --max-connections (§5.1).
@@ -32,7 +31,6 @@ type Allocation struct {
 	URL           string
 	Connections   int
 	SupportsRange bool
-	Queued        bool // true → waits for a slot; false → runs right away
 }
 
 // Plan is the complete output of the Balancer: the files that start in
@@ -44,12 +42,6 @@ type Plan struct {
 	MaxConnections int          // effective ceiling used
 	Warning        string       // non-fatal warning text (e.g. C above ceiling), "" if none
 }
-
-// BalancerError is returned for fatal validation failures (§5.5): C < 1, or
-// SF > C. These stop the program before any network activity.
-type BalancerError struct{ Msg string }
-
-func (e *BalancerError) Error() string { return e.Msg }
 
 // Compute is the pure Connection Balancer. See PRD §5.
 //
@@ -73,10 +65,10 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 	}
 	N := len(files)
 	if N == 0 {
-		return nil, &BalancerError{Msg: "no URLs provided"}
+		return nil, fmt.Errorf("no URLs provided")
 	}
 	if C < 1 {
-		return nil, &BalancerError{Msg: "connection budget (-c) must be at least 1"}
+		return nil, fmt.Errorf("connection budget (-c) must be at least 1")
 	}
 
 	plan := &Plan{MaxConnections: maxConnections}
@@ -100,9 +92,7 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 		SF = 0
 	}
 	if SF > C {
-		return nil, &BalancerError{
-			Msg: "split-file (-sf) cannot be greater than the total connection budget (-c)",
-		}
+		return nil, fmt.Errorf("split-file (-sf) cannot be greater than the total connection budget (-c)")
 	}
 
 	switch {
@@ -129,7 +119,7 @@ func modeA(C int, files []FileInput, max int) []Allocation {
 	}
 	return []Allocation{{
 		URL: f.URL, Connections: conns,
-		SupportsRange: f.SupportsRange, Queued: false,
+		SupportsRange: f.SupportsRange,
 	}}
 }
 
@@ -143,7 +133,6 @@ func modeB(C int, files []FileInput, max int) (parallel, queued []Allocation) {
 		a := Allocation{
 			URL: f.URL, Connections: 1,
 			SupportsRange: f.SupportsRange,
-			Queued:        i >= slot,
 		}
 		if i < slot {
 			parallel = append(parallel, a)
@@ -202,7 +191,6 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 		a := Allocation{
 			URL: files[i].URL, Connections: 1,
 			SupportsRange: files[i].SupportsRange,
-			Queued:        i >= parallelFiles,
 		}
 		if i < parallelFiles {
 			a.Connections = conns[i]
@@ -256,13 +244,4 @@ func distribute(conns []int, budget int, skip []bool) {
 			break
 		}
 	}
-}
-
-// SortPlan orders a Plan's parallel allocations by descending connection count.
-// Useful for deterministic rendering and tests; the Balancer itself preserves
-// input order so queue advancement stays stable.
-func (p *Plan) SortPlan() {
-	sort.SliceStable(p.Parallel, func(i, j int) bool {
-		return p.Parallel[i].Connections > p.Parallel[j].Connections
-	})
 }

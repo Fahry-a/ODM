@@ -18,6 +18,7 @@ import (
 	"odm/internal/ratelimit"
 	"odm/internal/storage"
 	"odm/internal/transport"
+	"odm/internal/version"
 )
 
 // TaskState enumerates the lifecycle states a task moves through. Mirrors the
@@ -276,22 +277,11 @@ func (t *Task) filename() string {
 	return t.probe.Filename
 }
 
-// Filename is the resolved output name (valid after Start's Probe).
-func (t *Task) Filename() string { return t.filename() }
-
 // OutputPath is the full destination path.
 func (t *Task) OutputPath() string { return t.outPath }
 
-// SupportsRange reports the probe's verdict (valid after Start).
-func (t *Task) SupportsRange() bool { return t.probe != nil && t.probe.SupportsRange }
-
 // State reports the current lifecycle state (snapshot through the atomic).
 func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
-
-// Connections reports the number of live worker connections. Unlike
-// Snapshot().Connections this reads only the atomic counter — it never touches
-// the probe result — so it is safe to poll while a task is still probing.
-func (t *Task) Connections() int { return int(t.conns.Load()) }
 
 // SetConns overrides the task's connection count. Used by the Scheduler to
 // apply the Balancer's per-file allocation, which may differ from the global
@@ -597,7 +587,7 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 		}
 		t.queue.MarkDone(c, t.probe.TotalSize)
 		if sink != nil {
-			sink(t.getCurrent(c))
+			sink(t.Snapshot())
 		}
 		// Periodic checkpoint: flush the control file on the count/time gate so
 		// a crash/kill leaves a usable resume point (similar to aria2's periodic
@@ -642,18 +632,24 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 	return lastErr
 }
 
+// chunkTimeoutCtx derives the per-chunk context: Timeout*10 (default 300s)
+// so a stalled connection can't hang a worker forever.
+func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	tmo := t.opts.Timeout * 10
+	if tmo <= 0 {
+		tmo = 300 * time.Second
+	}
+	return context.WithTimeout(ctx, tmo)
+}
+
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress. h receives every
 // byte written to disk so the caller can record the chunk's SHA-256 on success.
 func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView), h hash.Hash) error {
 	// Per-chunk timeout prevents a stalled connection from hanging a worker
-	// forever. Each chunk gets Timeout*10 to complete (default 300s = 5 min).
-	// If the timeout fires, the chunk is retried by the caller (downloadChunk).
-	chunkTimeout := t.opts.Timeout * 10
-	if chunkTimeout <= 0 {
-		chunkTimeout = 300 * time.Second
-	}
-	chunkCtx, chunkCancel := context.WithTimeout(ctx, chunkTimeout)
+	// forever (see chunkTimeoutCtx). If the timeout fires, the chunk is
+	// retried by the caller (downloadChunk).
+	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
 
 	// Sizeless single-stream chunk: plain GET, no Range.
@@ -665,13 +661,13 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	if end < 0 {
 		end = -1
 	}
-	rr, err := t.client.GetRange(chunkCtx, t.probe.FinalURL, c.Start, end)
+	resp, err := t.client.GetRange(chunkCtx, t.probe.FinalURL, c.Start, end)
 	if err != nil {
 		return err
 	}
-	defer rr.Resp.Body.Close()
+	defer resp.Body.Close()
 
-	body := rr.Resp.Body
+	body := resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
 	}
@@ -703,11 +699,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 // h receives every byte written to disk (the whole-file chunk's SHA-256).
 func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash) error {
 	// Per-chunk timeout prevents a stalled connection from hanging forever.
-	chunkTimeout := t.opts.Timeout * 10
-	if chunkTimeout <= 0 {
-		chunkTimeout = 300 * time.Second
-	}
-	chunkCtx, chunkCancel := context.WithTimeout(ctx, chunkTimeout)
+	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
 
 	req, err := t.client.NewGetRequest(chunkCtx, t.probe.FinalURL)
@@ -784,9 +776,6 @@ func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 		sink(t.Snapshot())
 	}
 }
-
-// getCurrent snapshots progress after a chunk.
-func (t *Task) getCurrent(_ Chunk) ProgressView { return t.Snapshot() }
 
 // emitFinal pushes one last snapshot carrying the terminal state (Completed
 // or Error) through the progressSink before Start returns. This is the root
@@ -901,7 +890,7 @@ func (t *Task) persistControl() {
 		t.controlCreatedAt = now
 	}
 	t.lastPersist = now
-	completed := t.queue.completedOffsetsLocked()
+	completed := t.queue.completedOffsets()
 	cf := &storage.ControlFile{
 		URL:       t.url,
 		FinalURL:  t.probe.FinalURL,
@@ -918,7 +907,7 @@ func (t *Task) persistControl() {
 		UpdatedAt:   now,
 		Connections: int(t.conns.Load()),
 		UserAgent:   t.opts.UserAgent,
-		ODMVersion:  Version,
+		ODMVersion:  version.Version,
 		Checksum:    t.opts.Checksum,
 	}
 	_ = storage.SaveControl(t.outPath, cf)
@@ -944,14 +933,14 @@ func (t *Task) verifyResumedChunks(ctx context.Context) error {
 		}
 		want := int(end - s.Start + 1)
 		chkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		rr, err := t.client.GetRange(chkCtx, t.probe.FinalURL, s.Start, end)
+		resp, err := t.client.GetRange(chkCtx, t.probe.FinalURL, s.Start, end)
 		if err != nil {
 			cancel()
 			return fmt.Errorf("resume check at %d: %w", s.Start, err)
 		}
 		got := make([]byte, want)
-		_, rerr := io.ReadFull(rr.Resp.Body, got)
-		rr.Resp.Body.Close()
+		_, rerr := io.ReadFull(resp.Body, got)
+		resp.Body.Close()
 		cancel()
 		if rerr != nil {
 			return fmt.Errorf("resume check at %d: %v", s.Start, rerr)
@@ -995,7 +984,7 @@ func (t *Task) restoreChunkHashes(cf *storage.ControlFile) {
 	if len(cf.ChunkHashes) == 0 || t.queue == nil {
 		return
 	}
-	done := t.queue.completedOffsetsLocked()
+	done := t.queue.completedOffsets()
 	t.mu.Lock()
 	for _, off := range done {
 		if sum, ok := cf.ChunkHashes[off]; ok {
@@ -1179,8 +1168,8 @@ func (t *Task) Unpause() {
 	t.mu.Lock()
 	if t.paused {
 		t.paused = false
-		close(t.pauseC)                    // broadcast: wake ALL workers in pauseGate
-		t.pauseC = make(chan struct{})     // fresh channel for the next pause cycle
+		close(t.pauseC)                // broadcast: wake ALL workers in pauseGate
+		t.pauseC = make(chan struct{}) // fresh channel for the next pause cycle
 	}
 	t.mu.Unlock()
 	t.setState(StateActive)
@@ -1220,9 +1209,9 @@ func (t *Task) Cancel() {
 	}
 }
 
-// ListCompletedOffsetsLocked is used by persistControl; name says locked but
-// the chunkqueue method is itself locked, this just bridges naming.
-func (q *ChunkQueue) completedOffsetsLocked() []int64 {
+// completedOffsets returns the completed chunk offsets; it takes the queue's
+// own lock.
+func (q *ChunkQueue) completedOffsets() []int64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]int64, 0, len(q.completed))

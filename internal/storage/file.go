@@ -10,7 +10,6 @@ package storage
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 )
@@ -73,12 +72,6 @@ func (w *File) ReadAt(p []byte, off int64) (int, error) {
 	return w.f.ReadAt(p, off)
 }
 
-// Size returns the configured total size (-1 if unknown).
-func (w *File) Size() int64 { return w.size }
-
-// Path returns the destination path.
-func (w *File) Path() string { return w.path }
-
 // Sync flushes pending writes to disk (called once when a task completes).
 func (w *File) Sync() error { return w.f.Sync() }
 
@@ -92,9 +85,4 @@ func (w *File) Close() error {
 	f := w.f
 	w.f = nil
 	return f.Close()
-}
-
-// Reader returns a sequential reader over the on-disk file (for checksum).
-func (w *File) Reader() (io.ReadCloser, error) {
-	return os.Open(w.path)
 }

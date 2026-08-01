@@ -24,26 +24,6 @@ func TestControlPath(t *testing.T) {
 	}
 }
 
-// TestDirOf wraps filepath.Dir; pinned because callers depend on it returning
-// the parent directory of the destination (used to mkdir before OpenForWrite).
-func TestDirOf(t *testing.T) {
-	cases := map[string]string{
-		"/tmp/blob.bin": "/tmp",
-		"rel.tar":       ".",
-		"/a/b/c.bin":    "/a/b",
-		"a/b/c.bin":     "a/b",
-		// A trailing slash makes filepath.Dir treat the path as itself a
-		// directory — DirOf is documented to wrap filepath.Dir, so we pin
-		// that exact behaviour to avoid surprising the resume caller.
-		"/a/b/c/": "/a/b/c",
-	}
-	for in, want := range cases {
-		if got := DirOf(in); got != want {
-			t.Errorf("DirOf(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // TestControlFile_CompletedOffsets builds the membership set from the saved
 // offsets — resume uses this for "is chunk X already done?" lookup.
 func TestControlFile_CompletedOffsets(t *testing.T) {
@@ -219,14 +199,14 @@ func TestLoadControl_LegacyWithoutChunkHashes(t *testing.T) {
 	}
 }
 
-// TestControlFile_ChunkHashHelpers pins SetChunkHash/ChunkHash: lazy map
-// creation, exact key round-trip, and safe read on a nil (legacy) map.
+// TestControlFile_ChunkHashHelpers pins ChunkHash: exact key round-trip, and
+// safe read on a nil (legacy) map.
 func TestControlFile_ChunkHashHelpers(t *testing.T) {
 	var cf ControlFile
 	if _, ok := cf.ChunkHash(0); ok {
 		t.Fatalf("legacy nil map must report not-found")
 	}
-	cf.SetChunkHash(4096, "deadbeef")
+	cf.ChunkHashes = map[int64]string{4096: "deadbeef"}
 	if got, ok := cf.ChunkHash(4096); !ok || got != "deadbeef" {
 		t.Fatalf("ChunkHash(4096) = %q, %v; want deadbeef, true", got, ok)
 	}

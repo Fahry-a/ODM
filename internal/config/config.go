@@ -24,11 +24,6 @@ import (
 	"odm/internal/version"
 )
 
-// Version is the ODM release string; baked into --user-agent default & --version.
-// Single-sourced from internal/version — keep this alias in place so every
-// existing config.Version reference compiles unchanged.
-const Version = version.Version
-
 // Defaults mirrors the PRD §6.2 default column.
 const (
 	DefaultConnections = 5
@@ -110,11 +105,6 @@ type Options struct {
 	changed map[string]bool
 }
 
-// Default returns an Options fully initialised from the PRD defaults.
-func Default() Options {
-	return *DefaultPtr()
-}
-
 // DefaultPtr returns a pointer to a freshly defaulted Options; useful for chains
 // that need pointer receivers (Load, Apply).
 func DefaultPtr() *Options {
@@ -125,7 +115,7 @@ func DefaultPtr() *Options {
 		Retry:            DefaultRetry,
 		RetryWait:        DefaultRetryWait,
 		Timeout:          DefaultTimeout,
-		UserAgent:        Version,
+		UserAgent:        version.Version,
 		CheckCertificate: true,
 		Continue:         true,
 		Quiet:            false,

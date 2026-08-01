@@ -1,7 +1,6 @@
 package download
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 )
@@ -67,44 +66,7 @@ func NewChunkQueue(totalSize, chunkSize int64) *ChunkQueue {
 		start = end + 1
 		idx++
 	}
-	q.validateChunks(totalSize)
 	return q
-}
-
-// validateChunks asserts the chunk-boundary invariant NewChunkQueue must
-// produce: every chunk has Start >= 0 and End >= Start-1, chunks are strictly
-// contiguous (next.Start == prev.End+1), and together they cover exactly
-// [0, totalSize) with no gaps or overlaps.
-//
-// This is a programming-error guard, not a runtime error path: the generation
-// loop above is provably correct, so a violation means a future change to the
-// splitting logic (or a bad caller-supplied chunkSize) broke the invariant. The
-// right failure mode is a panic, because a queue with overlapping or gapped
-// chunks would silently corrupt the output file through concurrent WriteAt
-// (see storage.File.WriteAt's disjoint-range contract) — and the panic message
-// names the exact chunk and offset so the bug is immediately diagnosable.
-func (q *ChunkQueue) validateChunks(totalSize int64) {
-	for i, c := range q.chunks {
-		if c.Start < 0 {
-			panic(fmt.Sprintf("odm: chunk boundary invariant violated: chunk %d Start=%d < 0", i, c.Start))
-		}
-		if c.End < c.Start-1 {
-			panic(fmt.Sprintf("odm: chunk boundary invariant violated: chunk %d End=%d < Start-1 (%d)", i, c.End, c.Start))
-		}
-		if i == 0 {
-			if c.Start != 0 {
-				panic(fmt.Sprintf("odm: chunk boundary invariant violated: first chunk Start=%d, want 0", c.Start))
-			}
-		} else {
-			prev := q.chunks[i-1]
-			if c.Start != prev.End+1 {
-				panic(fmt.Sprintf("odm: chunk boundary invariant violated: chunk %d Start=%d, want prev.End+1=%d (gap or overlap)", i, c.Start, prev.End+1))
-			}
-		}
-		if i == len(q.chunks)-1 && c.End != totalSize-1 {
-			panic(fmt.Sprintf("odm: chunk boundary invariant violated: last chunk End=%d, want %d", c.End, totalSize-1))
-		}
-	}
 }
 
 // ResetCompletedOffsets pre-seeds the completed set with byte-offsets already
@@ -221,20 +183,6 @@ func (q *ChunkQueue) Done() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.chunks) == 0
-}
-
-// Remaining returns the count of un-started chunks (for the parseInto UI).
-func (q *ChunkQueue) Remaining() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.chunks)
-}
-
-// CompletedCount returns total completed chunk count.
-func (q *ChunkQueue) CompletedCount() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.completed)
 }
 
 // BytesDone returns the total completed bytes.

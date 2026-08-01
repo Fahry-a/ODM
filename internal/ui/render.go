@@ -378,11 +378,6 @@ func colorizeBar(bar string, useColor bool) string {
 	return b.String()
 }
 
-// ansiVisibleWidth returns the number of visible (non-ANSI) display cells in s,
-// wide runes counting double. ANSI escape sequences (\x1b[...m) contribute zero
-// width.
-func ansiVisibleWidth(s string) int { return displayWidth(s) }
-
 // truncateVisibleWidth cuts s so that only the first `width` visible cells are
 // kept, preserving all ANSI escape sequences intact. Sequences that span the
 // cut point are dropped cleanly (the cut happens on a visible character
@@ -444,12 +439,6 @@ func truncateVisibleWidth(s string, width int) string {
 	return b.String()
 }
 
-// maxNameRunes caps the displayed filename to keep one task line at a sane
-// width. The limit is in display cells, not bytes — see truncateName. When
-// rendering to a TTY, the name field expands to fill the terminal width minus
-// the fixed-width info block (see renderTaskLine's nameWidth param).
-const maxNameRunes = 20
-
 // minBarWidth is the floor for the adaptive progress bar on narrow terminals.
 // The fixed 30-cell bar plus the info block needs ~96 columns; below that the
 // bar shrinks (to this floor) so the percent column stays on screen instead of
@@ -478,14 +467,6 @@ func barWidthFor(termWidth int) int {
 		bw = BarWidth
 	}
 	return bw
-}
-
-// truncateName cuts name to maxNameRunes display cells, rune-safe: a UTF-8
-// name (CJK, emoji, etc.) is split on codepoint boundaries, never mid-byte, so
-// no mojibake lands on screen (bug §3.4). An "..." ellipsis occupies the last
-// 3 cells when trimmed.
-func truncateName(name string) string {
-	return truncateNameTo(name, maxNameRunes)
 }
 
 // truncateNameTo cuts name to the given max display cells, rune-safe and wide-
@@ -531,10 +512,6 @@ func padToCells(s string, w int) string {
 // indeterminatePos drives the sizeless bar animation; pass -1 for a static
 // (centred) indeterminate bar. frame is the global frame counter for the
 // pacman face animation (c/C every ~1s).
-func RenderTaskLine(v download.ProgressView, useColor bool) string {
-	return renderTaskLine(v, useColor, -1, 0, 20, BarWidth)
-}
-
 func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int, nameWidth int, barWidth int) string {
 	if nameWidth < 10 {
 		nameWidth = 10
@@ -570,7 +547,6 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	}
 
 	bar := BarIndeterminate(v.BytesDone, v.TotalSize, barWidth, indeterminatePos, frame, "")
-	bar = colorizeBar(bar, useColor)
 	pct := 0
 	if v.TotalSize > 0 {
 		pct = min(max(int(float64(v.BytesDone)/float64(v.TotalSize)*100), 0), 100)
@@ -692,7 +668,7 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration,
 	rightSide := fmt.Sprintf("  |  %s  |  ETA %s  [%s]  %s", sp, etaStr, bar, pctStr)
 
 	if termWidth > 0 {
-		padding := termWidth - ansiVisibleWidth(leftText) - ansiVisibleWidth(rightSide) - 1
+		padding := termWidth - displayWidth(leftText) - displayWidth(rightSide) - 1
 		if padding < 2 {
 			padding = 2
 		}
