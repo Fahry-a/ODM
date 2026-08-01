@@ -176,6 +176,29 @@ If the version bump is ambiguous (e.g. the repo drifted), pick the most
 conservative bump that the changelog supports and state the reasoning to the
 user. Never push without the version + tag + changelog all aligned.
 
+### PKGBUILD-only changes (republish) — do NOT bump anything yourself
+
+For changes to an **already-released** version (`packaging/PKGBUILD` edits like
+`pkgdesc`, `options`, dependencies, typos), leave `pkgver` and `pkgrel` alone.
+The `aur-publish.yml` REPUBLISH mode handles the bump:
+
+1. Edit `packaging/PKGBUILD` (do not touch `pkgver`/`pkgrel`).
+2. Commit + push to `main`.
+3. The workflow bumps `pkgrel = upstream + 1`, publishes to AUR, and commits the
+   bumped PKGBUILD back to `main`. (If you bumped `pkgrel` yourself above
+   upstream, it keeps yours — no double bump.)
+
+Do NOT bump `pkgver` in PKGBUILD for a republish:
+
+- An untagged version makes REPUBLISH skip silently — new versions are the
+  release pipeline's job (auto-tag → release.yml → RELEASE mode, which resets
+  `pkgrel` to 1).
+- A `pkgver` bump without a matching `internal/version/version.go` bump fails
+  `auto-tag.yml`'s consistency check on purpose.
+
+Summary: **new version → bump `version.go` + `pkgver` + CHANGELOG yourself;
+republish → edit PKGBUILD only and let the workflow bump `pkgrel`.**
+
 ## Roadmap (not yet implemented)
 
 These are deferred — do NOT treat them as bugs:
