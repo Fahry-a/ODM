@@ -105,8 +105,9 @@ git push origin main && git push origin vX.Y.Z
    `v*` tag AND `CHANGELOG.md` has a `## [X.Y.Z]` header. Idempotent — a
    docs-only push is a no-op. Because a tag pushed with `GITHUB_TOKEN` cannot
    trigger other workflows (GitHub's recursion guard), it then dispatches
-   `release.yml` explicitly via `workflow_dispatch`; `release.yml` in turn
-   dispatches `aur-publish.yml` explicitly (see item 3).
+   `release.yml` explicitly via `workflow_dispatch`, targeting the tag ref so
+   Release builds the exact tagged source (not main's latest); `release.yml`
+   in turn dispatches `aur-publish.yml` explicitly (see item 3).
 2. `release.yml` — on `v*` tag push: extracts version from the tag, re-checks
    both version files (fails on mismatch), requires the CHANGELOG entry
    (fails if missing), cross-compiles 6 targets, generates SHA-256 checksums,
