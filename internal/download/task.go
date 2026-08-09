@@ -403,6 +403,22 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		}
 		t.probe.Store(pr)
 	}
+	// Smart profile: decide the concrete engine now that the probe answered
+	// range support + size, and check h2 readiness through the h2 client.
+	// The CLI path already resolved smart to a concrete profile in the
+	// TaskMaker (it has the h2 probe pass); here we only handle the RPC
+	// daemon path where Start probes lazily.
+	if t.opts.Profile == "smart" {
+		profile, reason := ChooseProfile(ServerCapabilities{
+			TotalSize:     pr.TotalSize,
+			SupportsRange: pr.SupportsRange,
+			SingleStream:  pr.SingleStream,
+			HTTP2Ready:    t.h2Client != nil && t.h2Client.SupportsHTTP2(ctx, t.url),
+			Conns:         conns,
+		})
+		t.logf("info", "smart profile: chose %q (%s)", profile, reason)
+		t.opts.Profile = profile
+	}
 	if pr.Filename == "" {
 		pr.Filename = deriveFilename(pr.FinalURL, t.opts.OutputName)
 	} else if t.opts.OutputName != "" {

@@ -381,6 +381,20 @@ func (c *Client) doHead(ctx context.Context, rawURL string) (*http.Response, err
 	return c.HTTP.Do(req)
 }
 
+// SupportsHTTP2 reports whether this client (h2-enabled) actually negotiated
+// HTTP/2 with the server: one HEAD request whose response arrived with
+// ProtoMajor==2. false when the client is h1-only, the URL is plain http://,
+// or the server only speaks h1. Used by the smart profile to decide whether
+// an h2 engine would buy anything.
+func (c *Client) SupportsHTTP2(ctx context.Context, rawURL string) bool {
+	r, err := c.doHead(ctx, rawURL)
+	if err != nil {
+		return false
+	}
+	SkipBody(r.Body)
+	return r.ProtoMajor == 2
+}
+
 func (c *Client) doRangeProbe(ctx context.Context, rawURL string) (*http.Response, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, rawURL)
 	if err != nil {
