@@ -88,13 +88,18 @@ const (
 	colConns = 6 // "[x32] " max = 6
 )
 
+// unknownGlyph is the single marker for "value not known yet" in every
+// column: sizes, speed and ETA. One glyph everywhere so a glance reads the
+// same "not available" across the line (was "?" vs "--" vs "--:--:--").
+const unknownGlyph = "?"
+
 // FormatFileSize humanises a byte count (binary, KiB/MiB/GiB/…).
 // Rounded values never print as "1024.0 XiB" — that would overflow colSize
 // and re-introduce the column jitter the fixed layout is meant to kill.
 func FormatFileSize(b int64) string {
 	const unit = 1024.0
 	if b < 0 {
-		return "?"
+		return unknownGlyph
 	}
 	if b < 1024 {
 		return fmt.Sprintf("%d B", b)
@@ -121,7 +126,7 @@ func FormatFileSize(b int64) string {
 func FormatFileSizeShort(b int64) string {
 	const unit = 1024.0
 	if b < 0 {
-		return "?"
+		return unknownGlyph
 	}
 	if b < 1024 {
 		return fmt.Sprintf("%dB", b)
@@ -141,10 +146,10 @@ func FormatFileSizeShort(b int64) string {
 }
 
 // FormatSpeed humanises bytes/sec. Always fits in colSpeed once padded
-// ("999.9 MiB/s" = 11 cells; unknown speed is "--").
+// ("999.9 MiB/s" = 11 cells; an unknown speed shows the shared unknownGlyph).
 func FormatSpeed(bps int64) string {
 	if bps < 0 {
-		return "--"
+		return unknownGlyph
 	}
 	return FormatFileSize(bps) + "/s"
 }
@@ -152,10 +157,12 @@ func FormatSpeed(bps int64) string {
 // FormatDuration turns a time.Duration into fixed-width HH:MM:SS (the bar's
 // <ETA>, always exactly 8 cells for HH:MM:SS format). A nonsensically large
 // ETA — produced by estimateETA when the rolling speed has decayed near zero
-// mid-stream — is rendered as "--:--:--" rather than overflowing.
+// mid-stream — is rendered as the shared unknownGlyph (right-aligned into the
+// ETA column) rather than overflowing. %7s works because unknownGlyph is a
+// single ASCII char and fmt pads by runes, not cells.
 func FormatDuration(d time.Duration) string {
 	if d <= 0 {
-		return "--:--:--"
+		return fmt.Sprintf("%7s", unknownGlyph)
 	}
 	s := int(d.Seconds())
 	h := s / 3600
@@ -195,26 +202,87 @@ func runeWidth(r rune) int {
 // count double and ANSI escape sequences contribute zero width.
 func displayWidth(s string) int {
 	w := 0
-	for i := 0; i < len(s); {
+	for _, seg := range scanAnsi(s) {
+		if seg.visible {
+			w += seg.width
+		}
+	}
+	return w
+}
+
+// truncateVisibleWidth cuts s so that only the first `width` visible cells are
+// kept, preserving all ANSI escape sequences intact. Sequences that span the
+// cut point are dropped cleanly (the cut happens on a visible character
+// boundary, and the reset code is appended only if an escape sequence was
+// active at the cut point).
+func truncateVisibleWidth(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	var b strings.Builder
+	remaining := width
+	wasColorActive := false
+	for _, seg := range scanAnsi(s) {
+		if !seg.visible {
+			b.WriteString(seg.text)
+			// Track whether we're inside a non-reset escape sequence.
+			wasColorActive = !strings.Contains(seg.text, string(colorReset))
+			continue
+		}
+		if remaining <= 0 {
+			break
+		}
+		b.WriteString(seg.text)
+		remaining -= seg.width
+		wasColorActive = false
+	}
+	// Append a reset only if we truncated while color was active.
+	if remaining <= 0 && wasColorActive {
+		b.WriteString(string(colorReset))
+	}
+	return b.String()
+}
+
+// ansiSeg is one span of s: either an ANSI escape sequence (visible=false) or
+// a single visible rune (visible=true, width = its terminal cells).
+type ansiSeg struct {
+	text    string
+	visible bool
+	width   int
+}
+
+// scanAnsi splits s into visible runes and ANSI escape sequences. A malformed
+// or partial sequence (no terminating final byte) falls through and is treated
+// as visible text, so an unterminated escape can never swallow characters.
+//
+// Sharing one scanner between displayWidth and truncateVisibleWidth keeps the
+// ANSI grammar in a single place — two independent parsers were two places for
+// a desync (one skipping a sequence the other counts).
+func scanAnsi(s string) []ansiSeg {
+	segs := make([]ansiSeg, 0, len(s)/4+1)
+	i := 0
+	for i < len(s) {
 		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
 			j := i + 2
 			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3f {
 				j++
 			}
 			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
+				segs = append(segs, ansiSeg{text: s[i : j+1]})
 				i = j + 1
 				continue
 			}
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if r == utf8.RuneError && size == 1 {
+			segs = append(segs, ansiSeg{text: s[i : i+1], visible: true, width: 1})
 			i++
 			continue
 		}
-		w += runeWidth(r)
+		segs = append(segs, ansiSeg{text: s[i : i+size], visible: true, width: runeWidth(r)})
 		i += size
 	}
-	return w
+	return segs
 }
 
 // fitWidth right-aligns s into exactly w display cells. Wide runes (CJK/emoji)
@@ -378,67 +446,6 @@ func colorizeBar(bar string, useColor bool) string {
 	return b.String()
 }
 
-// truncateVisibleWidth cuts s so that only the first `width` visible cells are
-// kept, preserving all ANSI escape sequences intact. Sequences that span the
-// cut point are dropped cleanly (the cut happens on a visible character
-// boundary, and the reset code is appended only if an escape sequence was
-// active at the cut point).
-func truncateVisibleWidth(s string, width int) string {
-	if width <= 0 {
-		return s
-	}
-	type segment struct {
-		text    string
-		visible bool
-	}
-	var segs []segment
-	i := 0
-	for i < len(s) {
-		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
-			j := i + 2
-			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3f {
-				j++
-			}
-			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
-				segs = append(segs, segment{text: s[i : j+1], visible: false})
-				i = j + 1
-				continue
-			}
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && size == 1 {
-			segs = append(segs, segment{text: s[i : i+1], visible: true})
-			i++
-			continue
-		}
-		segs = append(segs, segment{text: s[i : i+size], visible: true})
-		i += size
-	}
-	var b strings.Builder
-	remaining := width
-	wasColorActive := false
-	for _, seg := range segs {
-		if !seg.visible {
-			b.WriteString(seg.text)
-			// Track whether we're inside a non-reset escape sequence.
-			wasColorActive = !strings.Contains(seg.text, string(colorReset))
-			continue
-		}
-		if remaining <= 0 {
-			break
-		}
-		b.WriteString(seg.text)
-		r, _ := utf8.DecodeRuneInString(seg.text)
-		remaining -= runeWidth(r)
-		wasColorActive = false
-	}
-	// Append a reset only if we truncated while color was active.
-	if remaining <= 0 && wasColorActive {
-		b.WriteString(string(colorReset))
-	}
-	return b.String()
-}
-
 // minBarWidth is the floor for the adaptive progress bar on narrow terminals.
 // The fixed 30-cell bar plus the info block needs ~96 columns; below that the
 // bar shrinks (to this floor) so the percent column stays on screen instead of
@@ -502,8 +509,20 @@ func padToCells(s string, w int) string {
 	return s
 }
 
+// lineLayout picks which column set a per-file line renders, from the
+// terminal width (see layoutFor). Narrower screens shed whole columns so the
+// line always fits: full → no speed/ETA → no size/conn → name + pct only.
+type lineLayout int
+
+const (
+	layoutFull       lineLayout = iota // name size speed eta conn bar pct (PRD §8.1)
+	layoutNoSpeedETA                   // name size conn bar pct
+	layoutNameBarPct                   // name bar pct
+	layoutNamePct                      // name pct (barless, very narrow)
+)
+
 // RenderTaskLine formats one per-file line per PRD §8.1, colouring it when
-// useColor is true. The line layout:
+// useColor is true. The full line layout:
 //
 //	<file_name>   <size>   <speed>/s   <ETA>   [<bar>]   <percent>%
 //
@@ -512,9 +531,12 @@ func padToCells(s string, w int) string {
 // indeterminatePos drives the sizeless bar animation; pass -1 for a static
 // (centred) indeterminate bar. frame is the global frame counter for the
 // pacman face animation (c/C every ~1s).
-func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int, nameWidth int, barWidth int) string {
-	if nameWidth < 10 {
-		nameWidth = 10
+//
+// The other layouts shed columns for narrow terminals (see layoutFor); the
+// colouring is applied per layout (no bracket → no bracket colouring).
+func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, frame int, nameWidth int, barWidth int, layout lineLayout) string {
+	if nameWidth < 4 {
+		nameWidth = 4
 	}
 	if barWidth < 2 {
 		barWidth = 2
@@ -528,7 +550,7 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	if v.TotalSize > 0 {
 		size += "/" + FormatFileSizeShort(v.TotalSize)
 	} else if v.TotalSize < 0 {
-		size += "/?"
+		size += "/" + unknownGlyph
 	}
 	// For completed tasks show final size (pinned, not "0/?" for sizeless).
 	if v.TotalSize <= 0 && v.State == download.StateCompleted && v.BytesDone > 0 {
@@ -561,18 +583,35 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	// cannot walk the pacman bar and the right-edge percent left/right. The
 	// name is padded by display cells (padToCells), not runes, so a wide CJK
 	// filename can't push the info block past the terminal edge.
-	line := fmt.Sprintf("%s%s  %s  %s  %s  %s[%s]  %3d%%%s",
-		c, padToCells(name, nameWidth),
-		fitWidth(size, colSize),
-		fitWidth(speed, colSpeed),
-		fitWidth(eta, colETA),
-		connDisplay, bar, pct, reset)
+	var line string
+	switch layout {
+	case layoutNoSpeedETA:
+		line = fmt.Sprintf("%s%s  %s  %s[%s]  %3d%%%s",
+			c, padToCells(name, nameWidth),
+			fitWidth(size, colSize),
+			connDisplay, bar, pct, reset)
+	case layoutNameBarPct:
+		line = fmt.Sprintf("%s%s  %s[%s]  %3d%%%s",
+			c, padToCells(name, nameWidth),
+			connDisplay, bar, pct, reset)
+	case layoutNamePct:
+		line = fmt.Sprintf("%s%s  %3d%%%s", c, padToCells(name, nameWidth), pct, reset)
+	default: // layoutFull
+		line = fmt.Sprintf("%s%s  %s  %s  %s  %s[%s]  %3d%%%s",
+			c, padToCells(name, nameWidth),
+			fitWidth(size, colSize),
+			fitWidth(speed, colSpeed),
+			fitWidth(eta, colETA),
+			connDisplay, bar, pct, reset)
+	}
 	if !useColor {
 		return line
 	}
+
 	// Apply component-level colors on top of the state-colored line.
 	// Color the connection indicator: magenta for active, grey for queued,
-	// green for completed (though completed won't show the bracket).
+	// green for completed (though completed won't show the bracket). Layouts
+	// without the conn/bracket columns skip it.
 	var connColor Color
 	switch v.State {
 	case download.StateActive, download.StateRetrying:
@@ -580,7 +619,7 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	case download.StateQueued, download.StatePaused:
 		connColor = colorGrey
 	}
-	if connColor != "" && v.Connections > 0 && v.State != download.StateCompleted {
+	if layout != layoutNamePct && connColor != "" && v.Connections > 0 && v.State != download.StateCompleted {
 		connStr := fmt.Sprintf("[x%d]", v.Connections)
 		coloredConn := string(connColor) + connStr + string(colorReset)
 		connPadded := coloredConn + strings.Repeat(" ", colConns-len(connStr))
@@ -596,8 +635,11 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	case download.StateError:
 		line = colorReplace(line, pctStr, string(colorRed)+pctStr+string(colorReset))
 	}
-	// Colorize the pacman bar (face→yellow, dashes→green, dots→cyan).
-	line = colorizeBarInLine(line)
+	// Colorize the pacman bar (face→yellow, dashes→green, dots→cyan). The bar
+	// is the bracketed span; the name+pct layout has none.
+	if layout != layoutNamePct {
+		line = colorizeBarInLine(line)
+	}
 	return line
 }
 
@@ -660,17 +702,35 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration,
 		bar = colorizeBar(bar, true)
 	}
 
+	leftText := fmt.Sprintf("Total: %d/%d completed", completed, total)
+	rightSide := fmt.Sprintf("  |  %s  |  ETA %s  [%s]  %s", sp, etaStr, bar, pctStr)
 	bytesStr := FormatFileSize(bytesDone)
 	if totalSize > 0 {
 		bytesStr += "/" + FormatFileSize(totalSize)
 	}
-	leftText := fmt.Sprintf("Total: %d/%d completed  %s", completed, total, bytesStr)
-	rightSide := fmt.Sprintf("  |  %s  |  ETA %s  [%s]  %s", sp, etaStr, bar, pctStr)
 
 	if termWidth > 0 {
 		padding := termWidth - displayWidth(leftText) - displayWidth(rightSide) - 1
 		if padding < 2 {
-			padding = 2
+			// No room for the full summary: drop the speed/ETA right block and
+			// emit a one-line summary (left + bytes + bar + pct) sized to fit
+			// the terminal — or just left + pct if the bar has no room either.
+			// Never truncate the pct off the right edge (the per-file lines
+			// already carry the bytes).
+			pctColored := pctStr
+			if useColor {
+				pctColored = string(colorGreen) + pctStr + string(colorReset)
+			}
+			compact := fmt.Sprintf("%s%s%s %s [%s] %s",
+				c0(useColor, colorGreen), leftText, c1(useColor),
+				bytesStr, bar, pctColored)
+			if displayWidth(compact) <= termWidth {
+				return compact
+			}
+			// Still too wide (extreme narrow widths): drop the byte count too
+			// — "Total: N/M" + pct is the absolute floor, always fits.
+			return fmt.Sprintf("%s%s%s %s",
+				c0(useColor, colorGreen), leftText, c1(useColor), pctColored)
 		}
 		if useColor {
 			return fmt.Sprintf("%s%s%s%s%s",
@@ -689,4 +749,20 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta time.Duration,
 			string(colorGreen), pctStr, string(colorReset))
 	}
 	return fmt.Sprintf("%s  |  %s  |  ETA %s  [%s]  %s", leftText, sp, etaStr, bar, pctStr)
+}
+
+// c0/c1 are tiny colour-pair helpers for the compact summary: the green
+// colour code when coloured output is on, or empty strings when not.
+func c0(useColor bool, col Color) string {
+	if useColor {
+		return string(col)
+	}
+	return ""
+}
+
+func c1(useColor bool) string {
+	if useColor {
+		return string(colorReset)
+	}
+	return ""
 }

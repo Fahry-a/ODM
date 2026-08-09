@@ -211,8 +211,9 @@ func (rm *rateMeasure) tick(delta int64) bool {
 			if rm.bps == 0 {
 				rm.bps = bps
 			} else {
-				// light EMA: 60% old / 40% new → smooth but responsive.
-				rm.bps = int64(float64(rm.bps)*0.6 + float64(bps)*0.4)
+				// EMA: 30% old / 70% new → responsive to real speed changes.
+				// Previous 60/40 caused stale speed display for 1-2s after bursts.
+				rm.bps = int64(float64(rm.bps)*0.3 + float64(bps)*0.7)
 			}
 		}
 	}

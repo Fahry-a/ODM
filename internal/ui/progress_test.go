@@ -46,7 +46,7 @@ func TestRenderTaskLine_Format(t *testing.T) {
 		Filename: "linux-cachyos", TotalSize: 120 << 20, Speed: 25 << 20,
 		BytesDone: 86 << 20, Connections: 16, State: download.StateActive, ETA: 5 * time.Second,
 	}
-	line := renderTaskLine(v, false, -1, 0, 20, BarWidth)
+	line := renderTaskLine(v, false, -1, 0, 20, BarWidth, layoutFull)
 	for _, want := range []string{"linux-cachyos", "86.0M/120.0M", "x16", "71%", "%"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %s", want, line)
@@ -88,10 +88,10 @@ func TestRenderTaskLine_FixedColumns(t *testing.T) {
 		return i
 	}
 
-	ref := renderTaskLine(variants[0], false, -1, 0, 20, BarWidth)
+	ref := renderTaskLine(variants[0], false, -1, 0, 20, BarWidth, layoutFull)
 	refBar, refPct, refLen := barIdx(ref), pctIdx(ref), len([]rune(ref))
 	for _, v := range variants {
-		line := renderTaskLine(v, false, -1, 0, 20, BarWidth)
+		line := renderTaskLine(v, false, -1, 0, 20, BarWidth, layoutFull)
 		if got := barIdx(line); got != refBar {
 			t.Fatalf("bar column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refBar, got, ref, line)
 		}
@@ -141,7 +141,7 @@ func TestRenderTaskLine_WideRuneNameStaysInBudget(t *testing.T) {
 		ETA:         5 * time.Second,
 	}
 	const nameW = 20
-	line := renderTaskLine(v, false, -1, 0, nameW, BarWidth)
+	line := renderTaskLine(v, false, -1, 0, nameW, BarWidth, layoutFull)
 	want := nameW + infoBlockWidthFor(BarWidth)
 	if d := displayWidth(line); d != want {
 		t.Fatalf("line display width %d, want %d\n%q", d, want, line)
@@ -183,7 +183,7 @@ func TestFormatDuration_FixedWidth(t *testing.T) {
 		d    time.Duration
 		want string
 	}{
-		{0, "--:--:--"},
+		{0, "      ?"}, // unknown → shared unknownGlyph, right-aligned in the column
 		{5 * time.Second, "00:00:05"},
 		{32 * time.Second, "00:00:32"},
 		{99*time.Minute + 59*time.Second, "01:39:59"},
@@ -196,6 +196,9 @@ func TestFormatDuration_FixedWidth(t *testing.T) {
 		got := FormatDuration(tc.d)
 		if got != tc.want {
 			t.Fatalf("FormatDuration(%v)=%q want %q", tc.d, got, tc.want)
+		}
+		if tc.d <= 0 {
+			continue // unknown glyph isn't the HH:MM:SS shape
 		}
 		if len(got) != colETA {
 			t.Fatalf("FormatDuration(%v)=%q len=%d want %d", tc.d, got, len(got), colETA)
@@ -320,57 +323,12 @@ func TestTruncateName_RuneSafe(t *testing.T) {
 		t.Fatalf("truncated body must be 8 wide runes (17 cells / 2), got %d (got=%q)", rc, got)
 	}
 	// And it must re-encode cleanly (no invalid UTF-8 / replacement bytes).
-	for _, b := range []byte(got) {
-		_ = b
-	}
-	if !utf8Valid(got) {
+	if !utf8.ValidString(got) {
 		t.Fatalf("truncated name is not valid UTF-8: %q", got)
 	}
 }
 
 func countRunes(s string) int { return len([]rune(s)) }
-
-// utf8Valid avoids importing unicode/utf8 just for the assertion.
-func utf8Valid(s string) bool {
-	for i := 0; i < len(s); {
-		r, size := decodeRune(s[i:])
-		if r == 0xFFFD && size == 1 {
-			return false
-		}
-		i += size
-	}
-	return true
-}
-
-// decodeRune is a tiny utf8.DecodeRuneInString stand-in; good enough for the
-// validity check.
-func decodeRune(s string) (rune, int) {
-	if len(s) == 0 {
-		return 0, 0
-	}
-	b := s[0]
-	switch {
-	case b < 0x80:
-		return rune(b), 1
-	case b < 0xC2:
-		return 0xFFFD, 1
-	case b < 0xE0:
-		if len(s) < 2 || s[1]&0xC0 != 0x80 {
-			return 0xFFFD, 1
-		}
-		return rune(b&0x1F)<<6 | rune(s[1]&0x3F), 2
-	case b < 0xF0:
-		if len(s) < 3 || s[1]&0xC0 != 0x80 || s[2]&0xC0 != 0x80 {
-			return 0xFFFD, 1
-		}
-		return rune(b&0x0F)<<12 | rune(s[1]&0x3F)<<6 | rune(s[2]&0x3F), 3
-	default:
-		if len(s) < 4 || s[1]&0xC0 != 0x80 || s[2]&0xC0 != 0x80 || s[3]&0xC0 != 0x80 {
-			return 0xFFFD, 1
-		}
-		return rune(b&0x07)<<18 | rune(s[1]&0x3F)<<12 | rune(s[2]&0x3F)<<6 | rune(s[3]&0x3F), 4
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Bug §3.1 — vanished completed task is retained; §3.2 — no double count.

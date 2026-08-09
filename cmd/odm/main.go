@@ -210,6 +210,21 @@ func run(argv []string) error {
 	defer uiCancel()
 	go r.RunLoop(uiCtx, 100*time.Millisecond, snap, qSnap)
 
+	// Wake the redraw loop on SIGWINCH so a terminal resize is reflected on
+	// the very next frame instead of waiting out the 100ms tick (whose
+	// timeout we'd otherwise burn sleeping inside a resize storm).
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	defer signal.Stop(winch)
+	go func() {
+		for range winch {
+			select {
+			case r.Wake <- struct{}{}:
+			default: // coalesce bursts; the sized renderer already re-reads per frame
+			}
+		}
+	}()
+
 	succeeded, failed, runErr := sch.Run(ctx)
 	uiCancel()
 	// Final frame so the terminal lands on the completed bars.

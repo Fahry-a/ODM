@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 //
-// termsize.go exposes the terminal width the live redraw needs to keep one
+// termsize.go exposes the terminal size the live redraw needs to keep one
 // logical line == one physical line (PRD §8 bug §3.3): if a rendered line is
 // wider than the terminal it wraps, the ANSI cursor-up count (stored per
 // frame) no longer matches the number of physical rows actually on screen and
 // subsequent redraws corrupt the display — doubly so for long filenames in a
 // narrow terminal.
+//
+// The height (rows) is read too: a batch taller than the terminal would push
+// the cursor-up count past the top of the screen on the next redraw, corrupting
+// the display the same way wrapping does. Frame() caps the rendered task list
+// to the row budget.
 //
 // We deliberately do NOT import golang.org/x/term: it is not a known dependency
 // of this module and adding it would pull a vanity import that the project's
@@ -23,28 +28,28 @@ import (
 // is not a terminal. 80 matches the conventional default column count.
 const MinTerminalWidth = 80
 
-// terminalColumns returns the number of columns of the terminal attached to w.
-// It returns (cols, ok) where ok is false when w is not a TTY or the ioctl
-// fails — callers fall back to MinTerminalWidth in that case.
-//
-// The renderer truncates every rendered line to cols-1 (see RenderTaskLine's
-// caller in Frame) so a line never wraps, which is what keeps the cursor-up
-// tally correct frame to frame.
-func terminalColumns(w io.Writer) (cols int, ok bool) {
+// MinTerminalHeight is the floor used when height detection fails or the
+// writer is not a terminal. 24 matches the conventional default row count.
+const MinTerminalHeight = 24
+
+// terminalSize returns the size of the terminal attached to w. It returns
+// (cols, rows, ok) where ok is false when w is not a TTY or the ioctl fails —
+// callers fall back to the Min* defaults in that case.
+func terminalSize(w io.Writer) (cols, rows int, ok bool) {
 	f, ok := w.(*os.File)
 	if !ok {
-		return 0, false
+		return 0, 0, false
 	}
 	return ioctlWinSize(f.Fd())
 }
 
-// rendererWidth folds terminalColumns into a single usable number: the live tty
-// width minus 1 (room so a full-width line won't wrap), or MinTerminalWidth-1
-// when the writer isn't a terminal. Re-read every frame so a mid-run terminal
-// resize is picked up — the call is a single cheap ioctl.
-func rendererWidth(w io.Writer) int {
-	if c, ok := terminalColumns(w); ok && c > 0 {
-		return c - 1
+// rendererSize folds terminalSize into usable numbers: the live tty size
+// minus 1 column (room so a full-width line won't wrap), or the Min*
+// defaults when the writer isn't a terminal. Re-read every frame so a mid-run
+// terminal resize is picked up — the call is a single cheap ioctl.
+func rendererSize(w io.Writer) (width, height int) {
+	if c, r, ok := terminalSize(w); ok && c > 0 {
+		return c - 1, r
 	}
-	return MinTerminalWidth - 1
+	return MinTerminalWidth - 1, MinTerminalHeight
 }

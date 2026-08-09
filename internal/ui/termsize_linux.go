@@ -17,12 +17,13 @@ type winsize struct {
 }
 
 // ioctlWinSize asks the kernel for the tty size behind fd via TIOCGWINSZ.
-// Returns (cols, true) on success. A non-tty fd or a failing ioctl yields
-// (0, false); the caller falls back to the conventional 80-column default.
+// Returns (cols, rows, true) on success. A non-tty fd or a failing ioctl
+// yields (0, 0, false); the caller falls back to the conventional 80×24
+// default.
 //
 // We use syscall.Syscall6 rather than unix.IoctlGetWinsize so golang.org/x/sys
 // (and transitively golang.org/x/term) never enters the dependency graph.
-func ioctlWinSize(fd uintptr) (cols int, ok bool) {
+func ioctlWinSize(fd uintptr) (cols, rows int, ok bool) {
 	ws := winsize{}
 	// SYS_IOCTL + TIOCGWINSZ is the same across Linux architectures.
 	_, _, errno := syscall.Syscall6(
@@ -33,7 +34,7 @@ func ioctlWinSize(fd uintptr) (cols int, ok bool) {
 		0, 0, 0,
 	)
 	if errno != 0 || ws.col == 0 {
-		return 0, false
+		return 0, 0, false
 	}
-	return int(ws.col), true
+	return int(ws.col), int(ws.row), true
 }

@@ -94,17 +94,22 @@ func (c *cursor) ordered() []download.ProgressView {
 	return out
 }
 
-// Renderer owns the live redraw state:
-//   - cur: the per-task-ID cache + last live/queued slices (see Frame)
+// Renderer is the live redraw state:
+//   - cur - the per-task cache + last live/queued slices (see Frame)
 //   - lastLines: how many physical lines the previous frame drew, so the next
 //     frame moves the cursor up that many rows to overwrite in place
-//   - indeterminateTick: the bouncing pacman's frame counter for sizeless bars
+//   - indeterminateTick: the bouncing frames counter for sizeless bars
+//   - sizeFn - the terminal-size probe; tests swap it to pin width/height
 //   - nonTTYInterval / lastNonTTYFlush / lastLogged*: the throttle bookkeeping
 type Renderer struct {
 	w        io.Writer
 	useColor bool
 	tty      bool
 	quiet    bool
+
+	// sizeFn returns the terminal size for r.w. Defaults to rendererSize;
+	// tests replace it to render into a fixed-size "terminal".
+	sizeFn func(io.Writer) (width, height int)
 
 	cur cursor
 
@@ -114,6 +119,12 @@ type Renderer struct {
 	// it visibly moves between ticks (bug §3.5). Reset for nothing — a missed
 	// frame just delays the bounce, never corrupts state.
 	indeterminateTick int
+
+	// Wake is a notification channel the RunLoop drains to re-render
+	// immediately. main.go pings it on SIGWINCH so a terminal resize lands on
+	// the next frame instead of waiting out the 100ms tick. Buffer 1 and
+	// non-blocking send: coalesced, never blocks the sender.
+	Wake chan struct{}
 
 	// Non-TTY throttle (PRD §8.2): when stdout is redirected we don't want a
 	// line every 100ms. We print at most one summary snapshot per
@@ -140,6 +151,8 @@ func NewRenderer(w io.Writer, quiet bool) *Renderer {
 		tty:      tty,
 		useColor: tty && shouldColor(w),
 		quiet:    quiet,
+		sizeFn:   rendererSize,
+		Wake:     make(chan struct{}, 1),
 		cur: cursor{
 			cache: map[download.TaskID]download.ProgressView{},
 		},
@@ -324,29 +337,51 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	}
 
 	// TTY: build lines, truncated to width so wrapping can't desync cursor-up.
-	width := rendererWidth(r.w)
-	// Compute the bar width + name width so the info block
-	// (size/speed/ETA/bar/pct) sits at the right edge of the terminal, matching
-	// the pacman ILoveCandy layout. On narrow terminals the bar shrinks (via
-	// barWidthFor) so the percent column isn't truncated off the edge.
-	barW := barWidthFor(width)
-	nameWidth := width - infoBlockWidthFor(barW) - 1 // -1 for leading space
-	if nameWidth < 10 {
-		nameWidth = 10
-	}
+	// Width AND height are re-read per frame: a mid-run resize (usually via
+	// SIGWINCH waking the ticker) is picked up on the very next frame.
+	width, height := r.sizeFn(r.w)
+	// Layered degradation for narrow terminals: full columns down to 96 cols,
+	// speed/ETA dropped below 66, bar dropped below 45; under that the line is
+	// name + percent only.
+	barW, nameWidth, _, layout := layoutFor(width)
 	lines := make([]string, 0, len(view)+1)
+	hidden := 0
 	pos := bouncePosition(r.indeterminateTick, barW)
+	// Row budget: keep the task list + summary (+ the "N more…" line when
+	// tasks are cut off) inside the terminal height so the cursor-up count
+	// always matches physical rows. A batch taller than the screen used to
+	// scroll the list and corrupt the next redraw.
+	rowBudget := height
+	if rowBudget < 1 {
+		rowBudget = 1
+	}
+	if st.total > 0 {
+		rowBudget-- // reserve one row for the summary
+	}
+	rowBudget-- // reserve one row for the "N more…" line when needed
+	if rowBudget < 0 {
+		rowBudget = 0
+	}
 	for _, v := range view {
 		if !isActive(v) {
 			continue
 		}
-		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick, nameWidth, barW)
+		if len(lines) >= rowBudget {
+			hidden++
+			continue
+		}
+		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick, nameWidth, barW, layout)
 		lines = append(lines, truncateToWidth(line, width))
 	}
 	// Only show summary when there are tasks — avoids the misleading
 	// "Total: 0/0" before any snapshots arrive.
 	if st.total > 0 {
 		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor, width, barW), width))
+	}
+	// When tasks were cut off the visible list, say so instead of leaving the
+	// user wondering where the rest went. ANSI-free so the width math holds.
+	if hidden > 0 {
+		lines = append(lines, truncateToWidth(fmt.Sprintf("%d more…", hidden), width))
 	}
 
 	// Move cursor up over the previous frame, clearing each row.
@@ -367,6 +402,43 @@ func sizelessPos(v download.ProgressView, pos int) int {
 		return pos
 	}
 	return -1
+}
+
+// layoutFor picks the per-file line layout for a terminal width (display
+// cells). The bar shrinks first (existing behaviour), then whole columns
+// drop — speed/ETA, then size/conn — down to an absolute floor of just the
+// name and the percent. Every tier still renders a single non-wrapping row;
+// the previous code kept all five fixed columns even at 40 columns, where the
+// name got squeezed to its 10-cell minimum and the pct risked being truncated
+// off the edge. minW is the narrowest the line can be for the tier; it's the
+// math the tier selection is built on, and ≤ termWidth always.
+func layoutFor(termWidth int) (barW, nameW, minW int, layout lineLayout) {
+	switch {
+	case termWidth >= 96:
+		barW = BarWidth
+		nameW = termWidth - infoBlockWidthFor(barW) - 1
+		minW = infoFixedWidth + barW + 1 // " name  <info block>"
+		layout = layoutFull
+	case termWidth >= 66:
+		barW = max(minBarWidth, BarWidth-10)
+		nameW = 8
+		minW = infoFixedWidth - (colSpeed + colETA + 4) + barW + 2 // no speed/ETA columns
+		layout = layoutNoSpeedETA
+	case termWidth >= 45:
+		barW = minBarWidth
+		nameW = 6
+		minW = infoFixedWidth - (colSpeed + colETA + colSize + 4) + 2 + barW + 2 // name + bar + pct
+		layout = layoutNameBarPct
+	default: // <45: barless; name + pct only
+		barW = 0
+		nameW = max(termWidth-6, 6)
+		minW = 4
+		layout = layoutNamePct
+	}
+	if nameW < 4 {
+		nameW = 4
+	}
+	return
 }
 
 // truncateToWidth cuts s to at most width visible display cells so it fits on
@@ -432,7 +504,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 			if !isActive(v) {
 				continue
 			}
-			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick, 40, BarWidth))
+			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick, 40, BarWidth, layoutFull))
 			b.WriteByte('\n')
 		}
 		b.WriteString(summary)
@@ -470,6 +542,10 @@ func (r *Renderer) RunLoop(ctx context.Context, interval time.Duration,
 		case <-t.C:
 			// Re-render last-seen slices; updateCache reconciles the cache and
 			// advances the indeterminate animation even when nothing new came.
+			r.Frame(r.cur.live, r.cur.queue)
+		case <-r.Wake:
+			// Terminal resize (SIGWINCH) or any external nudge: re-render
+			// immediately so the new size takes effect on this frame.
 			r.Frame(r.cur.live, r.cur.queue)
 		}
 	}
