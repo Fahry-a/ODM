@@ -183,12 +183,10 @@ jobs:
 
       - name: Publish AUR
         if: steps.version.outputs.skip != 'true'
-        working-directory: packaging
-        # Reusable AUR sync action: clones the AUR repo, prunes stale
-        # odm-bin-<ver>.* assets (rm_patterns), copies the current set, and
-        # pushes one atomic commit. pkgrel_mode stays none — the pkgrel
-        # bump/reset logic lives in the earlier "Update PKGBUILD version
-        # metadata" step.
+        # working-directory is not supported on composite-action steps — the
+        # action's file globs resolve against GITHUB_WORKSPACE (repo root),
+        # so they point at packaging/… (the earlier run-steps cd into
+        # packaging, but those produced the files, they don't relocate them).
         uses: Fahry-a/aur-sync-action@v1
         with:
           package_name: odm-bin
@@ -201,12 +199,12 @@ jobs:
           version: ""
           commit_message: "chore(aur): update to v${{ steps.version.outputs.version }}"
           files: >-
-            PKGBUILD,
-            .SRCINFO,
-            odm-bin-*.1,
-            odm-bin-*.conf.example,
-            odm-bin-*.service,
-            odm-bin-*.LICENSE
+            packaging/PKGBUILD,
+            packaging/.SRCINFO,
+            packaging/odm-bin-*.1,
+            packaging/odm-bin-*.conf.example,
+            packaging/odm-bin-*.service,
+            packaging/odm-bin-*.LICENSE
           rm_patterns: >-
             odm-bin-*.1,
             odm-bin-*.conf.example,
