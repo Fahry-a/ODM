@@ -155,6 +155,11 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		MinSplitSize:     m.opts.MinSplitSize,
 		MaxConnPerServer: m.opts.MaxConnPerServer,
 	}, m.ClientFor(profile), m.lim, m.logf)
+	// Region 2 of the both profile speaks HTTP/2 — attach the Manager's h2
+	// client so Start can give it to the second engine.
+	if m.h2client != nil {
+		t.SetH2Client(m.h2client)
+	}
 	m.track(id, t)
 	return t, conns, nil
 }

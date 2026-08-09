@@ -119,6 +119,17 @@ type Task struct {
 	// rebuild the layout on resume.
 	ariaSplit int64
 
+	// both profile: engines[0] covers [0, splitAt) on the h1 client,
+	// engines[1] covers [splitAt, end) on the h2 client. nil for other
+	// profiles. regionConns holds the worker count per engine.
+	engines     []*Engine
+	regionConns []int
+	splitAt     int64
+
+	// h2Client is the HTTP/2 transport client (region2 of both; the same as
+	// t.client for aria2c). Set by the Manager via SetH2Client.
+	h2Client *transport.Client
+
 	// progress
 	bytesDone atomic.Int64
 	speed     atomic.Int64
@@ -301,7 +312,15 @@ func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
 // default returned by the TaskMaker.
 func (t *Task) SetConns(n int) { t.conns.Store(int32(n)); t.connTarget.Store(int32(n)) }
 
-// SetProbe attaches a pre-probed result so Start can skip the network probe.
+// SetH2Client attaches the HTTP/2 transport client used for the both
+// profile's region2 (and re-probe). Must be called before Start.
+func (t *Task) SetH2Client(c *transport.Client) {
+	if c != nil {
+		t.h2Client = c
+	}
+}
+
+// SetProbe attaches a probe to a task so Start can skip the network probe.
 // The CLI one-shot path probes every URL up front (for the Balancer and the
 // confirmation prompt) and injects it here; the RPC daemon path leaves it nil
 // and Start probes normally. Must be called before Start.
@@ -341,7 +360,7 @@ func (t *Task) AdjustConns(target int, ctx context.Context, sink func(ProgressVi
 	}
 	for i := 0; i < target-int(old); i++ {
 		t.workerWg.Add(1)
-		go t.worker(ctx, -1, &t.workerWg, sink)
+		go t.worker(ctx, t.currentEngine(), &t.workerWg, sink)
 	}
 	t.adjustMu.Unlock()
 	return true
@@ -413,23 +432,58 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	}
 	// Engine profile: aria2c splits the file into `split` segments of roughly
 	// equal size (bounded by min-split-size), odm uses fixed-size chunks with
-	// work-stealing. Both keep the same Chunk struct + worker loop; only the
-	// queue layout differs. The segment layout is deterministic from
-	// (TotalSize, Split, MinSplitSize), so resume rebuilds it from the control
-	// file — see effectiveChunkSize.
+	// work-stealing. both splits the file into two regions — [0, mid) via the
+	// odm engine (h1 client), [mid, end) via the aria2c engine (h2 client).
+	// The layout is deterministic from (TotalSize, split params), so resume
+	// rebuilds it from the control file.
 	effective := t.opts.ChunkSize
 	isAria := t.opts.Profile == "aria2c"
-	var staticQ *StaticQueue
+	isBoth := t.opts.Profile == "both"
+	t.engines = nil
+	t.splitAt = 0
 	if isAria && qs > 0 {
 		n, seg := AriaSplit(qs, int64(t.opts.Split), t.opts.MinSplitSize)
 		effective = seg
 		t.ariaSplit = n
-		staticQ = NewStaticQueue(qs, n)
 		t.logf("info", "aria2c profile: %d segments of ~%s each", n, formatSegSize(seg))
 	}
+	if isBoth && qs > 0 && qs < 4*1024*1024 {
+		// Tiny file: a 50/50 split gains nothing (the aria2c region would be
+		// a couple of segments at most). Degrade to the plain odm engine.
+		isBoth = false
+		t.logf("info", "both profile: file < 4 MiB, using single-region odm engine")
+	}
+	if isBoth && qs > 0 {
+		// both: region1 [0, mid) = odm fixed-chunk work-stealing (h1 client),
+		// region2 [mid, end) = aria2c static split (h2 client). Connection
+		// budget halves; a single connection or tiny file degrades to the odm
+		// engine (see below).
+		conns1 := max(1, conns/2)
+		conns2 := max(1, conns-conns1)
+		t.regionConns = []int{conns1, conns2}
+		t.splitAt = qs / 2
+		if t.splitAt < 1 {
+			t.splitAt = 1
+		}
+		mid := t.splitAt
+		n2, _ := AriaSplit(qs-mid, int64(t.opts.Split), t.opts.MinSplitSize)
+		eng2Client := t.client
+		if t.h2Client != nil {
+			eng2Client = t.h2Client
+		}
+		t.engines = []*Engine{
+			{q: NewChunkQueue(mid, t.opts.ChunkSize), client: t.client, base: 0},
+			{q: NewStaticQueue(qs-mid, n2), client: eng2Client, base: mid},
+		}
+		t.ariaSplit = n2
+		t.logf("info", "both profile: region1 [0,%d) odm (%d conns, h1), region2 [%d,%d) aria2c (%d segments, h2)",
+			mid, conns1, mid, qs, n2)
+	}
 	var q workQueue
-	if staticQ != nil {
-		q = staticQ
+	if t.engines != nil {
+		q = t.engines[0].q
+	} else if isAria && qs > 0 {
+		q = NewStaticQueue(qs, t.ariaSplit)
 	} else {
 		q = NewChunkQueue(qs, effective)
 	}
@@ -444,12 +498,35 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			// changed on the server — do NOT resume stale chunks.
 			if cf.ETag != "" && pr.ETag != "" && cf.ETag != pr.ETag {
 				t.logf("warn", "ETag changed (%s → %s), re-downloading from scratch", cf.ETag, pr.ETag)
-			} else if cf.TotalSize == pr.TotalSize && cf.ChunkSize == effective {
+			} else if cf.TotalSize == pr.TotalSize &&
+				cf.ChunkSize == effective &&
+				(cf.Profile == "" || cf.Profile == t.opts.Profile) &&
+				cf.SplitAt == t.splitAt &&
+				cf.Region2ChunkSize == t.region2ChunkSize() {
 				var ok bool
-				alreadyDone, ok = q.ResetCompletedOffsets(cf.CompletedOffsets(), pr.TotalSize)
+				offs := cf.CompletedOffsets()
+				if t.engines != nil {
+					// Split the absolute offsets per region: region1 keeps them,
+					// region2 subtracts its base (the queue is 0-based there).
+					done1 := map[int64]struct{}{}
+					done2 := map[int64]struct{}{}
+					for off := range offs {
+						if off >= t.splitAt {
+							done2[off-t.splitAt] = struct{}{}
+						} else {
+							done1[off] = struct{}{}
+						}
+					}
+					var a1, a2 int64
+					a1, ok = t.engines[0].ResetCompletedOffsets(done1, t.splitAt)
+					a2, _ = t.engines[1].ResetCompletedOffsets(done2, t.engines[1].base)
+					alreadyDone = a1 + a2
+				} else {
+					alreadyDone, ok = q.ResetCompletedOffsets(offs, pr.TotalSize)
+				}
 				if !ok {
 					// e.g. a ranged control file now hitting a single-stream URL,
-					// or a stale layout: trust nothing, start over.
+					// or a stale layout. Trust nothing, re over.
 					t.logf("warn", "control file layout doesn't match this download, re-downloading from scratch")
 					alreadyDone = 0
 				} else {
@@ -486,7 +563,20 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			alreadyDone = 0
 			t.bytesDone.Store(0)
 			t.clearChunkHashes()
-			if staticQ != nil {
+			if t.engines != nil {
+				// Rebuild both engines with the same layout math.
+				mid := t.splitAt
+				n2, _ := AriaSplit(qs-mid, int64(t.opts.Split), t.opts.MinSplitSize)
+				eng2Client := t.client
+				if t.h2Client != nil {
+					eng2Client = t.h2Client
+				}
+				t.engines = []*Engine{
+					{q: NewChunkQueue(mid, t.opts.ChunkSize), client: t.client, base: 0},
+					{q: NewStaticQueue(qs-mid, n2), client: eng2Client, base: mid},
+				}
+				q = t.engines[0].q
+			} else if isAria && qs > 0 {
 				q = NewStaticQueue(qs, t.ariaSplit)
 			} else {
 				q = NewChunkQueue(qs, effective)
@@ -537,9 +627,21 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			workerCount = t.opts.MaxConnPerServer
 		}
 	}
-	for i := range workerCount {
-		t.workerWg.Add(1)
-		go t.worker(ctx, i, &t.workerWg, progressSink)
+	if t.engines != nil {
+		// both profile: spawn per-region workers with the region's conns.
+		for ei, eng := range t.engines {
+			n := t.regionConns[ei]
+			for i := 0; i < n; i++ {
+				t.workerWg.Add(1)
+				go t.worker(ctx, eng, &t.workerWg, progressSink)
+			}
+		}
+	} else {
+		engine := t.currentEngine()
+		for range workerCount {
+			t.workerWg.Add(1)
+			go t.worker(ctx, engine, &t.workerWg, progressSink)
+		}
 	}
 	// progress ticker even in single-worker sizeless case.
 	t.workerWg.Wait()
@@ -579,6 +681,29 @@ func (t *Task) profileUsesH2() bool {
 	return t.opts.Profile == "aria2c" || t.opts.Profile == "both"
 }
 
+// currentEngine returns the engine a single-profile task's workers use (the
+// shared one, or the first region for both — both paths pick explicitly).
+func (t *Task) currentEngine() *Engine {
+	if t.engines != nil {
+		return t.engines[0]
+	}
+	return &Engine{q: t.queue, client: t.client, base: 0}
+}
+
+// engineForStart resolves which engine owns an absolute chunk start: region2
+// in the both profile, the shared engine otherwise.
+func (t *Task) engineForStart(start int64) *Engine {
+	if t.engines != nil {
+		// Chunk starts are absolute in both engines (region2 records base+rel
+		// offsets), so the splitAt check is on the absolute value.
+		if start >= t.splitAt {
+			return t.engines[1]
+		}
+		return t.engines[0]
+	}
+	return t.currentEngine()
+}
+
 // formatSegSize renders a segment byte count compactly for log lines
 // (MiB/GiB…). Kept local — the UI package's formatter lives in internal/ui.
 func formatSegSize(b int64) string {
@@ -596,10 +721,11 @@ func formatSegSize(b int64) string {
 	return fmt.Sprintf("%.1f %s", val, units[idx])
 }
 
-// worker pulls chunks from the shared queue and downloads them with retry on
-// transient failures (§13). Each chunk write uses storage.WriteAt so offset
-// positioning is safe without locks.
-func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(ProgressView)) {
+// worker pulls chunks from the given engine's queue and downloads them with
+// retry on transient failures (§13). Each chunk write uses storage.WriteAt so
+// offset positioning is safe without locks. In the both profile each region
+// has its own engine; single-profile tasks pass the one shared engine.
+func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink func(ProgressView)) {
 	defer wg.Done()
 	// Each worker represents one live connection. When it retires (queue empty,
 	// chunk error, or ctx cancel), decrement the live-connection counter so the
@@ -634,12 +760,12 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 		default:
 		}
 
-		c, ok := t.queue.Next()
+		c, ok := eng.Next()
 		if !ok {
 			return // no more work
 		}
 
-		if err := t.downloadChunk(ctx, c, sink); err != nil {
+		if err := t.downloadChunk(ctx, eng, c, sink); err != nil {
 			if ctx.Err() != nil {
 				t.errors.Add(1)
 				// Persist completed chunks so partial progress survives
@@ -652,7 +778,7 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 			// failure. The chunk is dropped only after opts.Retry worker-level
 			// passes (each pass running its own internal retry budget); beyond
 			// that it's treated as permanently broken.
-			if t.queue.Requeue(c, t.opts.Retry) {
+			if eng.Requeue(c, t.opts.Retry) {
 				t.logf("warn", "chunk %d (off %d) failed, requeued for retry: %v", c.Index, c.Start, err)
 				continue
 			}
@@ -661,7 +787,7 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 			t.logf("error", "chunk %d (off %d) failed permanently: %v", c.Index, c.Start, err)
 			return
 		}
-		t.queue.MarkDone(c)
+		eng.MarkDone(c)
 		if sink != nil {
 			sink(t.Snapshot())
 		}
@@ -675,8 +801,9 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 }
 
 // downloadChunk fetches one chunk's byte-range (retrying up to opts.Retry times
-// with RetryWait backoff) and writes it to disk at the chunk's offset.
-func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressView)) error {
+// with RetryWait backoff) and writes it to disk at the chunk's offset. `eng`
+// supplies the region base (both profile) and transport client.
+func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView)) error {
 	var lastErr error
 	for attempt := range t.opts.Retry + 1 {
 		if attempt > 0 {
@@ -694,9 +821,9 @@ func (t *Task) downloadChunk(ctx context.Context, c Chunk, sink func(ProgressVie
 		// the digest is only recorded on a fully-successful attempt — a hash is
 		// never stored for a partially-written chunk.
 		h := sha256.New()
-		err := t.fetchAndWrite(ctx, c, sink, h)
+		err := t.fetchAndWrite(ctx, eng, c, sink, h)
 		if err == nil {
-			t.storeChunkHash(c.Start, hex.EncodeToString(h.Sum(nil)))
+			t.storeChunkHash(eng.AbsStart(c.Start), hex.EncodeToString(h.Sum(nil)))
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -721,7 +848,8 @@ func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.Ca
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress. h receives every
 // byte written to disk so the caller can record the chunk's SHA-256 on success.
-func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressView), h hash.Hash) error {
+// eng supplies the region base (both profile) and transport client.
+func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView), h hash.Hash) error {
 	// Per-chunk timeout prevents a stalled connection from hanging a worker
 	// forever (see chunkTimeoutCtx). If the timeout fires, the chunk is
 	// retried by the caller (downloadChunk).
@@ -734,11 +862,17 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 		return t.fetchWhole(chunkCtx, c, sink, h)
 	}
 
-	end := c.End
-	if end < 0 {
-		end = -1
+	// Absolute offsets: region2 (both) starts at base, so Range and disk
+	// write use base+rel.
+	absStart := eng.AbsStart(c.Start)
+	absEnd := c.End
+	if absEnd >= 0 {
+		absEnd = eng.AbsStart(c.End)
 	}
-	resp, err := t.client.GetRange(chunkCtx, pr.FinalURL, c.Start, end)
+	if absEnd < 0 {
+		absEnd = -1
+	}
+	resp, err := eng.Client().GetRange(chunkCtx, pr.FinalURL, absStart, absEnd)
 	if err != nil {
 		return err
 	}
@@ -752,11 +886,11 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 		body = io.NopCloser(tl.Reader(chunkCtx, body))
 	}
 
-	// Copy chunk to disk at offset Start using a small buffer; the WriteAt
-	// positions the write at Start regardless of the file pointer.
+	// Copy chunk to disk at the absolute offset (base+Start for region2) using
+	// a small buffer; the WriteAt positions the write regardless of file pointer.
 	buf := make([]byte, 64*1024)
 	var off int64
-	n, err := copyChunkFrom(body, t.disk, c.Start, buf, &off, h, func(delta int64) {
+	n, err := copyChunkFrom(body, t.disk, absStart, buf, &off, h, func(delta int64) {
 		t.noteBytes(delta, sink)
 	})
 	if err != nil {
@@ -946,6 +1080,32 @@ func (t *Task) finish() error {
 	return nil
 }
 
+// effectiveChunkSize is the chunk size the current layout was built with:
+// the aria2c segment size for that profile, else opts.ChunkSize. Persisted
+// in the control file so a resume can rebuild the identical layout.
+func (t *Task) effectiveChunkSize() int64 {
+	if t.opts.Profile == "aria2c" && t.ariaSplit > 0 {
+		pr := t.probe.Load()
+		if pr != nil && pr.TotalSize > 0 {
+			_, seg := AriaSplit(pr.TotalSize, int64(t.opts.Split), t.opts.MinSplitSize)
+			return seg
+		}
+	}
+	return t.opts.ChunkSize
+}
+
+// region2ChunkSize is the segment size of the both profile's second engine
+// (0 for other profiles / legacy control files).
+func (t *Task) region2ChunkSize() int64 {
+	if t.engines != nil {
+		if pr := t.probe.Load(); pr != nil && pr.TotalSize > 0 {
+			_, seg := AriaSplit(pr.TotalSize-t.splitAt, int64(t.opts.Split), t.opts.MinSplitSize)
+			return seg
+		}
+	}
+	return 0
+}
+
 // checkpoint returns true when the control file should be flushed: either
 // persistCheckpointInterval chunks have completed since the last flush, or
 // persistMinInterval has elapsed since the last write. Serialized under t.mu
@@ -978,12 +1138,23 @@ func (t *Task) persistControl() {
 		t.controlCreatedAt = now
 	}
 	t.lastPersist = now
-	completed := t.queue.CompletedOffsets()
+	// Completed offsets are persisted as ABSOLUTE file offsets. For the both
+	// profile the second engine's queue is 0-based within its region, so its
+	// offsets are translated here (base + rel).
+	var completed []int64
+	if t.engines != nil {
+		completed = append(completed, t.engines[0].CompletedOffsets()...)
+		for _, off := range t.engines[1].CompletedOffsets() {
+			completed = append(completed, off+t.engines[1].base)
+		}
+	} else {
+		completed = t.queue.CompletedOffsets()
+	}
 	cf := &storage.ControlFile{
 		URL:       t.url,
 		FinalURL:  pr.FinalURL,
 		TotalSize: pr.TotalSize,
-		ChunkSize: t.opts.ChunkSize,
+		ChunkSize: t.effectiveChunkSize(),
 		ETag:      pr.ETag,
 		Completed: completed,
 		// Per-chunk SHA-256 hashes for resume verification — only for chunks
@@ -997,6 +1168,10 @@ func (t *Task) persistControl() {
 		UserAgent:   t.opts.UserAgent,
 		ODMVersion:  version.Version,
 		Checksum:    t.opts.Checksum,
+		// Profile metadata for layout reconstruction on resume.
+		Profile:          t.opts.Profile,
+		SplitAt:          t.splitAt,
+		Region2ChunkSize: t.region2ChunkSize(),
 	}
 	_ = storage.SaveControl(t.outPath, cf)
 }

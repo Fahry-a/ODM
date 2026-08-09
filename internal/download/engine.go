@@ -15,11 +15,15 @@
 
 package download
 
-import "sync"
+import (
+	"sync"
+
+	"odm/internal/transport"
+)
 
 // workQueue is the common surface the worker loop needs from a chunk source.
 // ChunkQueue (odm, work-stealing fixed chunks) and StaticQueue (aria2c, one
-// segment per worker) both implement it, so the worker stays profile-agnostic.
+// segment per worker) implement it, so the worker stays profile-agnostic.
 type workQueue interface {
 	Next() (Chunk, bool)
 	Requeue(c Chunk, maxWorkerAttempts int) bool
@@ -28,6 +32,46 @@ type workQueue interface {
 	CompletedSpans(chunkSize, totalSize int64, n int) []Chunk
 	ResetCompletedOffsets(done map[int64]struct{}, totalSize int64) (int64, bool)
 }
+
+// Engine couples a workQueue with the transport client and byte-region base
+// it belongs to. A both-profile task has two engines — region1 [0, splitAt)
+// on the h1 client, region2 [splitAt, end) on the h2 client — sharing the
+// same file at disjoint offsets. A single-profile task is one engine with
+// base 0.
+type Engine struct {
+	q      workQueue
+	client *transport.Client
+	base   int64 // absolute file offset this engine's chunks map to
+}
+
+// Next delegates to the queue.
+func (e *Engine) Next() (Chunk, bool) { return e.q.Next() }
+
+// Requeue delegates to the queue.
+func (e *Engine) Requeue(c Chunk, max int) bool { return e.q.Requeue(c, max) }
+
+// MarkDone delegates to the queue.
+func (e *Engine) MarkDone(c Chunk) { e.q.MarkDone(c) }
+
+// CompletedOffsets delegates to the queue.
+func (e *Engine) CompletedOffsets() []int64 { return e.q.CompletedOffsets() }
+
+// CompletedSpans delegates to the queue.
+func (e *Engine) CompletedSpans(chunkSize, totalSize int64, n int) []Chunk {
+	return e.q.CompletedSpans(chunkSize, totalSize, n)
+}
+
+// ResetCompletedOffsets delegates to the queue.
+func (e *Engine) ResetCompletedOffsets(done map[int64]struct{}, totalSize int64) (int64, bool) {
+	return e.q.ResetCompletedOffsets(done, totalSize)
+}
+
+// Client returns the engine's transport client (h1 for region 1, h2 for
+// region 2 in the both profile).
+func (e *Engine) Client() *transport.Client { return e.client }
+
+// AbsStart maps a queue-internal chunk start to its absolute file offset.
+func (e *Engine) AbsStart(rel int64) int64 { return e.base + rel }
 
 // AriaSplit computes the effective split count and segment size for a file of
 // totalSize given the user's --split (N) and --min-split-size (minSplit)

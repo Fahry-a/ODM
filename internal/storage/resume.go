@@ -50,6 +50,13 @@ type ControlFile struct {
 	// round-trips cleanly. Missing map (nil) = legacy control file; resume
 	// falls back to the server-side sample compare.
 	ChunkHashes map[int64]string `json:"chunk_hashes,omitempty"`
+
+	// Engine profile metadata (v0.3.0+) — all omitempty so legacy files
+	// (no profile) resume exactly as before. Profile "both" splits the file
+	// at SplitAt; region2 uses Region2ChunkSize for its static split.
+	Profile          string `json:"profile,omitempty"`            // "odm"|"aria2c"|"both"; empty = legacy
+	SplitAt          int64  `json:"split_at,omitempty"`           // region boundary (both); 0 = no split
+	Region2ChunkSize int64  `json:"region2_chunk_size,omitempty"` // region2 segment size (both)
 }
 
 // NoControlFile is returned by LoadControl when the `.odm` file is absent.
