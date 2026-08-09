@@ -111,8 +111,13 @@ type Task struct {
 	// filename, persistControl, verify*) must not race the writer.
 	probe   atomic.Pointer[transport.ProbeResult]
 	disk    *storage.File
-	queue   *ChunkQueue
+	queue   workQueue
 	outPath string
+
+	// ariaSplit is the effective segment count computed for the aria2c
+	// profile (0 for odm). Used to cap workers at the segment count and to
+	// rebuild the layout on resume.
+	ariaSplit int64
 
 	// progress
 	bytesDone atomic.Int64
@@ -170,11 +175,16 @@ type TaskOptions struct {
 	Retry         int
 	RetryWait     time.Duration
 	Continue      bool
-	ChunkSize     int64 // bytes; parsed from --chunk-size
+	ChunkSize     int64 // bytes; parsed from --chunk-size (fixed chunk for odm, min for aria2c)
 	Timeout       time.Duration
 	UserAgent     string // for control file metadata
 	Checksum      string // "algo:hex" if --checksum was used
 	TaskLimitRate string // per-task rate cap, e.g. "2M"; "" = unlimited
+
+	Profile          string // engine profile: odm|aria2c|both|smart ("" = odm)
+	Split            int    // aria2c: --split (segments count), default 5
+	MinSplitSize     int64  // aria2c: --min-split-size, default 20 MiB
+	MaxConnPerServer int    // aria2c: -x (per-server connection cap, default 1)
 }
 
 // rateMeasure keeps a short rolling window of bytes vs time to produce a stable
@@ -401,7 +411,28 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	if pr.SingleStream {
 		qs = -1
 	}
-	q := NewChunkQueue(qs, t.opts.ChunkSize)
+	// Engine profile: aria2c splits the file into `split` segments of roughly
+	// equal size (bounded by min-split-size), odm uses fixed-size chunks with
+	// work-stealing. Both keep the same Chunk struct + worker loop; only the
+	// queue layout differs. The segment layout is deterministic from
+	// (TotalSize, Split, MinSplitSize), so resume rebuilds it from the control
+	// file — see effectiveChunkSize.
+	effective := t.opts.ChunkSize
+	isAria := t.opts.Profile == "aria2c"
+	var staticQ *StaticQueue
+	if isAria && qs > 0 {
+		n, seg := AriaSplit(qs, int64(t.opts.Split), t.opts.MinSplitSize)
+		effective = seg
+		t.ariaSplit = n
+		staticQ = NewStaticQueue(qs, n)
+		t.logf("info", "aria2c profile: %d segments of ~%s each", n, formatSegSize(seg))
+	}
+	var q workQueue
+	if staticQ != nil {
+		q = staticQ
+	} else {
+		q = NewChunkQueue(qs, effective)
+	}
 	t.queue = q // set early: resume restore/verification below reads the queue
 
 	alreadyDone := int64(0)
@@ -413,7 +444,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			// changed on the server — do NOT resume stale chunks.
 			if cf.ETag != "" && pr.ETag != "" && cf.ETag != pr.ETag {
 				t.logf("warn", "ETag changed (%s → %s), re-downloading from scratch", cf.ETag, pr.ETag)
-			} else if cf.TotalSize == pr.TotalSize && cf.ChunkSize == t.opts.ChunkSize {
+			} else if cf.TotalSize == pr.TotalSize && cf.ChunkSize == effective {
 				var ok bool
 				alreadyDone, ok = q.ResetCompletedOffsets(cf.CompletedOffsets(), pr.TotalSize)
 				if !ok {
@@ -455,7 +486,11 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			alreadyDone = 0
 			t.bytesDone.Store(0)
 			t.clearChunkHashes()
-			q = NewChunkQueue(qs, t.opts.ChunkSize)
+			if staticQ != nil {
+				q = NewStaticQueue(qs, t.ariaSplit)
+			} else {
+				q = NewChunkQueue(qs, effective)
+			}
 			t.queue = q
 		}
 	}
@@ -488,7 +523,21 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	// start (like aria2's .aria2), not only after the first checkpoint.
 	t.persistControl()
 
-	for i := range conns {
+	// aria2c profile: cap the concurrent workers at the effective split count
+	// (fewer segments than conns means some conns idle — aria2c behaves the
+	// same) and at MaxConnPerServer for h1 (each stream is a separate TCP
+	// connection there). For h2 the -x cap is irrelevant: all streams share
+	// one connection.
+	workerCount := conns
+	if isAria {
+		if t.ariaSplit > 0 && int64(workerCount) > t.ariaSplit {
+			workerCount = int(t.ariaSplit)
+		}
+		if pr.TotalSize > 0 && !t.profileUsesH2() && t.opts.MaxConnPerServer > 0 && workerCount > t.opts.MaxConnPerServer {
+			workerCount = t.opts.MaxConnPerServer
+		}
+	}
+	for i := range workerCount {
 		t.workerWg.Add(1)
 		go t.worker(ctx, i, &t.workerWg, progressSink)
 	}
@@ -522,6 +571,30 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 }
 
 func (t *Task) setState(s TaskState) { t.state.Store(int32(s)) }
+
+// profileUsesH2 reports whether the task's profile speaks HTTP/2 (aria2c and
+// both-region2). Used to decide whether the -x per-server cap applies: under
+// h2 all streams share one TCP connection, so the cap is meaningless there.
+func (t *Task) profileUsesH2() bool {
+	return t.opts.Profile == "aria2c" || t.opts.Profile == "both"
+}
+
+// formatSegSize renders a segment byte count compactly for log lines
+// (MiB/GiB…). Kept local — the UI package's formatter lives in internal/ui.
+func formatSegSize(b int64) string {
+	const unit = 1024.0
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	val := float64(b)
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	idx := -1
+	for val >= unit && idx < len(units)-1 {
+		val /= unit
+		idx++
+	}
+	return fmt.Sprintf("%.1f %s", val, units[idx])
+}
 
 // worker pulls chunks from the shared queue and downloads them with retry on
 // transient failures (§13). Each chunk write uses storage.WriteAt so offset
@@ -588,7 +661,7 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 			t.logf("error", "chunk %d (off %d) failed permanently: %v", c.Index, c.Start, err)
 			return
 		}
-		t.queue.MarkDone(c, t.probe.Load().TotalSize)
+		t.queue.MarkDone(c)
 		if sink != nil {
 			sink(t.Snapshot())
 		}
@@ -905,7 +978,7 @@ func (t *Task) persistControl() {
 		t.controlCreatedAt = now
 	}
 	t.lastPersist = now
-	completed := t.queue.completedOffsets()
+	completed := t.queue.CompletedOffsets()
 	cf := &storage.ControlFile{
 		URL:       t.url,
 		FinalURL:  pr.FinalURL,
@@ -1000,7 +1073,7 @@ func (t *Task) restoreChunkHashes(cf *storage.ControlFile) {
 	if len(cf.ChunkHashes) == 0 || t.queue == nil {
 		return
 	}
-	done := t.queue.completedOffsets()
+	done := t.queue.CompletedOffsets()
 	t.mu.Lock()
 	for _, off := range done {
 		if sum, ok := cf.ChunkHashes[off]; ok {
@@ -1227,15 +1300,16 @@ func (t *Task) Cancel() {
 	}
 }
 
-// completedOffsets returns the completed chunk offsets; it takes the queue's
-// own lock.
-func (q *ChunkQueue) completedOffsets() []int64 {
+// CompletedOffsets returns the completed chunk offsets; it takes the queue's
+// own lock. Implements the workQueue interface shared with StaticQueue.
+func (q *ChunkQueue) CompletedOffsets() []int64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]int64, 0, len(q.completed))
 	for k := range q.completed {
 		out = append(out, k)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 

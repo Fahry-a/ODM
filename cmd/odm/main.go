@@ -310,25 +310,33 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
+	minSplit, err := parseChunkSize(o.MinSplitSize)
+	if err != nil {
+		return download.ExecOptions{}, fmt.Errorf("--min-split-size %q: %w", o.MinSplitSize, err)
+	}
 	return download.ExecOptions{
-		Dir:           dir,
-		OutFile:       o.OutFile,
-		Connections:   o.Connections,
-		MaxConn:       o.MaxConnection,
-		SplitFile:     o.SplitFile,
-		Retry:         o.Retry,
-		RetryWait:     time.Duration(o.RetryWait) * time.Second,
-		Continue:      o.Continue,
-		ChunkSize:     chunk,
-		Timeout:       time.Duration(o.Timeout) * time.Second,
-		Checksum:      o.Checksum,
-		LimitRate:     o.LimitRate,
-		TaskLimitRate: o.TaskLimitRate,
-		UserAgent:     o.UserAgent,
-		Headers:       o.Headers,
-		Referer:       o.Referer,
-		Proxy:         o.Proxy,
-		CheckCert:     o.CheckCertificate,
+		Dir:              dir,
+		OutFile:          o.OutFile,
+		Connections:      o.Connections,
+		MaxConn:          o.MaxConnection,
+		SplitFile:        o.SplitFile,
+		Retry:            o.Retry,
+		RetryWait:        time.Duration(o.RetryWait) * time.Second,
+		Continue:         o.Continue,
+		ChunkSize:        chunk,
+		Timeout:          time.Duration(o.Timeout) * time.Second,
+		Checksum:         o.Checksum,
+		LimitRate:        o.LimitRate,
+		TaskLimitRate:    o.TaskLimitRate,
+		UserAgent:        o.UserAgent,
+		Headers:          o.Headers,
+		Referer:          o.Referer,
+		Proxy:            o.Proxy,
+		CheckCert:        o.CheckCertificate,
+		Profile:          o.Profile,
+		Split:            o.Split,
+		MinSplitSize:     minSplit,
+		MaxConnPerServer: o.MaxConnPerServer,
 	}, nil
 }
 
@@ -535,6 +543,12 @@ Behavior:
   -q, --quiet         no progress bar (cron/scripts); also skips the prompt
   -x, --continue      resume an incomplete file via the .odm control file (default on)
   -s, --chunk-size SIZE   work-stealing chunk size, e.g. 4M   (default 4M)
+
+Engine profiles (--profile aria2c|both|smart):
+      --profile NAME  engine profile: odm (default) | aria2c | both | smart
+      --split N       aria2c: number of segments per file                (default 5)
+      --min-split-size SIZE   aria2c: don't split ranges < 2x this size  (default 20M)
+      --max-connection-per-server N   aria2c: cap per server in h1       (default 1)
 
 HTTP / network:
   -n, --max-redirect N   redirect hops to follow          (default 5)

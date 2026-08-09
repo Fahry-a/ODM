@@ -26,10 +26,11 @@ import (
 // tracks them by id, owns the shared transport client + global rate limiter
 // (so one pool spans the whole batch), and exposes checksum verification.
 type Manager struct {
-	client *transport.Client
-	lim    *ratelimit.Limiter
-	opts   ExecOptions
-	logf   LogFn // per-engine Logger; nil ⇒ silent hot path (PRD §6.2 --log-level)
+	client   *transport.Client // HTTP/1.1-only (odm profile)
+	h2client *transport.Client // HTTP/2-enabled (aria2c/both/smart profiles); nil unless needed
+	lim      *ratelimit.Limiter
+	opts     ExecOptions
+	logf     LogFn // per-engine Logger; nil ⇒ silent hot path (PRD §6.2 --log-level)
 
 	nextID atomic.Int64
 	mu     atomic.Pointer[map[TaskID]*Task] // registry for RPC tellActive/tellWaiting
@@ -56,6 +57,11 @@ type ExecOptions struct {
 	Referer       string
 	Proxy         string
 	CheckCert     bool
+
+	Profile          string // engine profile: odm|aria2c|both|smart ("" = odm)
+	Split            int    // aria2c: --split (number of segments), default 5
+	MinSplitSize     int64  // aria2c: --min-split-size (default 20 MiB)
+	MaxConnPerServer int    // aria2c: -x (per-server connection cap, default 1)
 }
 
 // NewManager builds a Manager. The underlying transport.Client + rate limiter
@@ -80,6 +86,24 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{client: cli, lim: lim, opts: opts, logf: logf}
+	// The h2-enabled client is only needed by profiles that speak HTTP/2
+	// (aria2c, both region2, smart may pick h2). Eager construction is fine —
+	// NewClient does no I/O — and keeps ClientFor lock-free.
+	if opts.Profile != "" && opts.Profile != "odm" {
+		h2, err := transport.NewClient(transport.ClientConfig{
+			UserAgent:        opts.UserAgent,
+			Headers:          opts.Headers,
+			Referer:          opts.Referer,
+			Proxy:            opts.Proxy,
+			CheckCertificate: opts.CheckCert,
+			Timeout:          opts.Timeout,
+			HTTP2:            true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		m.h2client = h2
+	}
 	empty := map[TaskID]*Task{}
 	m.mu.Store(&empty)
 	return m, nil
@@ -87,6 +111,18 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 
 // Client exposes the transport client (RPC tests reuse it).
 func (m *Manager) Client() *transport.Client { return m.client }
+
+// ClientFor returns the transport client for the given profile: the h1-only
+// client for odm, the h2-enabled one for aria2c/both/smart (falling back to
+// h1 when the profile doesn't need h2 or the h2 client was never built).
+func (m *Manager) ClientFor(profile string) *transport.Client {
+	if profile == "aria2c" || profile == "both" || profile == "smart" {
+		if m.h2client != nil {
+			return m.h2client
+		}
+	}
+	return m.client
+}
 
 // Limiter exposes the global limiter.
 func (m *Manager) Limiter() *ratelimit.Limiter { return m.lim }
@@ -99,18 +135,26 @@ func (m *Manager) Limiter() *ratelimit.Limiter { return m.lim }
 func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 	id := TaskID(fmt.Sprintf("odm-%03d", m.nextID.Add(1)))
 	conns := m.opts.Connections
+	profile := m.opts.Profile
+	if profile == "" {
+		profile = "odm"
+	}
 	t := NewTask(id, url, TaskOptions{
-		OutputName:    m.opts.OutFile,
-		Dir:           m.opts.Dir,
-		Retry:         m.opts.Retry,
-		RetryWait:     m.opts.RetryWait,
-		Continue:      m.opts.Continue,
-		ChunkSize:     m.opts.ChunkSize,
-		Timeout:       m.opts.Timeout,
-		UserAgent:     m.opts.UserAgent,
-		Checksum:      m.opts.Checksum,
-		TaskLimitRate: m.opts.TaskLimitRate,
-	}, m.client, m.lim, m.logf)
+		OutputName:       m.opts.OutFile,
+		Dir:              m.opts.Dir,
+		Retry:            m.opts.Retry,
+		RetryWait:        m.opts.RetryWait,
+		Continue:         m.opts.Continue,
+		ChunkSize:        m.opts.ChunkSize,
+		Timeout:          m.opts.Timeout,
+		UserAgent:        m.opts.UserAgent,
+		Checksum:         m.opts.Checksum,
+		TaskLimitRate:    m.opts.TaskLimitRate,
+		Profile:          profile,
+		Split:            m.opts.Split,
+		MinSplitSize:     m.opts.MinSplitSize,
+		MaxConnPerServer: m.opts.MaxConnPerServer,
+	}, m.ClientFor(profile), m.lim, m.logf)
 	m.track(id, t)
 	return t, conns, nil
 }

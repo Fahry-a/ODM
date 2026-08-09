@@ -33,9 +33,15 @@ const (
 	DefaultRetryWait   = 2
 	DefaultTimeout     = 30
 	DefaultRPCPort     = 6900
-	DefaultLogLevel    = "info"
-	DefaultConfigPath  = "/etc/odm/config.conf"
-	UserConfigRelPath  = "odm/config.conf" // under $XDG_CONFIG_HOME / ~/.config
+
+	// Engine profile defaults (aria2c-compatible values).
+	DefaultProfile          = "odm"
+	DefaultSplit            = 5
+	DefaultMinSplitSize     = "20M"
+	DefaultMaxConnPerServer = 1
+	DefaultLogLevel         = "info"
+	DefaultConfigPath       = "/etc/odm/config.conf"
+	UserConfigRelPath       = "odm/config.conf" // under $XDG_CONFIG_HOME / ~/.config
 )
 
 // UserConfigPath resolves ~/.config/odm/config.conf (following XDG_CONFIG_HOME).
@@ -81,6 +87,12 @@ type Options struct {
 	TaskLimitRate    string // --limit-rate-per-task "2M" (per-task cap, additive to global)
 	ChunkSize        string // --chunk-size "4M"
 
+	// Engine profile (§profile).
+	Profile          string // --profile: odm|aria2c|both|smart (default "odm")
+	Split            int    // --split: aria2c segment count
+	MinSplitSize     string // --min-split-size: aria2c guard (e.g. "20M")
+	MaxConnPerServer int    // -x/--max-connection-per-server: aria2c per-server cap
+
 	// Behaviour.
 	Yes      bool // --yes/-y
 	Quiet    bool // --quiet/-q
@@ -123,6 +135,10 @@ func DefaultPtr() *Options {
 		ConfigFile:       DefaultConfigPath,
 		RPCPort:          DefaultRPCPort,
 		ChunkSize:        "4M",
+		Profile:          DefaultProfile,
+		Split:            DefaultSplit,
+		MinSplitSize:     DefaultMinSplitSize,
+		MaxConnPerServer: DefaultMaxConnPerServer,
 		changed:          map[string]bool{},
 	}
 	return o
@@ -267,6 +283,14 @@ func (o *Options) setFromKey(key, val string) error {
 		o.TaskLimitRate = val
 	case "chunk-size":
 		o.ChunkSize = val
+	case "profile":
+		o.Profile = val
+	case "split":
+		return setInt(val, &o.Split, key)
+	case "min-split-size":
+		o.MinSplitSize = val
+	case "max-connection-per-server":
+		return setInt(val, &o.MaxConnPerServer, key)
 	case "rpc":
 		return setBool(val, &o.RPC, key)
 	case "rpc-listen-port":
@@ -325,6 +349,10 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.StringVarP(&o.LimitRate, "limit-rate", "l", o.LimitRate, "Global speed limit, e.g. 5M, 500K")
 	fs.StringVar(&o.TaskLimitRate, "limit-rate-per-task", o.TaskLimitRate, "Per-task speed cap, additive to global, e.g. 2M")
 	fs.StringVarP(&o.ChunkSize, "chunk-size", "s", o.ChunkSize, "Chunk size for the work-stealing queue, e.g. 4M")
+	fs.StringVar(&o.Profile, "profile", o.Profile, "Engine profile: odm | aria2c | both | smart")
+	fs.IntVar(&o.Split, "split", o.Split, "aria2c: number of segments for one file (default 5)")
+	fs.StringVar(&o.MinSplitSize, "min-split-size", o.MinSplitSize, "aria2c: only split ranges ≥2x this size (default 20M)")
+	fs.IntVar(&o.MaxConnPerServer, "max-connection-per-server", o.MaxConnPerServer, "aria2c: max connections to one server (-x), default 1")
 	fs.StringVar(&o.ConfigFile, "config", o.ConfigFile, "Path to a custom config file")
 	fs.StringVarP(&o.LogFile, "log", "L", o.LogFile, "Log file path")
 	fs.StringVar(&o.LogLevel, "log-level", o.LogLevel, "debug / info / warn / error")
@@ -406,6 +434,24 @@ func (o *Options) Validate() error {
 		default:
 			return fmt.Errorf("--checksum unsupported algorithm %q (md5/sha1/sha256)", parts[0])
 		}
+	}
+	// Engine profile: valid values + per-profile conflicts (§profile rules).
+	switch o.Profile {
+	case "odm", "aria2c", "both", "smart":
+	default:
+		return fmt.Errorf("invalid --profile %q (want odm|aria2c|both|smart)", o.Profile)
+	}
+	if o.Profile != "odm" && o.SplitFile != 0 {
+		return fmt.Errorf("--split-file is only valid with the odm profile (got --profile %s)", o.Profile)
+	}
+	if o.Profile == "both" && o.IsSet("chunk-size") {
+		return errors.New("--chunk-size is not supported with --profile both (fixed 50/50 split)")
+	}
+	if o.Split < 0 || o.MaxConnPerServer < 1 {
+		return errors.New("--split and --max-connection-per-server must be ≥ 1")
+	}
+	if o.Profile == "odm" && (o.IsSet("split") || o.IsSet("min-split-size") || o.IsSet("max-connection-per-server")) {
+		return errors.New("--split / --min-split-size / --max-connection-per-server are only valid with --profile aria2c|both|smart")
 	}
 	return nil
 }

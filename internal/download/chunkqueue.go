@@ -132,7 +132,7 @@ func (q *ChunkQueue) Next() (Chunk, bool) {
 // MarkDone records that a chunk finished. Idempotent: re-marking an
 // already-completed offset is a no-op (workers may retry after a transient
 // error and the original write might still have landed).
-func (q *ChunkQueue) MarkDone(c Chunk, totalSize int64) {
+func (q *ChunkQueue) MarkDone(c Chunk) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if _, ok := q.completed[c.Start]; !ok {

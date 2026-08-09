@@ -144,6 +144,24 @@ func TestValidate(t *testing.T) {
 		{"tls both set", func(o *Options) *Options { o.RPCTLSCert = "/a/b.crt"; o.RPCTLSKey = "/a/b.key"; return o }, true},
 		{"tls cert only", func(o *Options) *Options { o.RPCTLSCert = "/a/b.crt"; return o }, false},
 		{"tls key only", func(o *Options) *Options { o.RPCTLSKey = "/a/b.key"; return o }, false},
+		// Engine profile validation.
+		{"profile aria2c", func(o *Options) *Options { o.Profile = "aria2c"; return o }, true},
+		{"profile both", func(o *Options) *Options { o.Profile = "both"; return o }, true},
+		{"profile smart", func(o *Options) *Options { o.Profile = "smart"; return o }, true},
+		{"profile bogus", func(o *Options) *Options { o.Profile = "banana"; return o }, false},
+		{"sf + aria2c", func(o *Options) *Options { o.Profile = "aria2c"; o.SplitFile = 4; return o }, false},
+		{"chunk-size + both", func(o *Options) *Options {
+			o.Profile = "both"
+			o.changedFlag("chunk-size")
+			return o
+		}, false},
+		{"split + odm", func(o *Options) *Options {
+			o.changedFlag("split")
+			o.Split = 4
+			return o
+		}, false},
+		{"split + aria2c ok", func(o *Options) *Options { o.Profile = "aria2c"; o.Split = 4; return o }, true},
+		{"max-conn-per-server 0", func(o *Options) *Options { o.Profile = "aria2c"; o.MaxConnPerServer = 0; return o }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

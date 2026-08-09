@@ -44,6 +44,7 @@ type ClientConfig struct {
 	CheckCertificate bool
 	MaxRedirect      int
 	Timeout          time.Duration // per-request dial+headers timeout; 0 = default
+	HTTP2            bool          // true → enable HTTP/2 via ALPN (aria2c/both profiles)
 }
 
 // Client wraps http.Client with ODM's identity/redirect settings. Construct via
@@ -81,19 +82,32 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		TLSClientConfig:       tlsConf,
 		TLSHandshakeTimeout:   cfg.Timeout,
 		ResponseHeaderTimeout: cfg.Timeout,
-		// ponytail: ForceAttemptHTTP2=false + empty TLSNextProto = unconditional h2 disable.
-		// ODM's value prop is multi-connection aggregation over HTTP/1.1. If the server
-		// negotiates h2 via ALPN, Go collapses N worker requests into 1 TCP connection
-		// with N streams — the Balancer's N-connection allocation becomes meaningless
-		// and the user gets zero benefit from -c without any warning. Empty TLSNextProto
-		// prevents the client from advertising h2 in the ALPN list at all.
-		ForceAttemptHTTP2: false,
-		TLSNextProto:      make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
-		DisableCompression: false,
+		DisableCompression:    false,
 		// Generous pooling for multi-connection downloads.
 		MaxIdleConns:        512,
 		MaxIdleConnsPerHost: 64,
 		IdleConnTimeout:     90 * time.Second,
+	}
+	if cfg.HTTP2 {
+		// h2 enabled (aria2c / both-region2 / smart profiles): let net/http
+		// auto-register HTTP/2 (TLSNextProto nil). https:// hosts negotiate h2
+		// via ALPN; an h2-less server simply stays HTTP/1.1 — graceful
+		// degradation for free. Streams are multiplexed over ONE TCP
+		// connection; the stdlib client respects the server's
+		// SETTINGS_MAX_CONCURRENT_STREAMS by queueing internally, so N worker
+		// requests share a single connection — this is exactly the aria2c
+		// model where -c means concurrent h2 streams, not TCP connections.
+		tr.ForceAttemptHTTP2 = true
+	} else {
+		// ponytail: ForceAttemptHTTP2=false + empty TLSNextProto = unconditional h2
+		// disable. ODM's value prop is multi-connection aggregation over HTTP/1.1.
+		// If the server negotiated h2 via ALPN, Go would collapse N worker requests
+		// into 1 TCP connection with N streams — the Balancer's N-connection
+		// allocation becomes meaningless and the user gets zero benefit from -c
+		// without any warning. Empty TLSNextProto prevents the client from
+		// advertising h2 in the ALPN list at all.
+		tr.ForceAttemptHTTP2 = false
+		tr.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
 	}
 	if cfg.Proxy != "" {
 		px, err := url.Parse(cfg.Proxy)
