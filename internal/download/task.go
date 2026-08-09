@@ -706,20 +706,6 @@ func (t *Task) currentEngine() *Engine {
 	return &Engine{q: t.queue, client: t.client, base: 0}
 }
 
-// engineForStart resolves which engine owns an absolute chunk start: region2
-// in the both profile, the shared engine otherwise.
-func (t *Task) engineForStart(start int64) *Engine {
-	if t.engines != nil {
-		// Chunk starts are absolute in both engines (region2 records base+rel
-		// offsets), so the splitAt check is on the absolute value.
-		if start >= t.splitAt {
-			return t.engines[1]
-		}
-		return t.engines[0]
-	}
-	return t.currentEngine()
-}
-
 // formatSegSize renders a segment byte count compactly for log lines
 // (MiB/GiB…). Kept local — the UI package's formatter lives in internal/ui.
 func formatSegSize(b int64) string {

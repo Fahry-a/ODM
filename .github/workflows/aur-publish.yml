@@ -100,45 +100,23 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Mode=$MODE version=$VERSION tag=$TAG"
 
-      - name: Update PKGBUILD version metadata
+      - name: Bump pkgver + stage bundled assets
         if: steps.version.outputs.skip != 'true'
-        working-directory: packaging
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
-          if [ "${{ steps.version.outputs.mode }}" = "release" ]; then
-            # New version: always reset pkgrel to 1 — never inherit a bumped
-            # pkgrel from earlier republishes (would publish 1.4.0-3).
-            sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-            echo "pkgrel reset to 1"
-          else
-            LOCAL_REL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
-            UP_REL="${{ steps.version.outputs.up_pkgrel }}"
-            if [ -n "$UP_REL" ] && [ "$UP_REL" -ge "$LOCAL_REL" ] 2>/dev/null; then
-              NEW_REL=$((UP_REL + 1))
-              sed -i "s/^pkgrel=.*/pkgrel=${NEW_REL}/" PKGBUILD
-              echo "Bumped pkgrel: ${LOCAL_REL} -> ${NEW_REL}"
-            else
-              echo "pkgrel ${LOCAL_REL} already above upstream (${UP_REL:-none}) — keeping"
-            fi
-          fi
-
-      - name: Copy bundled files with versioned names
-        if: steps.version.outputs.skip != 'true'
-        working-directory: packaging
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          PKGNAME=$(grep -oP '^pkgname=\K.*' PKGBUILD)
-          cp ../docs/odm.1 "${PKGNAME}-${VERSION}.1"
-          cp ../configs/odm.conf.example "${PKGNAME}-${VERSION}.conf.example"
-          cp ../packaging/odm.service "${PKGNAME}-${VERSION}.service"
-          cp ../LICENSE "${PKGNAME}-${VERSION}.LICENSE"
+          # Only pkgver is dry-run here; pkgrel is handled by the AUR action
+          # (pkgrel_mode: auto), and `version` makes it bundle + version the
+          # assets from the stable paths below.
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" packaging/PKGBUILD
+          mkdir -p assets
+          cp docs/odm.1 assets/odm.1
+          cp configs/odm.conf.example assets/odm.conf.example
+          cp packaging/odm.service assets/odm.service
+          cp LICENSE assets/LICENSE
 
       - name: Get binary checksum and update PKGBUILD
         if: steps.version.outputs.skip != 'true' && github.event_name == 'workflow_dispatch'
-        working-directory: packaging
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
@@ -157,14 +135,13 @@ jobs:
           fi
 
           export I686_SUM AMD64_SUM ARMV7H_SUM ARM64_SUM
-          python3 ../scripts/update-aur-checksums.py
+          python3 scripts/update-aur-checksums.py
 
       - name: Verify checksums and regenerate .SRCINFO
         if: steps.version.outputs.skip != 'true'
-        working-directory: packaging
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD:/pkg" -w /pkg archlinux:base-devel bash -c "
+          docker run --rm -v "$PWD/packaging:/pkg" -w /pkg archlinux:base-devel bash -c "
             useradd -m builder
             chown -R builder:builder /pkg
             su builder -c 'makepkg --verifysource --nodeps'
@@ -173,38 +150,35 @@ jobs:
 
       - name: Validate
         if: steps.version.outputs.skip != 'true'
-        working-directory: packaging
         run: |
           set -euo pipefail
           errors=0
-          grep -q "^pkgname=odm-bin$" PKGBUILD || { echo "::error::Missing pkgname"; errors=1; }
-          grep -q "^pkgver=${{ steps.version.outputs.version }}$" PKGBUILD || { echo "::error::Wrong pkgver"; errors=1; }
+          grep -q "^pkgname=odm-bin$" packaging/PKGBUILD || { echo "::error::Missing pkgname"; errors=1; }
+          grep -q "^pkgver=${{ steps.version.outputs.version }}$" packaging/PKGBUILD || { echo "::error::Wrong pkgver"; errors=1; }
           [ "$errors" -eq 0 ] || exit 1
 
       - name: Publish AUR
         if: steps.version.outputs.skip != 'true'
-        # working-directory is not supported on composite-action steps — the
-        # action's file globs resolve against GITHUB_WORKSPACE (repo root),
-        # so they point at packaging/… (the earlier run-steps cd into
-        # packaging, but those produced the files, they don't relocate them).
+        # The action handles everything publish-side: version-suffixing the
+        # bundled assets (version), pkgrel reset/bump (pkgrel_mode auto), and
+        # pruning stale odm-bin-<ver>.* assets (rm_patterns). Sources resolve
+        # against GITHUB_WORKSPACE (repo root).
         uses: Fahry-a/aur-sync-action@v1
         with:
           package_name: odm-bin
           ssh_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           git_username: ${{ secrets.AUR_USERNAME }}
           git_email: ${{ secrets.AUR_EMAIL }}
-          # version is intentionally empty — the assets are already
-          # version-suffixed by the "Copy bundled files" step (odm-bin-<ver>.1
-          # etc.). Supplying version would double-suffix them.
-          version: ""
+          version: ${{ steps.version.outputs.version }}
+          pkgrel_mode: auto
           commit_message: "chore(aur): update to v${{ steps.version.outputs.version }}"
           files: >-
             packaging/PKGBUILD,
             packaging/.SRCINFO,
-            packaging/odm-bin-*.1,
-            packaging/odm-bin-*.conf.example,
-            packaging/odm-bin-*.service,
-            packaging/odm-bin-*.LICENSE
+            man:assets/odm.1,
+            conf:assets/odm.conf.example,
+            service:assets/odm.service,
+            license:assets/LICENSE
           rm_patterns: >-
             odm-bin-*.1,
             odm-bin-*.conf.example,
@@ -213,10 +187,11 @@ jobs:
 
       - name: Clean up generated assets
         if: steps.version.outputs.skip != 'true'
-        working-directory: packaging
-        # makepkg (run as 'builder' in the archlinux container) chowns the whole
-        # workdir, so the plain runner can't remove the versioned files — sudo.
-        run: sudo rm -f odm-bin-*.*
+        # Staged assets + makepkg outputs are transient; drop them so the
+        # commit-to-main only carries the PKGBUILD edit.
+        run: |
+          rm -rf assets
+          sudo rm -rf packaging/.SRCINFO packaging/odm-bin-*.* 2>/dev/null || true
 
       - name: Commit to main
         if: steps.version.outputs.skip != 'true'
