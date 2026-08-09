@@ -91,7 +91,6 @@ func TestPause_UnpauseWakesAllWorkers(t *testing.T) {
 		Continue:    false,
 		ChunkSize:   16 * 1024,
 		Timeout:     30 * time.Second,
-		MaxRedirect: 5,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {

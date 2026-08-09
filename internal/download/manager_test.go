@@ -117,7 +117,6 @@ func TestManager_SingleFile(t *testing.T) {
 		Continue:    false,
 		ChunkSize:   16 * 1024,
 		Timeout:     10 * time.Second,
-		MaxRedirect: 5,
 		CheckCert:   true,
 		UserAgent:   "odm-test",
 		Checksum:    "sha256:" + hex.EncodeToString(wantSHA[:]),
@@ -173,7 +172,6 @@ func TestManager_ResumeInterrupted(t *testing.T) {
 			Continue:    true, // resume enabled for the 2nd pass
 			ChunkSize:   8 * 1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 5,
 			CheckCert:   true,
 		}, nil)
 		if err != nil {
@@ -327,7 +325,6 @@ func TestProgress_SinkFiresMidStream(t *testing.T) {
 		Continue:    false,
 		ChunkSize:   4 * 1024 * 1024, // > payload ⇒ one chunk
 		Timeout:     30 * time.Second,
-		MaxRedirect: 5,
 		CheckCert:   false,
 	}, nil)
 	if err != nil {

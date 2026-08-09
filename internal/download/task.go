@@ -105,8 +105,11 @@ type Task struct {
 	lim     *ratelimit.Limiter                // global rate limiter
 	taskLim atomic.Pointer[ratelimit.Limiter] // per-task rate limiter; nil = unlimited
 
-	// resolved after Probe
-	probe   *transport.ProbeResult
+	// resolved after Probe. Held as an atomic pointer because the RPC daemon
+	// admits a task the moment NewTask returns — a client can poll tellStatus
+	// via the WS server while Start is still probing, so readers (Snapshot,
+	// filename, persistControl, verify*) must not race the writer.
+	probe   atomic.Pointer[transport.ProbeResult]
 	disk    *storage.File
 	queue   *ChunkQueue
 	outPath string
@@ -169,7 +172,6 @@ type TaskOptions struct {
 	Continue      bool
 	ChunkSize     int64 // bytes; parsed from --chunk-size
 	Timeout       time.Duration
-	MaxRedirect   int
 	UserAgent     string // for control file metadata
 	Checksum      string // "algo:hex" if --checksum was used
 	TaskLimitRate string // per-task rate cap, e.g. "2M"; "" = unlimited
@@ -262,20 +264,20 @@ func (t *Task) Snapshot() ProgressView {
 		Errors:      int(t.errors.Load()),
 		Retries:     int(t.retries.Load()),
 	}
-	if t.probe != nil {
-		v.FinalURL = t.probe.FinalURL
-		v.TotalSize = t.probe.TotalSize
-		v.SingleStream = t.probe.SingleStream
+	if pr := t.probe.Load(); pr != nil {
+		v.FinalURL = pr.FinalURL
+		v.TotalSize = pr.TotalSize
+		v.SingleStream = pr.SingleStream
 	}
 	v.ETA = t.estimateETA()
 	return v
 }
 
 func (t *Task) filename() string {
-	if t.probe == nil {
-		return t.opts.OutputName
+	if pr := t.probe.Load(); pr != nil {
+		return pr.Filename
 	}
-	return t.probe.Filename
+	return t.opts.OutputName
 }
 
 // OutputPath is the full destination path.
@@ -295,7 +297,7 @@ func (t *Task) SetConns(n int) { t.conns.Store(int32(n)); t.connTarget.Store(int
 // and Start probes normally. Must be called before Start.
 func (t *Task) SetProbe(pr *transport.ProbeResult) {
 	if pr != nil {
-		t.probe = pr
+		t.probe.Store(pr)
 	}
 }
 
@@ -360,7 +362,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	// and confirmation prompt and injects the result via SetProbe, so a fresh
 	// network probe (HEAD + ranged GET) is skipped there. The RPC daemon path
 	// leaves t.probe nil and probes here as usual.
-	pr := t.probe
+	pr := t.probe.Load()
 	if pr == nil {
 		t.logf("info", "probing %s", t.url)
 		var perr error
@@ -370,7 +372,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			t.emitFinal(progressSink)
 			return fmt.Errorf("probe: %w", perr)
 		}
-		t.probe = pr
+		t.probe.Store(pr)
 	}
 	if pr.Filename == "" {
 		pr.Filename = deriveFilename(pr.FinalURL, t.opts.OutputName)
@@ -586,7 +588,7 @@ func (t *Task) worker(ctx context.Context, _ int, wg *sync.WaitGroup, sink func(
 			t.logf("error", "chunk %d (off %d) failed permanently: %v", c.Index, c.Start, err)
 			return
 		}
-		t.queue.MarkDone(c, t.probe.TotalSize)
+		t.queue.MarkDone(c, t.probe.Load().TotalSize)
 		if sink != nil {
 			sink(t.Snapshot())
 		}
@@ -653,8 +655,9 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
 
+	pr := t.probe.Load()
 	// Sizeless single-stream chunk: plain GET, no Range.
-	if t.probe.TotalSize < 0 || (t.probe.SingleStream && c.Start == 0 && c.Index == 0) {
+	if pr.TotalSize < 0 || (pr.SingleStream && c.Start == 0 && c.Index == 0) {
 		return t.fetchWhole(chunkCtx, c, sink, h)
 	}
 
@@ -662,7 +665,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 	if end < 0 {
 		end = -1
 	}
-	resp, err := t.client.GetRange(chunkCtx, t.probe.FinalURL, c.Start, end)
+	resp, err := t.client.GetRange(chunkCtx, pr.FinalURL, c.Start, end)
 	if err != nil {
 		return err
 	}
@@ -687,7 +690,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, c Chunk, sink func(ProgressVie
 		return err
 	}
 	// Validate we got the expected chunk size when it's bounded.
-	if c.End >= 0 && t.probe.TotalSize > 0 && off != (c.End-c.Start+1) {
+	if c.End >= 0 && pr.TotalSize > 0 && off != (c.End-c.Start+1) {
 		return fmt.Errorf("chunk %d short read: got %d want %d", c.Index, off, c.End-c.Start+1)
 	}
 	_ = n
@@ -703,7 +706,8 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
 
-	req, err := t.client.NewGetRequest(chunkCtx, t.probe.FinalURL)
+	pr := t.probe.Load()
+	req, err := t.client.NewGetRequest(chunkCtx, pr.FinalURL)
 	if err != nil {
 		return err
 	}
@@ -712,6 +716,14 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 		return err
 	}
 	defer resp.Body.Close()
+	// Non-2xx here is an error, not an empty file: writing a 403/404/500 body
+	// to disk would silently "complete" the task with garbage data. The ranged
+	// path validates status inside GetRange; the whole-file fallback (every
+	// non-range-capable and sizeless URL) must do the same.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		transport.SkipBody(resp.Body)
+		return fmt.Errorf("GET %s: status %d", pr.FinalURL, resp.StatusCode)
+	}
 	body := resp.Body
 	if !t.lim.Unlimited() {
 		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
@@ -804,18 +816,19 @@ func (t *Task) emitFinal(sink func(ProgressView)) {
 // the previous code multiplied by time.Second a second time, inflating the
 // result by 1e9 and capping every ETA to 99:59:59.
 func (t *Task) estimateETA() time.Duration {
-	if t.probe == nil || t.probe.TotalSize <= 0 {
+	pr := t.probe.Load()
+	if pr == nil || pr.TotalSize <= 0 {
 		return 0
 	}
 	done := t.bytesDone.Load()
-	if done >= t.probe.TotalSize {
+	if done >= pr.TotalSize {
 		return 0
 	}
 	sp := t.speed.Load()
 	if sp <= 0 {
 		return 0
 	}
-	eta := time.Duration((t.probe.TotalSize - done) * int64(time.Second) / sp)
+	eta := time.Duration((pr.TotalSize - done) * int64(time.Second) / sp)
 	if eta < 0 {
 		return 0
 	}
@@ -824,8 +837,8 @@ func (t *Task) estimateETA() time.Duration {
 
 // totalOrDone is the total size, or bytes done if total unknown.
 func (t *Task) totalOrDone() int64 {
-	if t.probe != nil && t.probe.TotalSize > 0 {
-		return t.probe.TotalSize
+	if pr := t.probe.Load(); pr != nil && pr.TotalSize > 0 {
+		return pr.TotalSize
 	}
 	return t.bytesDone.Load()
 }
@@ -881,7 +894,8 @@ func (t *Task) checkpoint() bool {
 // concurrently, and SaveControl writes a shared temp path — concurrent writes
 // would interleave and risk a corrupt .odm file.
 func (t *Task) persistControl() {
-	if t.probe == nil || t.queue == nil {
+	pr := t.probe.Load()
+	if pr == nil || t.queue == nil {
 		return
 	}
 	t.mu.Lock()
@@ -894,10 +908,10 @@ func (t *Task) persistControl() {
 	completed := t.queue.completedOffsets()
 	cf := &storage.ControlFile{
 		URL:       t.url,
-		FinalURL:  t.probe.FinalURL,
-		TotalSize: t.probe.TotalSize,
+		FinalURL:  pr.FinalURL,
+		TotalSize: pr.TotalSize,
 		ChunkSize: t.opts.ChunkSize,
-		ETag:      t.probe.ETag,
+		ETag:      pr.ETag,
 		Completed: completed,
 		// Per-chunk SHA-256 hashes for resume verification — only for chunks
 		// recorded as completed (a hash can exist for a chunk whose bytes were
@@ -923,10 +937,11 @@ func (t *Task) persistControl() {
 // the ETag/size checks. Fails safe — any request/read error is treated as a
 // mismatch.
 func (t *Task) verifyResumedChunks(ctx context.Context) error {
-	if t.probe == nil || t.probe.SingleStream || t.probe.TotalSize <= 0 {
+	pr := t.probe.Load()
+	if pr == nil || pr.SingleStream || pr.TotalSize <= 0 {
 		return nil
 	}
-	spans := t.queue.CompletedSpans(t.opts.ChunkSize, t.probe.TotalSize, resumeVerifyChunks)
+	spans := t.queue.CompletedSpans(t.opts.ChunkSize, pr.TotalSize, resumeVerifyChunks)
 	for _, s := range spans {
 		end := s.Start + resumeProbeLen - 1
 		if end > s.End {
@@ -934,7 +949,7 @@ func (t *Task) verifyResumedChunks(ctx context.Context) error {
 		}
 		want := int(end - s.Start + 1)
 		chkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		resp, err := t.client.GetRange(chkCtx, t.probe.FinalURL, s.Start, end)
+		resp, err := t.client.GetRange(chkCtx, pr.FinalURL, s.Start, end)
 		if err != nil {
 			cancel()
 			return fmt.Errorf("resume check at %d: %w", s.Start, err)
@@ -1066,7 +1081,8 @@ func (t *Task) hasFullHashCoverage(cf *storage.ControlFile) bool {
 // cannot detect a same-size replacement). A single mismatch fails the whole
 // resume so the caller re-downloads from scratch.
 func (t *Task) verifyResumedHashes(cf *storage.ControlFile) error {
-	if t.probe == nil || t.probe.TotalSize <= 0 {
+	pr := t.probe.Load()
+	if pr == nil || pr.TotalSize <= 0 {
 		return nil
 	}
 	offsets := cf.CompletedOffsets()
@@ -1111,8 +1127,9 @@ func (t *Task) verifyResumedHashes(cf *storage.ControlFile) error {
 // arithmetic. The single-stream whole-file chunk (Start=0, End=-1) spans the
 // entire known size.
 func (t *Task) chunkSpan(start int64) (int64, int64) {
-	if t.probe.SingleStream {
-		return 0, t.probe.TotalSize - 1
+	pr := t.probe.Load()
+	if pr.SingleStream {
+		return 0, pr.TotalSize - 1
 	}
 	// Mirror NewChunkQueue's silent default: a non-positive ChunkSize would
 	// otherwise produce end = start-1 and spuriously fail every hash verify.
@@ -1121,8 +1138,8 @@ func (t *Task) chunkSpan(start int64) (int64, int64) {
 		cs = defaultChunkSize
 	}
 	end := start + cs - 1
-	if t.probe.TotalSize > 0 && end >= t.probe.TotalSize {
-		end = t.probe.TotalSize - 1
+	if pr.TotalSize > 0 && end >= pr.TotalSize {
+		end = pr.TotalSize - 1
 	}
 	return start, end
 }

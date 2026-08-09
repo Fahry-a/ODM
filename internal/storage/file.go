@@ -18,7 +18,6 @@ import (
 type File struct {
 	path string
 	f    *os.File
-	size int64 // expected total; -1 if unknown (sizeless stream)
 }
 
 // OpenForWrite opens (creating as needed) the destination file at dir/name. If
@@ -48,7 +47,7 @@ func OpenForWrite(dir, name string, size int64) (*File, error) {
 			return nil, fmt.Errorf("truncate %s to %d: %w", path, size, err)
 		}
 	}
-	return &File{path: path, f: f, size: size}, nil
+	return &File{path: path, f: f}, nil
 }
 
 // WriteAt writes b at the given offset. Safe for concurrent use ONLY when

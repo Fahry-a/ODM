@@ -32,7 +32,6 @@ func startServer(t *testing.T, secret string) (*httptest.Server, *Server, func()
 		Retry:       1,
 		RetryWait:   5 * time.Millisecond,
 		Timeout:     10 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {

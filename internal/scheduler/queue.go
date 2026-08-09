@@ -96,7 +96,7 @@ func (s *Scheduler) OnComplete(f func(download.ProgressView)) {
 // installed here and released only on ctx cancellation inside Run.
 func NewEmptyScheduler(slots int, maker TaskMaker, prog ProgressCB) *Scheduler {
 	s := &Scheduler{
-		plan:   &Plan{MaxConnections: DefaultMaxConnections},
+		plan:   &Plan{},
 		maker:  maker,
 		slots:  slots,
 		prog:   prog,

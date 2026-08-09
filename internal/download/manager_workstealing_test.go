@@ -64,7 +64,6 @@ func TestWorkStealing_BeatsStaticEqualSplit(t *testing.T) {
 		Continue:    false,
 		ChunkSize:   chunk,
 		Timeout:     30 * time.Second,
-		MaxRedirect: 5,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {

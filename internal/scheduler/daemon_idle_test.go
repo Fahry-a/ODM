@@ -20,7 +20,6 @@ func TestEmptySchedulerStaysIdleWhenNoTasks(t *testing.T) {
 		Connections: 2,
 		ChunkSize:   4096,
 		Timeout:     5 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {
@@ -61,7 +60,6 @@ func TestEmptySchedulerAdmitsLateTask(t *testing.T) {
 		Connections: 2,
 		ChunkSize:   4096,
 		Timeout:     5 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {

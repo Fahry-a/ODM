@@ -48,7 +48,6 @@ type ExecOptions struct {
 	Continue      bool
 	ChunkSize     int64
 	Timeout       time.Duration
-	MaxRedirect   int
 	Checksum      string // "algo:hex" or ""
 	LimitRate     string // "5M"/"500K"/""=unlimited
 	TaskLimitRate string // "2M"/""=unlimited — per-task cap
@@ -71,7 +70,6 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 		Referer:          opts.Referer,
 		Proxy:            opts.Proxy,
 		CheckCertificate: opts.CheckCert,
-		MaxRedirect:      opts.MaxRedirect,
 		Timeout:          opts.Timeout,
 	})
 	if err != nil {
@@ -109,7 +107,6 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		Continue:      m.opts.Continue,
 		ChunkSize:     m.opts.ChunkSize,
 		Timeout:       m.opts.Timeout,
-		MaxRedirect:   m.opts.MaxRedirect,
 		UserAgent:     m.opts.UserAgent,
 		Checksum:      m.opts.Checksum,
 		TaskLimitRate: m.opts.TaskLimitRate,
@@ -240,7 +237,7 @@ func ExitCodeFrom(succeeded, failed, cancelled int) int {
 	}
 }
 
-// ResolveDest returns the path a task for `url` would write to. Used by the
+// ResolveDest resolves the path a task for `url` would write to. Used by the
 // confirmation prompt before the download actually starts (§9).
 func (m *Manager) ResolveDest(url string) string {
 	name := m.opts.OutFile
@@ -253,10 +250,8 @@ func (m *Manager) ResolveDest(url string) string {
 	return filepath.Join(m.opts.Dir, name)
 }
 
-// Run is a convenience wrapper used by tests: it runs a single task directly
-// (Mode A path) on the given URL+conns and returns its error. The CLI flow
-// uses RunBatch for the full Balancer-driven scheduling; Run keeps the simple
-// single-file case one call away.
+// Run runs a single task directly (Mode A path) on the given URL+conns and
+// returns its error. Used by the tests for single-file scenarios.
 func (m *Manager) Run(ctx context.Context, url string, conns int) error {
 	t, _, err := m.NewTask(url, 0)
 	if err != nil {

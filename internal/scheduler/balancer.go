@@ -37,10 +37,9 @@ type Allocation struct {
 // parallel with their connection counts, the files that are queued, and any
 // validation warning/error text.
 type Plan struct {
-	Parallel       []Allocation // running files, order matches distribution order
-	Queued         []Allocation // waiting files
-	MaxConnections int          // effective ceiling used
-	Warning        string       // non-fatal warning text (e.g. C above ceiling), "" if none
+	Parallel []Allocation // running files, order matches distribution order
+	Queued   []Allocation // waiting files
+	Warning  string       // non-fatal warning text (e.g. C above ceiling), "" if none
 }
 
 // Compute is the pure Connection Balancer. See PRD §5.
@@ -71,7 +70,7 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 		return nil, fmt.Errorf("connection budget (-c) must be at least 1")
 	}
 
-	plan := &Plan{MaxConnections: maxConnections}
+	plan := &Plan{}
 
 	// Warning when the user explicitly raised the budget above the ceiling.
 	// Still proceed — the user opted in (§5.1).

@@ -29,7 +29,6 @@ type ChunkQueue struct {
 	chunks    []Chunk // remaining work
 	completed map[int64]struct{}
 	failed    map[int]int // worker-level failure count per chunk Index
-	total     int64       // sum of completed chunk sizes
 }
 
 // defaultChunkSize is used when the caller specifies no chunk size (or a
@@ -96,7 +95,6 @@ func (q *ChunkQueue) ResetCompletedOffsets(done map[int64]struct{}, totalSize in
 		kept = append(kept, c)
 	}
 	q.chunks = kept
-	q.total = already
 	return already, true
 }
 
@@ -131,17 +129,15 @@ func (q *ChunkQueue) Next() (Chunk, bool) {
 	return c, true
 }
 
-// MarkDone records that a chunk finished; returns the new total bytes done.
-// Idempotent: re-marking an already-completed offset is a no-op (workers may
-// retry after a transient error and the original write might still have landed).
-func (q *ChunkQueue) MarkDone(c Chunk, totalSize int64) int64 {
+// MarkDone records that a chunk finished. Idempotent: re-marking an
+// already-completed offset is a no-op (workers may retry after a transient
+// error and the original write might still have landed).
+func (q *ChunkQueue) MarkDone(c Chunk, totalSize int64) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if _, ok := q.completed[c.Start]; !ok {
 		q.completed[c.Start] = struct{}{}
-		q.total += chunkBytes(c, totalSize)
 	}
-	return q.total
 }
 
 // CompletedSpans returns up to n completed chunk spans (ascending by start
@@ -175,21 +171,6 @@ func (q *ChunkQueue) CompletedSpans(chunkSize, totalSize int64, n int) []Chunk {
 		out = append(out, Chunk{Start: off, End: end})
 	}
 	return out
-}
-
-// Done reports whether all chunks are completed (or there was nothing to do,
-// e.g. an empty file with zero chunks).
-func (q *ChunkQueue) Done() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.chunks) == 0
-}
-
-// BytesDone returns the total completed bytes.
-func (q *ChunkQueue) BytesDone() int64 {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.total
 }
 
 // chunkBytes returns how many bytes chunk c covers given totalSize. For the

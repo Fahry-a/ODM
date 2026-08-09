@@ -58,7 +58,6 @@ func TestLimitRate_StableAggregate(t *testing.T) {
 			Continue:    false,
 			ChunkSize:   chunk,
 			Timeout:     30 * time.Second,
-			MaxRedirect: 5,
 			CheckCert:   true,
 			LimitRate:   capStr,
 		}, nil)

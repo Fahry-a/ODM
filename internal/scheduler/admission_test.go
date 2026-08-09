@@ -91,7 +91,6 @@ func TestAdmission_NeverExceedsSlotBudget(t *testing.T) {
 		ChunkSize:   4096,
 		Retry:       0,
 		Timeout:     10 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {
@@ -148,7 +147,6 @@ func TestStoppedRetentionIsBounded(t *testing.T) {
 		ChunkSize:   4096,
 		Retry:       0,
 		Timeout:     5 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {

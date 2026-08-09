@@ -146,7 +146,6 @@ func TestResume_DetectsStaleData(t *testing.T) {
 			Continue:    true,
 			ChunkSize:   1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 3,
 			CheckCert:   true,
 		}, logf)
 		if err != nil {
@@ -227,7 +226,6 @@ func TestResume_LayoutMismatchFallsBackToFullDownload(t *testing.T) {
 			Continue:    true,
 			ChunkSize:   1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 3,
 			CheckCert:   true,
 		}, logf)
 		if err != nil {
@@ -389,7 +387,6 @@ func TestResume_VerifyPassesIntactData(t *testing.T) {
 			Continue:    true,
 			ChunkSize:   1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 3,
 			CheckCert:   true,
 		}, logf)
 		if err != nil {
@@ -460,7 +457,6 @@ func TestResume_HashVerifyPassesIntactData(t *testing.T) {
 			Continue:    true,
 			ChunkSize:   1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 3,
 			CheckCert:   true,
 		}, logf)
 		if err != nil {
@@ -546,7 +542,6 @@ func TestResume_HashDetectsCorruptChunk(t *testing.T) {
 			Continue:    true,
 			ChunkSize:   1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 3,
 			CheckCert:   true,
 		}, logf)
 		if err != nil {
@@ -645,7 +640,6 @@ func TestResume_LegacyControlFile_UsesServerCompare(t *testing.T) {
 		Continue:    true,
 		ChunkSize:   1024,
 		Timeout:     5 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, logf)
 	if err != nil {
@@ -717,7 +711,6 @@ func TestResume_HashPathStillDetectsServerDrift(t *testing.T) {
 			Continue:    true,
 			ChunkSize:   1024,
 			Timeout:     5 * time.Second,
-			MaxRedirect: 3,
 			CheckCert:   true,
 		}, logf)
 		if err != nil {
@@ -810,7 +803,6 @@ func TestResume_PartialHashCoverageFallsBackToServerCompare(t *testing.T) {
 		Continue:    true,
 		ChunkSize:   1024,
 		Timeout:     5 * time.Second,
-		MaxRedirect: 3,
 		CheckCert:   true,
 	}, logf)
 	if err != nil {

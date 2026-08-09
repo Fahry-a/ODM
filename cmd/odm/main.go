@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -134,25 +135,44 @@ func run(argv []string) error {
 	sizes := make(map[string]int64, len(o.URLs))
 	probes := make(map[string]*transport.ProbeResult, len(o.URLs))
 	probeClient := mgr.Client()
-	for _, u := range o.URLs {
-		// Each probe gets its own timeout so a slow/unresponsive server can't
-		// block the whole batch. If the probe fails (timeout or otherwise) we
-		// fall back to sizeless single-stream.
-		probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
-		pr, perr := probeClient.Probe(probeCtx, u)
-		probeCancel()
-		if perr != nil {
-			logger.Warnf("probe failed for %s: %v", u, perr)
-			// Treat an unprobeable URL as range-unsupported and sizeless; the
-			// Balancer will give it 1 connection and escalate to single-stream.
-			files = append(files, scheduler.FileInput{URL: u, SupportsRange: false})
-			sizes[u] = -1
+	// Probe up to 8 URLs in parallel: N URLs × 15s serial timeouts would stall
+	// a long -i batch before a single download starts. Each probe gets its own
+	// timeout so a slow/unresponsive server can't block the whole batch. On
+	// failure we fall back to sizeless single-stream (the Balancer gives it
+	// 1 connection and escalates to single-stream).
+	type probeResult struct {
+		url string
+		pr  *transport.ProbeResult
+		err error
+	}
+	workers := min(len(o.URLs), 8)
+	if workers < 1 {
+		workers = 1
+	}
+	probeCh := make(chan probeResult, len(o.URLs))
+	for w := 0; w < workers; w++ {
+		go func() {
+			for _, u := range o.URLs {
+				probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
+				pr, perr := probeClient.Probe(probeCtx, u)
+				probeCancel()
+				probeCh <- probeResult{url: u, pr: pr, err: perr}
+			}
+		}()
+	}
+	for range o.URLs {
+		res := <-probeCh
+		if res.err != nil {
+			logger.Warnf("probe failed for %s: %v", res.url, res.err)
+			files = append(files, scheduler.FileInput{URL: res.url, SupportsRange: false})
+			sizes[res.url] = -1
 			continue
 		}
-		files = append(files, scheduler.FileInput{URL: u, SupportsRange: pr.SupportsRange})
-		sizes[u] = pr.TotalSize
-		probes[u] = pr
+		files = append(files, scheduler.FileInput{URL: res.url, SupportsRange: res.pr.SupportsRange})
+		sizes[res.url] = res.pr.TotalSize
+		probes[res.url] = res.pr
 	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].URL < files[j].URL })
 
 	plan, err := scheduler.Compute(o.Connections, files, o.SplitFile, o.MaxConnection)
 	if err != nil {
@@ -301,7 +321,6 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		Continue:      o.Continue,
 		ChunkSize:     chunk,
 		Timeout:       time.Duration(o.Timeout) * time.Second,
-		MaxRedirect:   o.MaxRedirect,
 		Checksum:      o.Checksum,
 		LimitRate:     o.LimitRate,
 		TaskLimitRate: o.TaskLimitRate,
