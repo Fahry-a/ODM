@@ -6,9 +6,49 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+// TestRetireIfAboveTarget_ExactReduction pins the graceful-drain semantics of
+// AdjustConns reduction: when the live worker count exceeds the target, EXACTLY
+// (live - target) workers must retire — never more. The old check (a plain
+// conns > connTarget read) let every worker that read the count while it was
+// still above target retire together, which could drain ALL workers with chunks
+// still queued, letting Start report a partial file as completed (and delete
+// its control file). The CAS-based retirement serializes the decision: exactly
+// the first (live - target) workers win.
+func TestRetireIfAboveTarget_ExactReduction(t *testing.T) {
+	var task Task
+	task.conns.Store(4)
+	task.connTarget.Store(2)
+
+	var wg sync.WaitGroup
+	results := make(chan bool, 4)
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- task.retireIfAboveTarget()
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	retired := 0
+	for r := range results {
+		if r {
+			retired++
+		}
+	}
+	if retired != 2 {
+		t.Fatalf("exactly (4-2)=2 workers must retire, got %d", retired)
+	}
+	if got := task.conns.Load(); got != 2 {
+		t.Fatalf("conns after drain = %d, want 2", got)
+	}
+}
 
 // serveSlowRangeExact drips a ranged resource in fixed-size pieces with a delay
 // between writes, like serveSlowRange — but sets the response Content-Length to

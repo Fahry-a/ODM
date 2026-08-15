@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,9 +129,44 @@ func TestFrame_RowBudgetCapsTaskList(t *testing.T) {
 // Resize: SIGWINCH wakes the loop, and the frame picks up the new size.
 // ---------------------------------------------------------------------------
 
+// syncBuf is a mutex-guarded bytes.Buffer so a test can read Len() while the
+// RunLoop goroutine writes to it — bytes.Buffer is not goroutine-safe, and the
+// original test raced a direct r.Frame call from the test goroutine against
+// the loop's own Frame/Begin writes.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Len()
+}
+
+// waitGrow blocks (bounded) until out's length exceeds prev and returns the
+// new length — used to wait for the RunLoop goroutine to finish rendering a
+// frame queued to it before the test reads the buffer.
+func waitGrow(out *syncBuf, prev int) int {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if out.Len() > prev {
+			return out.Len()
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return out.Len()
+}
+
 func TestRunLoop_WakeTriggersImmediateRedraw(t *testing.T) {
-	var out bytes.Buffer
-	r := NewRenderer(&out, false)
+	out := &syncBuf{}
+	r := NewRenderer(out, false)
 	r.tty = true
 	r.useColor = false
 	r.setTerm(80, 24)
@@ -138,14 +174,17 @@ func TestRunLoop_WakeTriggersImmediateRedraw(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	snap := make(chan []download.ProgressView, 1)
 	done := make(chan struct{})
 	go func() {
-		r.RunLoop(ctx, time.Hour, nil, nil) // ticker never fires in a test
+		r.RunLoop(ctx, time.Hour, snap, nil) // ticker never fires in a test
 		close(done)
 	}()
 
-	r.Frame([]download.ProgressView{{ID: "a", Filename: "file-a", TotalSize: 100, BytesDone: 10, Speed: 1, ETA: time.Second, State: download.StateActive}}, nil)
-	before := out.Len()
+	// Feed the initial view through the loop, not a direct r.Frame call — the
+	// loop owns the output buffer, so the test goroutine must not write to it.
+	snap <- []download.ProgressView{{ID: "a", Filename: "file-a", TotalSize: 100, BytesDone: 10, Speed: 1, ETA: time.Second, State: download.StateActive}}
+	before := waitGrow(out, 0)
 
 	// Wake → the loop re-renders from its last-seen state immediately.
 	r.Wake <- struct{}{}

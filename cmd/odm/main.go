@@ -151,14 +151,19 @@ func run(argv []string) error {
 	}
 	probeCh := make(chan probeResult, len(o.URLs))
 	for w := 0; w < workers; w++ {
-		go func() {
-			for _, u := range o.URLs {
+		go func(w int) {
+			// Stride the URL list across workers so each URL is probed exactly
+			// once. Probing every URL in every worker duplicates results, and
+			// the consumer below then fills the batch with the first N results
+			// — the same URL twice, or missing URLs entirely when N > workers.
+			for i := w; i < len(o.URLs); i += workers {
+				u := o.URLs[i]
 				probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
 				pr, perr := probeClient.Probe(probeCtx, u)
 				probeCancel()
 				probeCh <- probeResult{url: u, pr: pr, err: perr}
 			}
-		}()
+		}(w)
 	}
 	for range o.URLs {
 		res := <-probeCh

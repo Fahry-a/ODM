@@ -3,16 +3,20 @@ package download
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"odm/internal/ratelimit"
+	"odm/internal/storage"
 	"odm/internal/transport"
 )
 
@@ -127,6 +131,102 @@ func TestBothProfile_ResumeMid(t *testing.T) {
 	}
 	if len(got) != len(payload) || !bytes.Equal(got, payload) {
 		t.Fatalf("resumed both file mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+// TestBothProfile_ResumeKeepsProgress pins the both-profile resume path.
+// Region2 segments are aria2c-sized (2 MiB here), not the 1 MiB odm chunk
+// size — the resume hash verifier used to hash them with the wrong span, so
+// every interrupted both download was discarded and re-downloaded from
+// scratch. The crafted control file has all of region1 (8 MiB) plus region2
+// segments at 8/10/12 MiB complete; resume must reuse them.
+func TestBothProfile_ResumeKeepsProgress(t *testing.T) {
+	payload := make([]byte, 16*1024*1024)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	srv := serveRangeSlices(payload)
+	defer srv.Close()
+	dir := t.TempDir()
+
+	const chunkSize = int64(1 << 20)
+	splitAt := int64(8 << 20)
+	// region1: 8 chunks of 1 MiB — all complete.
+	completed := []int64{}
+	hashes := map[int64]string{}
+	for off := int64(0); off < splitAt; off += chunkSize {
+		sum := sha256.Sum256(payload[off : off+chunkSize])
+		hashes[off] = hex.EncodeToString(sum[:])
+		completed = append(completed, off)
+	}
+	// region2: AriaSplit(8M, split=4, minSplit=1M) → 4 segments of 2 MiB at
+	// 8/10/12/14 MiB; the first three are complete.
+	seg2 := int64(2 << 20)
+	for off := splitAt; off < 14<<20; off += seg2 {
+		sum := sha256.Sum256(payload[off : off+seg2])
+		hashes[off] = hex.EncodeToString(sum[:])
+		completed = append(completed, off)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "out.bin"), payload[:14*1024*1024], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cf := &storage.ControlFile{
+		URL:              srv.URL,
+		FinalURL:         srv.URL,
+		TotalSize:        int64(len(payload)),
+		ChunkSize:        chunkSize,
+		Completed:        completed,
+		ChunkHashes:      hashes,
+		Profile:          "both",
+		SplitAt:          splitAt,
+		Region2ChunkSize: seg2,
+	}
+	if err := storage.SaveControl(filepath.Join(dir, "out.bin"), cf); err != nil {
+		t.Fatal(err)
+	}
+
+	logf, msgs, mu := captureLog()
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5 * time.Second, HTTP2: true, CheckCertificate: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim, _ := ratelimit.New("")
+	task := NewTask(TaskID("odm-both-resume"), srv.URL, TaskOptions{
+		OutputName:       "out.bin",
+		Dir:              dir,
+		Retry:            2,
+		Timeout:          10 * time.Second,
+		ChunkSize:        chunkSize,
+		MinSplitSize:     1 * 1024 * 1024,
+		Split:            4,
+		Profile:          "both",
+		MaxConnPerServer: 8,
+		Continue:         true,
+	}, cli, lim, logf)
+	task.SetH2Client(cli)
+	if err := task.Start(context.Background(), 4, nil); err != nil {
+		t.Fatalf("both resume failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("resumed both file mismatch (len %d want %d)", len(got), len(payload))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var sawResume bool
+	for _, m := range *msgs {
+		if strings.Contains(m, "resume integrity check failed") {
+			t.Fatalf("intact segments must pass the integrity check, logs: %v", *msgs)
+		}
+		if strings.Contains(m, "bytes already written") {
+			sawResume = true
+		}
+	}
+	if !sawResume {
+		t.Fatalf("expected the resume path to be taken, logs: %v", *msgs)
 	}
 }
 

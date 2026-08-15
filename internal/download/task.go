@@ -732,8 +732,14 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 	// Each worker represents one live connection. When it retires (queue empty,
 	// chunk error, or ctx cancel), decrement the live-connection counter so the
 	// UI's [xN] reflects the actual number of connections still downloading,
-	// not the number originally launched. Guard against underflow.
+	// not the number originally launched. Guard against underflow. A worker
+	// that retired via the drain check (retireIfAboveTarget) already
+	// decremented the counter with its own CAS, so the defer skips it there.
+	retired := false
 	defer func() {
+		if retired {
+			return
+		}
 		for {
 			old := t.conns.Load()
 			if old <= 0 {
@@ -745,11 +751,16 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 		}
 	}()
 	for {
-		// Graceful drain: if we have more live workers than the target,
-		// this worker retires before pulling the next chunk. Connections
-		// are decremented in the defer, not here, so the count drops
-		// naturally as workers exit.
-		if t.conns.Load() > t.connTarget.Load() {
+		// Graceful drain: if we have more live workers than the target, this
+		// worker retires before pulling the next chunk. The retirement is an
+		// atomic CAS so exactly (live - target) workers retire no matter how
+		// many check concurrently — without it, every worker that reads the
+		// count while it is still above target would retire together, and the
+		// queue could be left with no workers while chunks remain, letting
+		// Start report a partial file as completed (and delete its control
+		// file).
+		if t.retireIfAboveTarget() {
+			retired = true
 			return
 		}
 
@@ -798,6 +809,25 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 		// .aria2 persist) without re-serialising the whole file every chunk.
 		if t.checkpoint() {
 			t.persistControl()
+		}
+	}
+}
+
+// retireIfAboveTarget attempts to retire this worker when the live connection
+// count exceeds the target (AdjustConns reduction). The retirement is a CAS
+// on t.conns: exactly the first (live - target) workers to call it win and
+// exit, and every loser re-reads the (now-decremented) count and keeps
+// working. This makes the drain exact regardless of how many workers check
+// simultaneously. Returns true when the caller should exit (the counter was
+// already decremented here).
+func (t *Task) retireIfAboveTarget() bool {
+	for {
+		live := t.conns.Load()
+		if live <= t.connTarget.Load() {
+			return false
+		}
+		if t.conns.CompareAndSwap(live, live-1) {
+			return true
 		}
 	}
 }
@@ -1186,12 +1216,43 @@ func (t *Task) persistControl() {
 // sampled without effectively re-downloading it, and its resume is guarded by
 // the ETag/size checks. Fails safe — any request/read error is treated as a
 // mismatch.
+//
+// resumeSampleSpans returns up to n completed chunk spans for the sampled
+// server-side compare, with ABSOLUTE offsets and each region's own chunk size.
+// For the both profile this samples region1 AND region2 — previously only
+// t.queue (region1) was sampled, so server drift in the second region went
+// undetected. For the single-queue profiles the layout chunk size is used so
+// the sampled span matches the actual chunk (an aria2c segment, not the 4 MiB
+// odm default).
+func (t *Task) resumeSampleSpans(n int) []Chunk {
+	pr := t.probe.Load()
+	if t.engines == nil {
+		cs := t.layoutChunkSize(0)
+		if cs < 1 {
+			cs = t.opts.ChunkSize
+		}
+		return t.queue.CompletedSpans(cs, pr.TotalSize, n)
+	}
+	var out []Chunk
+	// region1: odm fixed chunks of opts.ChunkSize over [0, splitAt).
+	out = append(out, t.engines[0].CompletedSpans(t.opts.ChunkSize, t.splitAt, n)...)
+	// region2: aria2c segments over [splitAt, total). Translate to absolute.
+	seg := t.region2ChunkSize()
+	if seg < 1 {
+		seg = t.opts.ChunkSize
+	}
+	for _, s := range t.engines[1].CompletedSpans(seg, pr.TotalSize-t.splitAt, n) {
+		out = append(out, Chunk{Start: t.splitAt + s.Start, End: t.splitAt + s.End})
+	}
+	return out
+}
+
 func (t *Task) verifyResumedChunks(ctx context.Context) error {
 	pr := t.probe.Load()
 	if pr == nil || pr.SingleStream || pr.TotalSize <= 0 {
 		return nil
 	}
-	spans := t.queue.CompletedSpans(t.opts.ChunkSize, pr.TotalSize, resumeVerifyChunks)
+	spans := t.resumeSampleSpans(resumeVerifyChunks)
 	for _, s := range spans {
 		end := s.Start + resumeProbeLen - 1
 		if end > s.End {
@@ -1373,13 +1434,47 @@ func (t *Task) verifyResumedHashes(cf *storage.ControlFile) error {
 }
 
 // chunkSpan returns the byte span [start, end] that a chunk beginning at
-// `start` occupies in the current layout, mirroring NewChunkQueue's split
+// `start` occupies in the current layout, mirroring the queue split
 // arithmetic. The single-stream whole-file chunk (Start=0, End=-1) spans the
-// entire known size.
+// entire known size. The span size must match the LAYOUT's chunk size — the
+// aria2c profile splits into large segments, and the both profile's region2
+// uses those same segment sizes — not opts.ChunkSize, or hashing the wrong
+// range would fail every resume verify (see layoutChunkSize).
 func (t *Task) chunkSpan(start int64) (int64, int64) {
 	pr := t.probe.Load()
 	if pr.SingleStream {
 		return 0, pr.TotalSize - 1
+	}
+	cs := t.layoutChunkSize(start)
+	end := start + cs - 1
+	if pr.TotalSize > 0 && end >= pr.TotalSize {
+		end = pr.TotalSize - 1
+	}
+	return start, end
+}
+
+// layoutChunkSize returns the size of the chunk/segment beginning at `start`
+// in the CURRENT layout:
+//   - odm profile: opts.ChunkSize (fixed work-stealing chunks)
+//   - aria2c profile: the static segment size (AriaSplit), which is usually
+//     much larger than opts.ChunkSize
+//   - both profile: opts.ChunkSize in region1, the aria2c segment size in
+//     region2 (offsets >= splitAt)
+//
+// Resume hash verification hashes the exact span a completed chunk occupies;
+// using opts.ChunkSize for an aria2c/both-region2 segment hashes only a
+// prefix of the bytes the recorded SHA-256 covers, so the digest never matches
+// and every resume is discarded as a failed integrity check.
+func (t *Task) layoutChunkSize(start int64) int64 {
+	if t.engines != nil && start >= t.splitAt {
+		if seg := t.region2ChunkSize(); seg > 0 {
+			return seg
+		}
+	}
+	if t.opts.Profile == "aria2c" {
+		if seg := t.effectiveChunkSize(); seg > 0 {
+			return seg
+		}
 	}
 	// Mirror NewChunkQueue's silent default: a non-positive ChunkSize would
 	// otherwise produce end = start-1 and spuriously fail every hash verify.
@@ -1387,11 +1482,7 @@ func (t *Task) chunkSpan(start int64) (int64, int64) {
 	if cs < 1 {
 		cs = defaultChunkSize
 	}
-	end := start + cs - 1
-	if pr.TotalSize > 0 && end >= pr.TotalSize {
-		end = pr.TotalSize - 1
-	}
-	return start, end
+	return cs
 }
 
 // SetTaskRate updates the per-task rate limit at runtime. spec="" or "off" →

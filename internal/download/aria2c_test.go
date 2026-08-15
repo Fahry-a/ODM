@@ -1,7 +1,10 @@
 package download
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	"odm/internal/ratelimit"
+	"odm/internal/storage"
 	"odm/internal/transport"
 )
 
@@ -201,6 +205,94 @@ func TestAria2cProfile_UsesHTTP2SingleConn(t *testing.T) {
 		// streams map is populated by x-odm-stream header (unset), so this is
 		// informational; the real assertions are proto==h2 and 1 TCP conn.
 		t.Logf("note: saw %d distinct h2 stream ids", len(streams))
+	}
+}
+
+// TestAria2cProfile_ResumeKeepsProgress pins the aria2c-profile resume path:
+// completed segments are LARGE static splits (AriaSplit), not the 4 MiB-ish
+// opts.ChunkSize the resume hash verifier used to assume. Hashing a segment
+// with the wrong span (a prefix of the real one) made the digest never match,
+// so every interrupted aria2c download was discarded as a failed integrity
+// check and re-downloaded from scratch. The crafted control file below has 3
+// of 4 segments complete; the resume must pass verification and reuse them.
+func TestAria2cProfile_ResumeKeepsProgress(t *testing.T) {
+	payload := make([]byte, 16*1024*1024)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	srv := serveRangeSlices(payload)
+	defer srv.Close()
+	dir := t.TempDir()
+
+	// Layout: AriaSplit(16M, split=4, minSplit=1M) → 4 segments of 4 MiB.
+	segSize := int64(4 * 1024 * 1024)
+	completed := []int64{}
+	hashes := map[int64]string{}
+	for off := int64(0); off < 3*segSize; off += segSize {
+		sum := sha256.Sum256(payload[off : off+segSize])
+		hashes[off] = hex.EncodeToString(sum[:])
+		completed = append(completed, off)
+	}
+	// Segments 0-2 are on disk; segment 3 (offset 12 MiB) is the missing one.
+	if err := os.WriteFile(filepath.Join(dir, "out.bin"), payload[:12*1024*1024], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cf := &storage.ControlFile{
+		URL:         srv.URL,
+		FinalURL:    srv.URL,
+		TotalSize:   int64(len(payload)),
+		ChunkSize:   segSize,
+		Completed:   completed,
+		ChunkHashes: hashes,
+		Profile:     "aria2c",
+	}
+	if err := storage.SaveControl(filepath.Join(dir, "out.bin"), cf); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 2: resume with the same profile but a ChunkSize that deliberately
+	// differs from the segment size — the bug used opts.ChunkSize for the span.
+	logf, msgs, mu := captureLog()
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5 * time.Second, HTTP2: true, CheckCertificate: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim, _ := ratelimit.New("")
+	task := NewTask(TaskID("odm-aria-resume"), srv.URL, TaskOptions{
+		OutputName:       "out.bin",
+		Dir:              dir,
+		Retry:            2,
+		Timeout:          10 * time.Second,
+		ChunkSize:        1 * 1024 * 1024,
+		MinSplitSize:     1 * 1024 * 1024,
+		Split:            4,
+		Profile:          "aria2c",
+		MaxConnPerServer: 4,
+		Continue:         true,
+	}, cli, lim, logf)
+	if err := task.Start(context.Background(), 4, nil); err != nil {
+		t.Fatalf("aria2c resume failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("resumed aria2c file mismatch (len %d want %d)", len(got), len(payload))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var sawResume bool
+	for _, m := range *msgs {
+		if strings.Contains(m, "resume integrity check failed") {
+			t.Fatalf("intact segments must pass the integrity check, logs: %v", *msgs)
+		}
+		if strings.Contains(m, "bytes already written") {
+			sawResume = true
+		}
+	}
+	if !sawResume {
+		t.Fatalf("expected the resume path to be taken, logs: %v", *msgs)
 	}
 }
 

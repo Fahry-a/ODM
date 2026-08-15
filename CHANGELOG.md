@@ -13,6 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1 HTTP/2 multiplexed connection. The Balancer's N-connection allocation became
   meaningless with no warning. h2 is now unconditionally disabled via
   `ForceAttemptHTTP2: false` + empty `TLSNextProto`. (`internal/transport/transport.go`)
+- **`--continue` discarded all progress for the aria2c and both profiles** —
+  resume hash verification hashed each completed chunk with the odm `--chunk-size`
+  (default 4 MiB) instead of the layout's actual segment size (aria2c static
+  splits, usually far larger; the both profile's region2 uses those same
+  segments). Hashing only a prefix of the bytes the recorded SHA-256 covers
+  never matched, so every interrupted aria2c/both download was discarded as a
+  failed integrity check and re-downloaded from scratch. `chunkSpan` now uses
+  the layout's real chunk size (`layoutChunkSize`). (`internal/download/task.go`)
+- **Resume server-compare sampled only region1 for the both profile** —
+  `verifyResumedChunks` sampled `t.queue` (region1) only, so server drift in
+  region2 was never detected. The sampler now covers every engine with
+  per-region chunk sizes and absolute offsets. (`internal/download/task.go`)
+- **Connection reduction could drain ALL workers** — `AdjustConns`' graceful
+  drain checked `conns > connTarget` non-atomically, so every worker that read
+  the count while it was still above target could retire together, leaving the
+  queue with chunks but zero workers — Start then reported the partial file as
+  completed and deleted its `.odm`. Retirement is now a CAS (`retireIfAboveTarget`),
+  so exactly `live - target` workers exit. (`internal/download/task.go`)
+- **Race in `TestRunLoop_WakeTriggersImmediateRedraw`** — the test called
+  `Renderer.Frame` directly while the RunLoop goroutine wrote the same
+  `bytes.Buffer`; a data race under `-race` (pre-existing). The test now feeds
+  snapshots through the loop and reads via a mutex-guarded buffer.
+  (`internal/ui/responsive_test.go`)
+- **`StaticQueue` offset sort used a hand-rolled insertion sort** — replaced
+  with `slices.Sort` (the standard library the rest of the codebase uses).
+  No behavior change. (`internal/download/engine.go`)
 
 ### Changed
 - `progressThrottler` moved from `cmd/odm/main.go` to `internal/rpc/throttler.go`

@@ -16,6 +16,7 @@
 package download
 
 import (
+	"slices"
 	"sync"
 
 	"odm/internal/transport"
@@ -169,7 +170,7 @@ func (q *StaticQueue) CompletedOffsets() []int64 {
 	for off := range q.done {
 		out = append(out, off)
 	}
-	sortOffsets(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -182,7 +183,7 @@ func (q *StaticQueue) CompletedSpans(chunkSize, totalSize int64, n int) []Chunk 
 	for off := range q.done {
 		starts = append(starts, off)
 	}
-	sortOffsets(starts)
+	slices.Sort(starts)
 	if n <= 0 || len(starts) <= n {
 		n = len(starts)
 	}
@@ -223,13 +224,4 @@ func (q *StaticQueue) ResetCompletedOffsets(done map[int64]struct{}, totalSize i
 		break
 	}
 	return already, true
-}
-
-// sortOffsets sorts an ascending int64 slice in place.
-func sortOffsets(o []int64) {
-	for i := 1; i < len(o); i++ {
-		for j := i; j > 0 && o[j] < o[j-1]; j-- {
-			o[j], o[j-1] = o[j-1], o[j]
-		}
-	}
 }
