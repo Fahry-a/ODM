@@ -179,10 +179,10 @@ jobs:
           files: >-
             packaging/PKGBUILD,
             packaging/.SRCINFO,
-            man:assets/odm.1,
-            conf:assets/odm.conf.example,
-            service:assets/odm.service,
-            license:assets/LICENSE
+            odm-bin.1:assets/odm.1,
+            odm-bin.conf.example:assets/odm.conf.example,
+            odm-bin.service:assets/odm.service,
+            odm-bin.LICENSE:assets/LICENSE
           rm_patterns: >-
             odm-bin-*.1,
             odm-bin-*.conf.example,
