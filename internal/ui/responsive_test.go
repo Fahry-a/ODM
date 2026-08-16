@@ -34,19 +34,54 @@ func TestLayoutFor_Tiers(t *testing.T) {
 		{96, 30, layoutFull},       // full layout floor
 		{80, 20, layoutNoSpeedETA}, // mid tier: speed/ETA dropped, bar shrinks
 		{66, 20, layoutNoSpeedETA}, // mid tier floor
-		{60, 10, layoutNameBarPct}, // small tier: bar at floor
-		{45, 10, layoutNameBarPct}, // small tier floor
-		{40, 0, layoutNamePct},     // barless: name + pct only
-		{30, 0, layoutNamePct},
+		{60, 10, layoutNameBarPct}, // bar at floor, no size/speed/ETA
+		{45, 10, layoutNameBarPct},
+		{40, 10, layoutNameBarPct},
+		{36, 10, layoutNameBarPct}, // name+bar+pct floor
+		{35, 0, layoutNamePct},     // barless: name + pct
+		{20, 0, layoutNamePct},
+		{12, 0, layoutNamePct}, // name+pct floor
+		{10, 0, layoutPct},     // super narrow: pct only
+		{8, 0, layoutPct},
+		{4, 0, layoutPct},
 	}
 	for _, tc := range cases {
-		barW, _, minW, layout := layoutFor(tc.term)
+		barW, nameW, minW, layout := layoutFor(tc.term)
 		if barW != tc.barW || layout != tc.layout {
 			t.Errorf("layoutFor(%d) = barW %d layout %v, want barW %d layout %v",
 				tc.term, barW, layout, tc.barW, tc.layout)
 		}
 		if minW < 0 || minW > tc.term {
 			t.Errorf("layoutFor(%d): minW %d must fit in %d cols", tc.term, minW, tc.term)
+		}
+		if tc.layout == layoutFull && nameW < 8 {
+			t.Errorf("layoutFor(%d): full layout leaves only %d cells for the name", tc.term, nameW)
+		}
+	}
+}
+
+// TestRenderTaskLine_SuperSmall pins the ultra-narrow tiers: every width from
+// 120 down to 4 columns renders a non-wrapping line that fits.
+func TestRenderTaskLine_SuperSmall(t *testing.T) {
+	v := download.ProgressView{
+		Filename: "linux-cachyos-6.9.1-x86_64.iso", TotalSize: 2 << 30, Speed: 50 << 20,
+		BytesDone: 1 << 30, Connections: 16, State: download.StateActive, ETA: 30 * time.Second,
+	}
+	for _, width := range []int{120, 80, 66, 60, 45, 40, 30, 25, 20, 15, 12, 11, 10, 8, 5, 4} {
+		barW, nameW, _, layout := layoutFor(width)
+		line := renderTaskLine(v, false, -1, 0, nameW, barW, layout)
+		if d := displayWidth(line); d > width {
+			t.Errorf("width %d: line %d cells too wide: %q", width, d, line)
+		}
+		if layout == layoutPct {
+			if strings.Contains(line, "linux") {
+				t.Errorf("width %d: pct-only line must not show the name: %q", width, line)
+			}
+		} else if layout == layoutNamePct && strings.Contains(line, "[") {
+			t.Errorf("width %d: barless layout must have no bracket: %q", width, line)
+		}
+		if !strings.Contains(line, "%") && layout != layoutPct {
+			t.Errorf("width %d: line missing percent: %q", width, line)
 		}
 	}
 }
@@ -175,10 +210,9 @@ func TestRunLoop_WakeTriggersImmediateRedraw(t *testing.T) {
 	defer cancel()
 
 	snap := make(chan []download.ProgressView, 1)
-	done := make(chan struct{})
+	loopDone := make(chan struct{})
 	go func() {
-		r.RunLoop(ctx, time.Hour, snap, nil) // ticker never fires in a test
-		close(done)
+		r.RunLoop(ctx, time.Hour, snap, nil, loopDone) // ticker never fires in a test
 	}()
 
 	// Feed the initial view through the loop, not a direct r.Frame call — the
@@ -189,7 +223,7 @@ func TestRunLoop_WakeTriggersImmediateRedraw(t *testing.T) {
 	// Wake → the loop re-renders from its last-seen state immediately.
 	r.Wake <- struct{}{}
 	select {
-	case <-done:
+	case <-loopDone:
 		t.Fatal("RunLoop must not exit on wake (context not cancelled)")
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -203,7 +237,7 @@ func TestRunLoop_WakeTriggersImmediateRedraw(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNonTTYSummary_UnchangedLayout(t *testing.T) {
-	s := RenderSummary(1, 2, 44_000_000, 32*time.Second, 750<<20, 1<<30, false)
+	s := RenderSummary(1, 2, 44_000_000, 32*time.Second, 0, 750<<20, 1<<30, false)
 	if strings.Contains(s, "\n") {
 		t.Fatalf("summary must be a single line: %q", s)
 	}
@@ -217,9 +251,9 @@ func TestNonTTYSummary_UnchangedLayout(t *testing.T) {
 // line that still shows the byte total + bar + percent — never truncating the
 // pct off the right edge.
 func TestRenderSummary_FitsAllWidths(t *testing.T) {
-	for _, w := range []int{120, 80, 72, 60, 45, 30} {
+	for _, w := range []int{120, 80, 72, 60, 45, 30, 20, 10, 4} {
 		barW, _, _, _ := layoutFor(w)
-		got := RenderSummaryWidth(0, 2, 44_000_000, 32*time.Second, 24<<20, 1<<30, false, w, barW)
+		got := RenderSummaryWidth(0, 2, 44_000_000, 32*time.Second, 0, 24<<20, 1<<30, false, w, barW, 0)
 		if d := displayWidth(got); d > w {
 			t.Errorf("width %d: summary %d cells too wide: %q", w, d, got)
 		}

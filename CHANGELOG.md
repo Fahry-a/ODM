@@ -5,7 +5,26 @@ All notable changes to ODM (Oryn Download Manager) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-08-16
+
+### Added
+- **Engine profiles** — `--profile` selects how a file is fetched:
+  `odm` (default: fixed work-stealing chunks over HTTP/1.1 multi-connection),
+  `aria2c` (static equal split into `--split` segments over HTTP/2 streams —
+  the aria2c `-s`/`-x` model, one TCP connection for all segments),
+  `both` (50/50 split: the first half via the odm engine, the second via the
+  aria2c engine, so both engines run at once), and `smart` (auto-picks the
+  engine per file after probing range support, size and h2 readiness). New
+  flags: `--split`, `--min-split-size`, `--max-connection-per-server`.
+  (`internal/download/engine.go`, `internal/download/smart.go`, `internal/download/task.go`)
+- **Modern, fully responsive progress UI** — the pacman bar now leads with a
+  per-state status glyph (`↓` downloading, `↻` retrying, `✗` error, `✓` done,
+  `⏸` paused, `…` queued), shows an error-count badge (`e<N>`) only when a
+  task actually errored, reports `?` instead of a misleading `0%` for sizeless
+  streams, and the summary gains an elapsed counter (`+HH:MM:SS`). Layout
+  tiers now extend down to a pct-only floor for terminals under 12 columns,
+  with every intermediate width (120 → 4 columns) rendering a single
+  non-wrapping row. (`internal/ui/render.go`, `internal/ui/progress.go`)
 
 ### Fixed
 - **HTTP/2 silent-collapse** — `ForceAttemptHTTP2` was `true` and `TLSNextProto`
@@ -43,6 +62,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `progressThrottler` moved from `cmd/odm/main.go` to `internal/rpc/throttler.go`
   (exported as `ProgressThrottler`); no behavior change.
+- **`internal/ui` reorganised into thematic files** — `render.go` (task-line
+  layout) split into `render.go`, `bar.go` (pacman bar), `ansi.go` (ANSI-aware
+  string primitives), `summary.go` (humanisers + aggregate summary + status
+  glyphs), and `color.go` (colour constants + state map). Pure logic now lives
+  in one place each; no behavior change. (`internal/ui/*`)
+
+### Fixed
+- **^C rendered doubled/interleaved task lines** — two goroutines wrote the
+  final frame: `RunLoop`'s `ctx.Done` case and `main`'s post-run `Frame(nil,nil)`.
+  `RunLoop` no longer renders a final frame on cancel (it only restores the
+  cursor and closes a `done` channel); `main` waits for the loop to fully exit
+  (`<-uiDone`) before issuing the single final frame. No more doubled,
+  `0%`-fused lines on Ctrl-C. (`internal/ui/progress.go`, `cmd/odm/main.go`)
+- **^C reported `0 failed` in the summary** — `Scheduler.Run` returned on
+  `ctx.Done` without draining `s.compl`, so in-flight tasks cancelled by ^C were
+  never tallied. Run now drains completion reports until no task is live, then
+  returns with the correct succeeded/failed counts. (`internal/scheduler/queue.go`)
+- **Daemon shutdown deadlock** — after the tally fix, `Run`'s select could busy-
+  loop on a closed `doneCh` while in-flight tasks still posted to `s.compl`,
+  hanging `Daemon.Stop`. The post-cancel path now drains `s.compl` directly.
+  (`internal/scheduler/queue.go`)
+- **WaitGroup Add-vs-Wait race on daemon shutdown** — `Enqueue`/`admitNext`
+  called `wg.Add` from the RPC goroutine while `Run`'s background `wg.Wait`
+  observed the count; once the count hit zero, a racing Add was undefined
+  behavior. Every Add now goes through `AddCounter`, which refuses once
+  `windingDown` is set. (`internal/scheduler/queue.go`)
+- **Pacman face animated off the render frame counter** — `c`/`C` toggled on
+  every frame, so a burst of frames (SIGWINCH resize storm, event flush) made
+  the face flicker gede-kecil rapidly. The face is now wall-clock-driven
+  (`faceTick` in seconds, toggling every `pacFaceInterval`), independent of
+  render cadence, and the aggregate summary bar animates in step with the
+  per-file bars. (`internal/ui/bar.go`, `internal/ui/progress.go`)
+- **Race on task layout between RPC `AdjustConns` and `Start`** — the daemon
+  admits a task the moment `NewTask` returns, so `changeOption → connections`
+  could read `t.engines`/`t.queue` while `Start` was building the layout.
+  Layout writes are now guarded by `layoutMu`, read under the same lock.
+  (`internal/download/task.go`)
+- **`both` profile oversubscribed the connection budget at `-c 1`** —
+  `max(1,conns/2) + max(1,conns-conns1)` spawned 2 workers on a 1-connection
+  budget, doubling TCP connections. `conns < 2` now degrades to the
+  single-region odm engine. (`internal/download/task.go`)
+- **RPC daemon could corrupt output via config `output`** — `-o` is single-file
+  only, but the daemon path never cleared `exec.OutFile`, so every `addUri`
+  task wrote the same path (overlapping `WriteAt` = silent corruption). The
+  daemon now clears it. (`cmd/odm/main.go`)
+- **`restoreChunkHashes` dropped region2 hashes on resume** — control-file
+  hashes are keyed by absolute offset, but the resume restore looked up
+  region2's relative offsets, silently dropping them and downgrading the next
+  resume to the server-compare fallback. Offsets are now translated to absolute
+  per region. (`internal/download/task.go`)
+- **Resume sampling used the wrong client for region2** — `verifyResumedChunks`
+  sampled every span via the h1 client even for spans downloaded over h2; a
+  valid resume could be flagged as a mismatch. Spans are now sampled through
+  their owning region's client. (`internal/download/task.go`)
+- **Probe goroutines leaked on ^C** — up to 8 workers could block on `probeCh`
+  while the consumer had already returned. Workers and the consumer now honour
+  `ctx.Done()`. (`cmd/odm/main.go`)
+- **`signalCtx` goroutine leaked** — the signal-handler goroutine parked on the
+  channel forever; it now exits via `ctx.Done()` and the handler is stopped on
+  cancel. (`cmd/odm/main.go`)
+- **`smart` profile was inert for batch downloads** — it used the global `-c`
+  instead of the per-file allocation the Balancer set, so batch files (1 conn)
+  never reached the h2/both thresholds. It now reads the per-file budget.
+  (`internal/download/task.go`)
+- **`--profile smart` with `-c 1` on `both`** — same oversubscribe guard as the
+  explicit `both` profile. (`internal/download/task.go`)
+
+### Changed
+- Dead fields removed: `Task.startAt`, `Renderer.lastLoggedPct`; `colorReplace`
+  now uses `strings.Replace`; `emit()` reuses `LiveViews`/`QueuedViews`;
+  `StaticQueue.ResetCompletedOffsets` documents its unused `totalSize` param.
+  (`internal/download/task.go`, `internal/ui/*`)
+- Batch confirmation prompt now aligns the file list into a table (names padded
+  to 40 cells, sizes right-aligned to 14) in both colour and plain modes.
+  (`internal/ui/confirm.go`)
+- Summary line: speed is yellow and elapsed cyan on a TTY; paused/queued
+  task percentages are grey, completing the per-state colour story.
+  (`internal/ui/summary.go`, `internal/ui/render.go`)
 
 ## [1.3.1] - 2026-08-01
 
@@ -455,7 +552,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Fahry-a/ODM/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/Fahry-a/ODM/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Fahry-a/ODM/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Fahry-a/ODM/compare/v1.1.0...v1.2.0

@@ -74,6 +74,76 @@ Each file is split into small chunks (default `--chunk-size 4M`) pushed into a s
 
 ---
 
+## Downloader profiles (`--profile`)
+
+`odm` ships four engine profiles that change how a file is fetched. Pick one
+with `--profile NAME` (or `profile = NAME` in the config file). The default
+is `odm`.
+
+| Profile | Engine | When to use |
+|---|---|---|
+| `odm` (default) | fixed chunks, work-stealing, HTTP/1.1 multi-connection | the default; best with range-capable servers |
+| `aria2c` | static equal split into `--split` segments, HTTP/2 streams over one connection | large files on HTTPS servers; mimics aria2c's `-s`/`-x` model |
+| `both` | 50/50 split: first half via the odm engine, second half via the aria2c engine | very large files where you want both engines at once |
+| `smart` | auto-picks per file after probing (range support, size, h2 readiness) | set it and forget it |
+
+### Profile flags
+
+- `--split N` — aria2c/both: number of segments per file (default `5`).
+- `--min-split-size SIZE` — aria2c/both: don't split ranges smaller than 2×
+  this (default `20M`); a file below that downloads as a single segment.
+- `--max-connection-per-server N` — aria2c: per-server connection cap when
+  the server falls back to HTTP/1.1 (default `1`). Under HTTP/2 all streams
+  share one connection, so the cap is irrelevant there.
+
+### How each profile fetches
+
+**`odm`** splits the file into fixed `--chunk-size` chunks (default 4 MiB)
+pushed into a shared work-stealing queue; `-c` workers pull the next chunk as
+soon as they finish, one HTTP/1.1 connection each. This is the multi-connection
+aggregation ODM is built around.
+
+**`aria2c`** divides the file into `--split` (default 5) roughly-equal
+segments — one per worker — and speaks HTTP/2, so all segments multiplex over
+a single TCP connection (the aria2c model where `-c` means concurrent h2
+streams, not TCP connections). A failed segment is retried by the same worker
+(no work-stealing). On `http://` URLs or h1-only servers Go falls back to
+HTTP/1.1 automatically.
+
+**`both`** runs the two engines side by side: region 1 `[0, mid)` uses the odm
+engine (work-stealing chunks, HTTP/1.1), region 2 `[mid, end)` uses the aria2c
+engine (static segments, HTTP/2). Files under 4 MiB degrade to the plain odm
+engine.
+
+**`smart`** probes each URL (range support, size, h2 readiness) and picks the
+engine per file: no-range / sizeless / small (< 8 MiB) / no-h2 / low
+connections → `odm`; ≥ 256 MiB with ≥ 6 connections → `both`; otherwise →
+`aria2c`.
+
+### Examples
+
+```bash
+# aria2c-style: 5 segments over h2 streams (HTTPS server)
+odm --profile aria2c -c 5 https://files.test.xyz/big.iso
+
+# both engines at once on a big file: odm half + aria2c half
+odm --profile both -c 8 https://files.test.xyz/huge.iso
+
+# smart: let odm decide per file (batch)
+odm --profile smart -c 16 -i file-list.txt
+
+# tune the aria2c split (4 segments, don't split below 10 MiB)
+odm --profile aria2c --split 4 --min-split-size 10M https://files.test.xyz/big.iso
+```
+
+> **Note:** HTTP/2 negotiation needs HTTPS (ALPN). An `http://` URL or an
+> h1-only server makes the h2 profiles fall back to HTTP/1.1 automatically.
+> ODM's default `odm` profile deliberately disables HTTP/2 so `-c` always
+> means N real TCP connections — the multi-connection aggregation is the
+> point of the tool.
+
+---
+
 ## Configuration
 
 Config source priority (`CLI flags` win; a defaulted flag never overwrites a value the user put in a file):

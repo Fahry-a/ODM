@@ -106,6 +106,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		// allocation becomes meaningless and the user gets zero benefit from -c
 		// without any warning. Empty TLSNextProto prevents the client from
 		// advertising h2 in the ALPN list at all.
+		// Revisit trigger: if a user reports a server that REQUIRES h2 (refuses
+		// h1-only ALPN with "alpn error" or only serves ranges over h2), switch
+		// the odm profile to ForceAttemptHTTP2=true and rely on -x caps instead.
 		tr.ForceAttemptHTTP2 = false
 		tr.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
 	}

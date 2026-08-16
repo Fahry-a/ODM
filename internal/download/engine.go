@@ -203,6 +203,10 @@ func (q *StaticQueue) CompletedSpans(chunkSize, totalSize int64, n int) []Chunk 
 // `done` are skipped by Next (advancing past them). Returns the bytes already
 // complete and whether the set is compatible with the layout (always true for
 // static splits — offsets are absolute and segments are large).
+//
+// totalSize is accepted for interface uniformity with ChunkQueue (which uses
+// it to compute chunk bytes); a static segment's byte count is fully
+// determined by the segment map, so it is intentionally unused here.
 func (q *StaticQueue) ResetCompletedOffsets(done map[int64]struct{}, totalSize int64) (int64, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

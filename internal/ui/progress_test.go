@@ -95,33 +95,15 @@ func TestRenderTaskLine_FixedColumns(t *testing.T) {
 		if got := barIdx(line); got != refBar {
 			t.Fatalf("bar column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refBar, got, ref, line)
 		}
-		if got := pctIdx(line); got != refPct {
-			t.Fatalf("percent column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refPct, got, ref, line)
+		// A sizeless stream shows "?" instead of a percent — the slot is the
+		// same width, but there is no '%' character to anchor on.
+		if v.TotalSize > 0 {
+			if got := pctIdx(line); got != refPct {
+				t.Fatalf("percent column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refPct, got, ref, line)
+			}
 		}
 		if got := len([]rune(line)); got != refLen {
 			t.Fatalf("line rune length changed: want %d got %d\n  ref: %q\n  got: %q", refLen, got, ref, line)
-		}
-	}
-}
-
-// TestBarWidthFor_Adapts pins the narrow-terminal bar shrink: the full 30-cell
-// bar fits from ~96 columns down; below that only the bar (not the columns)
-// gives way, down to the minBarWidth floor.
-func TestBarWidthFor_Adapts(t *testing.T) {
-	cases := []struct {
-		term int
-		want int
-	}{
-		{120, 30}, // roomy → full bar
-		{100, 30},
-		{96, 30}, // first width that still fits the full bar + 10-cell name
-		{95, 29},
-		{80, 14},
-		{60, 10}, // floor
-	}
-	for _, tc := range cases {
-		if got := barWidthFor(tc.term); got != tc.want {
-			t.Errorf("barWidthFor(%d) = %d, want %d", tc.term, got, tc.want)
 		}
 	}
 }
@@ -149,11 +131,13 @@ func TestRenderTaskLine_WideRuneNameStaysInBudget(t *testing.T) {
 	if !strings.Contains(line, "...") {
 		t.Fatalf("long wide name must be truncated with ellipsis: %q", line)
 	}
-	// The bar bracket must sit at nameW + (everything before the '[') display
+	// The bar bracket must sit at (glyph + everything before the '[') display
 	// cells — measured in CELLS, not bytes (the CJK name is 3 bytes/rune).
+	// With the status-glyph column, the bracket is infoFixedWidth-6 cells
+	// after the name (2 glyph + 2+14+2+11+2+8+2+6 before the bracket).
 	bracket := strings.LastIndex(line, "[")
-	if got := displayWidth(line[:bracket]); got != nameW+infoFixedWidth-8 {
-		t.Fatalf("bar bracket at %d cells, want %d\n%q", got, nameW+infoFixedWidth-8, line)
+	if got := displayWidth(line[:bracket]); got != nameW+infoFixedWidth-6 {
+		t.Fatalf("bar bracket at %d cells, want %d\n%q", got, nameW+infoFixedWidth-6, line)
 	}
 }
 
@@ -241,9 +225,115 @@ func TestFormatFileSize_No1024Overflow(t *testing.T) {
 }
 
 func TestRenderSummary(t *testing.T) {
-	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, 750<<20, 1<<30, false)
+	s := RenderSummary(3, 16, 44_000_000, 32*time.Second, 0, 750<<20, 1<<30, false)
 	if !strings.Contains(s, "3/16") || !strings.Contains(s, "00:00:32") || !strings.Contains(s, "73%") || !strings.Contains(s, "[") {
 		t.Fatalf("summary wrong: %s", s)
+	}
+	// Elapsed: a started clock adds the "+HH:MM:SS" segment; zero omits it.
+	sEl := RenderSummary(3, 16, 44_000_000, 32*time.Second, 90*time.Second, 750<<20, 1<<30, false)
+	if !strings.Contains(sEl, "+00:01:30") {
+		t.Fatalf("summary must show elapsed when the clock started: %s", sEl)
+	}
+	if strings.Contains(s, "+") {
+		t.Fatalf("summary with no clock must not show elapsed: %s", s)
+	}
+}
+
+// TestRenderTaskLine_StatusGlyph pins the status-symbol column: each state
+// renders its one-cell glyph, and the glyph cell is always exactly 2 cells so
+// the info block never shifts.
+func TestRenderTaskLine_StatusGlyph(t *testing.T) {
+	cases := []struct {
+		state download.TaskState
+		want  string
+	}{
+		{download.StateActive, "\u2193"},    // ↓
+		{download.StateRetrying, "\u21bb"},  // ↻
+		{download.StateError, "\u2717"},     // ✗
+		{download.StateCompleted, "\u2713"}, // ✓
+		{download.StatePaused, "\u23f8"},    // ⏸
+		{download.StateQueued, "\u2026"},    // …
+	}
+	for _, tc := range cases {
+		v := download.ProgressView{Filename: "f", State: tc.state, TotalSize: 100, BytesDone: 10}
+		line := renderTaskLine(v, false, -1, 0, 8, BarWidth, layoutFull)
+		if !strings.Contains(line, tc.want) {
+			t.Fatalf("state %v: line missing glyph %q: %q", tc.state, tc.want, line)
+		}
+	}
+	// The glyph prefix must be exactly 2 display cells (glyph + space).
+	line := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: 100, BytesDone: 10}, false, -1, 0, 8, BarWidth, layoutFull)
+	if d := displayWidth(line[:strings.Index(line, "f")]); d != colGlyph {
+		t.Fatalf("glyph column is %d cells, want %d: %q", d, colGlyph, line)
+	}
+}
+
+// TestRenderTaskLine_ErrorBadge pins the trailing error badge: it appears
+// only when Errors > 0, after the percent, so the common line is unchanged.
+func TestRenderTaskLine_ErrorBadge(t *testing.T) {
+	ok := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: 100, BytesDone: 10}, false, -1, 0, 8, BarWidth, layoutFull)
+	bad := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateError, TotalSize: 100, BytesDone: 10, Errors: 3}, false, -1, 0, 8, BarWidth, layoutFull)
+	if strings.Contains(ok, " e") {
+		t.Fatalf("error-free line must not carry a badge: %q", ok)
+	}
+	if !strings.Contains(bad, " e3") {
+		t.Fatalf("errored line must carry the error count: %q", bad)
+	}
+	// The percent column must sit at the same index on both lines.
+	if pctIdx(ok) != pctIdx(bad) {
+		t.Fatalf("error badge must not shift the percent column\nok: %q\nbad: %q", ok, bad)
+	}
+}
+
+// TestRenderTaskLine_SizelessPct pins the honest percent: a stream with no
+// known total shows "?" instead of a misleading 0%.
+func TestRenderTaskLine_SizelessPct(t *testing.T) {
+	line := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: -1, BytesDone: 100}, false, -1, 0, 8, BarWidth, layoutFull)
+	if !strings.Contains(line, "?") {
+		t.Fatalf("sizeless line must show the unknown percent: %q", line)
+	}
+	if strings.Contains(line, "0%") {
+		t.Fatalf("sizeless line must not claim 0%%: %q", line)
+	}
+}
+
+// TestRenderTaskLine_PctOnly pins the super-narrow floor: below 12 columns the
+// line is the percent alone, right-aligned into the available width.
+func TestRenderTaskLine_PctOnly(t *testing.T) {
+	v := download.ProgressView{Filename: "this-name-cannot-fit", State: download.StateActive, TotalSize: 100, BytesDone: 50}
+	line := renderTaskLine(v, false, -1, 0, 9, 0, layoutPct)
+	if d := displayWidth(line); d != 9 {
+		t.Fatalf("pct-only line must fill the 9-cell slot, got %d: %q", d, line)
+	}
+	if !strings.Contains(line, "50%") {
+		t.Fatalf("pct-only line must show the percent: %q", line)
+	}
+	if strings.Contains(line, "this-name") {
+		t.Fatalf("pct-only line must not show the name: %q", line)
+	}
+}
+
+// pctIdx returns the byte index of the trailing "%" in a task line.
+func pctIdx(line string) int {
+	i := strings.LastIndex(line, "%")
+	if i < 0 {
+		return -1
+	}
+	return i
+}
+
+// TestRenderSummary_DegradesTiny pins the summary floor on super-narrow
+// terminals: it sheds bytes, then the left text, down to the percent alone.
+func TestRenderSummary_DegradesTiny(t *testing.T) {
+	for _, w := range []int{60, 30, 20, 10, 6, 4} {
+		barW, _, _, _ := layoutFor(w)
+		s := RenderSummaryWidth(1, 2, 44_000_000, 32*time.Second, 0, 750<<20, 1<<30, false, w, barW, 0)
+		if d := displayWidth(s); d > w {
+			t.Fatalf("width %d: summary %d cells too wide: %q", w, d, s)
+		}
+		if !strings.Contains(s, "%") {
+			t.Fatalf("width %d: summary must keep the percent: %q", w, s)
+		}
 	}
 }
 
@@ -423,8 +513,13 @@ func TestAggregate_CountsUniqueIDs(t *testing.T) {
 func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 	width := 20
 	seen := map[string]bool{}
+	// The bounce position is FRAME-driven (indeterminateTick per render), the
+	// pacman face is TIME-driven (faceTick = wall-clock seconds). These are two
+	// independent axes; this test drives the bounce by frame and the face by
+	// simulated wall-clock seconds that advance in lock-step with frames only
+	// at the nominal 100ms cadence (frame/pacFaceInterval).
 	posAt := func(frame int) string {
-		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), frame, "")
+		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), int64(frame/pacFaceInterval), "")
 	}
 	// Collect a handful of distinct frames; the bounce position must change.
 	for i := range 8 {
@@ -448,9 +543,11 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 		t.Fatalf("bounce must reverse direction at the turn: %q == %q", posAt(width-1), posAt(width))
 	}
 	// The bounce is a triangle wave of period 2*(width-1); one period later the
-	// slot repeats. The face animation has its own period (2*pacFaceFrameDuration);
-	// the combined period is LCM(2*(width-1), 2*pacFaceFrameDuration).
-	combinedPeriod := lcm(2*(width-1), 2*pacFaceFrameDuration)
+	// slot repeats. The face animation has its own wall-clock period
+	// (2*pacFaceInterval seconds); at the nominal 100ms cadence that is
+	// 20*pacFaceInterval frames, so the combined frame period is
+	// LCM(2*(width-1), 20*pacFaceInterval).
+	combinedPeriod := lcm(2*(width-1), 20*pacFaceInterval)
 	if got, want := posAt(combinedPeriod), posAt(0); got != want {
 		t.Fatalf("bounce should be periodic with combined period %d: got %q want %q", combinedPeriod, got, want)
 	}
@@ -478,24 +575,34 @@ func gcd(a, b int) int {
 }
 
 // TestBarIndeterminate_FaceAnimation tests that the pacman face animates
-// between 'c' (lowercase) and 'C' (uppercase) every pacFaceFrameDuration frames
-// (~1 second at 100ms/frame).
+// between 'c' (lowercase) and 'C' (uppercase) every pacFaceInterval wall-clock
+// seconds — INDEPENDENT of the render frame count, so a burst of frames (a
+// resize storm, an event flush) can't make the face flicker faster.
 func TestBarIndeterminate_FaceAnimation(t *testing.T) {
 	width := 30
-	// Frame 0 → face should be 'c' (cycle 0)
+	// faceTick 0 → cycle 0 → 'c'.
 	bar0 := BarIndeterminate(0, -1, width, -1, 0, "")
 	if !strings.Contains(bar0, "c") {
-		t.Fatalf("frame 0 should contain lowercase 'c', got %q", bar0)
+		t.Fatalf("faceTick 0 should contain lowercase 'c', got %q", bar0)
 	}
-	// Frame pacFaceFrameDuration → face should be 'C' (cycle 1)
-	bar10 := BarIndeterminate(0, -1, width, -1, pacFaceFrameDuration, "")
-	if !strings.Contains(bar10, "C") {
-		t.Fatalf("frame %d should contain uppercase 'C', got %q", pacFaceFrameDuration, bar10)
+	// faceTick pacFaceInterval → cycle 1 → 'C'.
+	bar1 := BarIndeterminate(0, -1, width, -1, pacFaceInterval, "")
+	if !strings.Contains(bar1, "C") {
+		t.Fatalf("faceTick %d should contain uppercase 'C', got %q", pacFaceInterval, bar1)
 	}
-	// Frame 2*pacFaceFrameDuration → face should be 'c' again (cycle 0)
-	bar20 := BarIndeterminate(0, -1, width, -1, 2*pacFaceFrameDuration, "")
-	if !strings.Contains(bar20, "c") {
-		t.Fatalf("frame %d should contain lowercase 'c' again, got %q", 2*pacFaceFrameDuration, bar20)
+	// faceTick 2*pacFaceInterval → cycle 0 → 'c' again.
+	bar2 := BarIndeterminate(0, -1, width, -1, 2*pacFaceInterval, "")
+	if !strings.Contains(bar2, "c") {
+		t.Fatalf("faceTick %d should contain lowercase 'c' again, got %q", 2*pacFaceInterval, bar2)
+	}
+	// Critical: MANY frames rendered within the same second must NOT flip the
+	// face — the animation is wall-clock-bound, not frame-bound. A stream of
+	// 1000 frames all within faceTick 0 still shows 'c'.
+	for f := 0; f < 1000; f++ {
+		b := BarIndeterminate(0, -1, width, -1, 0, "")
+		if strings.Contains(b, "C") {
+			t.Fatalf("frame burst within the same second must not flip the face (got %q at frame %d)", b, f)
+		}
 	}
 }
 

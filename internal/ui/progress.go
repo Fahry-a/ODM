@@ -120,6 +120,11 @@ type Renderer struct {
 	// frame just delays the bounce, never corrupts state.
 	indeterminateTick int
 
+	// startedAt is when RunLoop began, so the summary can show an elapsed
+	// counter ("+HH:MM:SS"). Zero when Frame is driven directly (tests,
+	// non-TTY probes) — the elapsed segment is omitted then.
+	startedAt time.Time
+
 	// Wake is a notification channel the RunLoop drains to re-render
 	// immediately. main.go pings it on SIGWINCH so a terminal resize lands on
 	// the next frame instead of waiting out the 100ms tick. Buffer 1 and
@@ -133,9 +138,6 @@ type Renderer struct {
 	// integer threshold) so a reader of the log still sees milestones.
 	nonTTYInterval  time.Duration
 	lastNonTTYFlush time.Time
-	// lastLoggedPct is the aggregate percentage we last printed, so the
-	// "crossed an integer threshold" rule only fires on real progress.
-	lastLoggedPct int
 	// lastLoggedDoneKey is a cheap fingerprint of (count completed, sum done)
 	// so a state change with no byte progress doesn't re-emit a near-identical
 	// line every interval.
@@ -347,6 +349,16 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	lines := make([]string, 0, len(view)+1)
 	hidden := 0
 	pos := bouncePosition(r.indeterminateTick, barW)
+	// faceTick: wall-clock seconds for the pacman face animation, shared by the
+	// per-file bars and the aggregate summary bar so they pulse in step. Being
+	// time-driven (not frame-counter-driven) means a burst of frames — a
+	// SIGWINCH resize storm, an event flush — can't make the face flicker
+	// gede-kecil rapidly; it toggles at most once per pacFaceInterval second.
+	faceTick := nowFn().Unix()
+	elapsed := time.Duration(0)
+	if !r.startedAt.IsZero() {
+		elapsed = nowFn().Sub(r.startedAt)
+	}
 	// Row budget: keep the task list + summary (+ the "N more…" line when
 	// tasks are cut off) inside the terminal height so the cursor-up count
 	// always matches physical rows. A batch taller than the screen used to
@@ -370,13 +382,13 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 			hidden++
 			continue
 		}
-		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), r.indeterminateTick, nameWidth, barW, layout)
+		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), faceTick, nameWidth, barW, layout)
 		lines = append(lines, truncateToWidth(line, width))
 	}
 	// Only show summary when there are tasks — avoids the misleading
 	// "Total: 0/0" before any snapshots arrive.
 	if st.total > 0 {
-		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor, width, barW), width))
+		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, elapsed, st.bytesDone, st.totalSize, r.useColor, width, barW, faceTick), width))
 	}
 	// When tasks were cut off the visible list, say so instead of leaving the
 	// user wondering where the rest went. ANSI-free so the width math holds.
@@ -406,36 +418,40 @@ func sizelessPos(v download.ProgressView, pos int) int {
 
 // layoutFor picks the per-file line layout for a terminal width (display
 // cells). The bar shrinks first (existing behaviour), then whole columns
-// drop — speed/ETA, then size/conn — down to an absolute floor of just the
-// name and the percent. Every tier still renders a single non-wrapping row;
-// the previous code kept all five fixed columns even at 40 columns, where the
-// name got squeezed to its 10-cell minimum and the pct risked being truncated
-// off the edge. minW is the narrowest the line can be for the tier; it's the
-// math the tier selection is built on, and ≤ termWidth always.
+// drop — speed/ETA, then size/conn — down to a name+pct floor and finally a
+// pct-only line, so even a 10-column terminal gets a usable (non-wrapping)
+// row. Every tier still renders a single row; the previous code kept all five
+// fixed columns even at 40 columns, where the name got squeezed to its
+// 6-cell minimum and the pct risked being truncated off the edge. minW is the
+// narrowest the line can be for the tier; it's the math the tier selection is
+// built on, and ≤ termWidth always.
 func layoutFor(termWidth int) (barW, nameW, minW int, layout lineLayout) {
 	switch {
 	case termWidth >= 96:
 		barW = BarWidth
 		nameW = termWidth - infoBlockWidthFor(barW) - 1
-		minW = infoFixedWidth + barW + 1 // " name  <info block>"
+		minW = colGlyph + infoFixedWidth + barW + 1
 		layout = layoutFull
 	case termWidth >= 66:
 		barW = max(minBarWidth, BarWidth-10)
-		nameW = 8
-		minW = infoFixedWidth - (colSpeed + colETA + 4) + barW + 2 // no speed/ETA columns
+		nameW = termWidth - (colGlyph + 2 + colSize + 2 + colConns + 1 + barW + 1 + 2 + colPct) - 1
+		minW = colGlyph + (2 + colSize + 2 + colConns + 1 + 1 + 2 + colPct) + barW + 1
 		layout = layoutNoSpeedETA
-	case termWidth >= 45:
+	case termWidth >= 36:
 		barW = minBarWidth
-		nameW = 6
-		minW = infoFixedWidth - (colSpeed + colETA + colSize + 4) + 2 + barW + 2 // name + bar + pct
+		nameW = termWidth - (colGlyph + 2 + colConns + 1 + barW + 1 + 2 + colPct) - 1
+		minW = colGlyph + (2 + colConns + 1 + 1 + 2 + colPct) + barW + 1
 		layout = layoutNameBarPct
-	default: // <45: barless; name + pct only
+	case termWidth >= 12:
 		barW = 0
-		nameW = max(termWidth-6, 6)
-		minW = 4
+		nameW = termWidth - (colGlyph + 2 + colPct) - 1
 		layout = layoutNamePct
+	default: // <12: the percent alone, right-aligned — the super-narrow floor
+		barW = 0
+		nameW = max(termWidth-1, 1) // the pct is fitted into this many cells
+		layout = layoutPct
 	}
-	if nameW < 4 {
+	if nameW < 4 && layout != layoutPct {
 		nameW = 4
 	}
 	return
@@ -492,11 +508,14 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 
 	r.lastNonTTYFlush = now
 	r.lastLoggedDoneKey = key
-	if st.total > 0 {
-		r.lastLoggedPct = min(int(float64(st.completed)/float64(st.total)*100), 100)
-	}
 
-	summary := RenderSummary(st.completed, st.total, st.speed, st.maxETA, st.bytesDone, st.totalSize, r.useColor)
+	// Elapsed counter for the summary (RunLoop only; 0 when Frame is driven
+	// directly).
+	elapsed := time.Duration(0)
+	if !r.startedAt.IsZero() {
+		elapsed = nowFn().Sub(r.startedAt)
+	}
+	summary := RenderSummary(st.completed, st.total, st.speed, st.maxETA, elapsed, st.bytesDone, st.totalSize, r.useColor)
 	var b strings.Builder
 	if full {
 		b.WriteString("---\n")
@@ -504,7 +523,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 			if !isActive(v) {
 				continue
 			}
-			b.WriteString(renderTaskLine(v, r.useColor, -1, r.indeterminateTick, 40, BarWidth, layoutFull))
+			b.WriteString(renderTaskLine(v, r.useColor, -1, -1, 40, BarWidth, layoutFull))
 			b.WriteByte('\n')
 		}
 		b.WriteString(summary)
@@ -520,18 +539,32 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 // interval is the redraw cadence (~100ms; PRD §11.1). On ctx cancel the loop
 // emits one final frame from whatever was last seen so the terminal lands on
 // the completed bars rather than a halfway snapshot.
+//
+// RunLoop synchronises its exit through done: when it returns (either from ctx
+// cancellation or from a drained snapshot stream), done is closed. The caller
+// MUST wait on done before driving any further Frame() calls — otherwise two
+// goroutines (the loop's final frame and the caller's post-run Frame) race on
+// the same stdout and interleave their cursor-up/clear sequences, producing
+// the doubled/truncated "chaos" seen on ^C.
 func (r *Renderer) RunLoop(ctx context.Context, interval time.Duration,
 	snapshots <-chan []download.ProgressView, qSnapshots <-chan []download.ProgressView,
+	done chan<- struct{},
 ) {
+	r.startedAt = nowFn()
 	r.Begin()
 	defer r.End()
+	defer close(done) // after End: main waits until the cursor is restored + trailing newline flushed
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			// Final frame from cache: empty live+queued re-emits retained state.
-			r.Frame(nil, nil)
+			// Do NOT render a final frame here: the caller (main) owns the one
+			// final frame, issued AFTER this loop has fully exited (done is
+			// closed only after End() restores the cursor). Rendering here too
+			// would give two writers of the final frame and the doubled,
+			// interleaved lines seen on ^C. The caller's Frame(nil,nil) renders
+			// the retained cache as the single final screen.
 			return
 		case s := <-snapshots:
 			r.cur.live = s

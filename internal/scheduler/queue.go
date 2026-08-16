@@ -9,7 +9,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"odm/internal/download"
 )
@@ -44,6 +43,13 @@ type Scheduler struct {
 	// on wg itself — not a separate WaitGroup — so the wg.Wait() observer in
 	// Run stays parked until releaseIdle drops it on ctx cancellation.
 	isIdle bool
+
+	// windingDown is set on the ctx.Done() path before releaseIdle drops the
+	// idle hold. Every wg.Add must go through AddCounter, which refuses to add
+	// once this flag is set, so a concurrent RPC Enqueue can never Add after
+	// wg.Wait has returned (Add-after-Wait is undefined behavior). Guarded by
+	// mu.
+	windingDown bool
 
 	succeeded int32
 	failed    int32
@@ -141,13 +147,17 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 			atomic.AddInt32(&s.failed, 1)
 			continue
 		}
-		s.wg.Add(1)
+		if !s.AddCounter() {
+			continue // winding down; don't launch new work
+		}
 		// Use the Balancer's per-file allocation, not the TaskMaker's global default.
 		s.startOne(ctx, &scheduledTask{task: t, conns: initial[i].Connections})
 		admitted++
 	}
 
-	// Wait for all admitted (and later-queued) tasks.
+	// Wait for all admitted (and later-queued) tasks. The WaitGroup lives on a
+	// separate channel path — not a bare wg.Wait() — so the run loop can keep
+	// servicing s.compl while tasks wind down.
 	doneCh := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -157,27 +167,68 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 	for {
 		select {
 		case <-ctx.Done():
-			// Release the daemon idle hold (if any) so bg wg.Wait returns and
-			// Run's goroutine can exit; then cancel still-propagating work.
+			// Mark the scheduler winding down BEFORE releasing the idle hold so
+			// no concurrent RPC Add can race the wg.Wait() return with a
+			// wg.Add (undefined behavior once Wait has observed zero).
+			s.mu.Lock()
+			s.windingDown = true
+			s.mu.Unlock()
 			s.releaseIdle()
-			// Brief wait so running tasks have a chance to persist control
-			// files (with completed chunk offsets) before the process exits
-			// via os.Exit in main(). A full doneCh wait is avoided because
-			// queued tasks may have unbalanced wg.Add that prevents wg.Wait
-			// from ever returning.
-			select {
-			case <-doneCh:
-			case <-time.After(200 * time.Millisecond):
-			}
-			return int(s.succeeded), int(s.failed), ctx.Err()
+			// Fall through to the drain loop below: in-flight tasks are
+			// cancelled by the shared ctx and each posts to s.compl as it winds
+			// down. We must keep consuming those reports so handleComplete
+			// tallies every task (otherwise ^C reports "0 failed" even though
+			// every task errored), and so their goroutines don't leak.
 		case st := <-s.compl:
 			s.handleComplete(st)
 			s.admitNext(ctx)
 			s.emit()
+			continue
 		case <-doneCh:
+			// Everything (live + queued) finished without cancellation.
 			return int(s.succeeded), int(s.failed), nil
 		}
+
+		// ctx was cancelled. Drain completion reports until no task is left
+		// live, then return with the correct tally. doneCh is deliberately NOT
+		// selected here: it is closed the moment the WaitGroup empties (or the
+		// idle hold is released) and would otherwise starve the compl receive
+		// in a busy loop while in-flight tasks are still posting.
+		for s.activeTasks() > 0 {
+			st := <-s.compl
+			s.handleComplete(st)
+			s.emit()
+		}
+		return int(s.succeeded), int(s.failed), ctx.Err()
 	}
+}
+
+// activeTasks returns the count of tasks currently in the live map (for the
+// shutdown-race check in AddCounter).
+func (s *Scheduler) activeTasks() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.live)
+}
+
+// AddCounter increments the WaitGroup under the run-loop's knowledge of whether
+// shutdown is in progress. This is the root-cause fix for the Add-vs-Wait
+// shutdown race: Enqueue/admitNext used to call wg.Add directly from the RPC
+// goroutine while Run's background wg.Wait() was concurrently observing the
+// count — once the count hit zero and Wait returned, a racing Add was
+// undefined behavior per the Go docs. By funneling every Add through this
+// helper (which never adds once Run has started winding down), the shutdown
+// path is the only writer of the "winding down" flag, so a late Add can only
+// happen while Run still holds the guarantee that Wait hasn't returned.
+func (s *Scheduler) AddCounter() bool {
+	s.mu.Lock()
+	if s.windingDown {
+		s.mu.Unlock()
+		return false
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	return true
 }
 
 // releaseIdle drops the permanent WaitGroup hold installed by
@@ -207,7 +258,10 @@ func (s *Scheduler) startOne(ctx context.Context, st *scheduledTask) {
 }
 
 // launch runs the task goroutine (the WaitGroup was already counted by the
-// caller) and reports its completion back on s.compl.
+// caller) and reports its completion back on s.compl. Run drains s.compl for
+// as long as the scheduler is alive (it only exits once doneCh closes, which
+// happens after every wg.Done), so the blocking send can never deadlock: the
+// report is always consumed before the run loop returns.
 func (s *Scheduler) launch(ctx context.Context, st *scheduledTask) {
 	go func() {
 		defer s.wg.Done()
@@ -253,7 +307,12 @@ func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) {
 	s.mu.Lock()
 	s.queued = append(s.queued, st)
 	s.mu.Unlock()
-	s.wg.Add(1)
+	// Count under the winding-down guard: a task admitted after shutdown
+	// started would otherwise Add to a WaitGroup whose Wait may have already
+	// returned. Refused adds are dropped — the daemon is exiting anyway.
+	if !s.AddCounter() {
+		return
+	}
 	s.admitNext(ctx)
 }
 
@@ -311,31 +370,25 @@ func (s *Scheduler) admitNext(ctx context.Context) {
 	s.live[nxt.task.ID()] = nxt
 	s.mu.Unlock()
 
-	s.wg.Add(1)
+	if !s.AddCounter() {
+		// Winding down — the task was already moved to live; remove it again
+		// so the bookkeeping stays consistent (the daemon is exiting anyway).
+		s.mu.Lock()
+		delete(s.live, nxt.task.ID())
+		s.mu.Unlock()
+		return
+	}
 	s.launch(ctx, nxt)
 }
 
-// emit forwards a snapshot to the progress callback (nil-safe).
+// emit forwards a snapshot to the progress callback (nil-safe). Reuses
+// LiveViews/QueuedViews, which already snapshot + sort live by TaskID for
+// deterministic ordering.
 func (s *Scheduler) emit() {
 	if s.prog == nil {
 		return
 	}
-	s.mu.Lock()
-	live := make([]download.ProgressView, 0, len(s.live))
-	for _, st := range s.live {
-		live = append(live, st.task.Snapshot())
-	}
-	queued := make([]download.ProgressView, 0, len(s.queued))
-	for _, st := range s.queued {
-		queued = append(queued, st.task.Snapshot())
-	}
-	s.mu.Unlock()
-	// Sort live by TaskID for deterministic ordering (Go map iteration is
-	// random, so without this the task lines shuffle between frames).
-	sort.Slice(live, func(i, j int) bool {
-		return live[i].ID < live[j].ID
-	})
-	s.prog(live, queued)
+	s.prog(s.LiveViews(), s.QueuedViews())
 }
 
 // SucceededCount/FailedCount expose live tallies (used by getGlobalStat RPC).

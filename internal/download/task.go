@@ -122,9 +122,21 @@ type Task struct {
 	// both profile: engines[0] covers [0, splitAt) on the h1 client,
 	// engines[1] covers [splitAt, end) on the h2 client. nil for other
 	// profiles. regionConns holds the worker count per engine.
+	//
+	// layoutMu guards engines/splitAt/regionConns/single against the RPC
+	// daemon: the task is admitted the moment NewTask returns, so a
+	// changeOption → AdjustConns can read currentEngine while Start is still
+	// building the layout. All writes happen in Start (single goroutine);
+	// currentEngine reads under the same lock.
+	layoutMu    sync.Mutex
 	engines     []*Engine
 	regionConns []int
 	splitAt     int64
+
+	// single is the hoisted engine for single-profile tasks (odm/aria2c),
+	// cached on first currentEngine() call so workers don't allocate a fresh
+	// struct per spawn.
+	single *Engine
 
 	// h2Client is the HTTP/2 transport client (region2 of both; the same as
 	// t.client for aria2c). Set by the Manager via SetH2Client.
@@ -137,7 +149,6 @@ type Task struct {
 	state     atomic.Int32
 	errors    atomic.Int32
 	retries   atomic.Int32
-	startAt   time.Time
 
 	// periodic control-file checkpoint
 	chunksSincePersist int64 // guarded by mu (see checkpoint)
@@ -382,7 +393,6 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		t.emitFinal(progressSink)
 		return fmt.Errorf("task cancelled before start")
 	}
-	t.startAt = time.Now()
 	t.setState(StateActive)
 	t.baseCtx = ctx
 	t.sink = progressSink
@@ -409,12 +419,22 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	// TaskMaker (it has the h2 probe pass); here we only handle the RPC
 	// daemon path where Start probes lazily.
 	if t.opts.Profile == "smart" {
+		// The scheduler applies the Balancer's per-file allocation via
+		// SetConns BEFORE Start runs, so t.conns holds this file's real budget
+		// (1 in batch mode) — using the raw Start `conns` (the global default
+		// from the TaskMaker) would make smart choose "both" for a batch file
+		// that actually gets 1 connection. Fall back to the parameter when
+		// nothing was set (Manager.Run's direct path).
+		perFile := int(t.conns.Load())
+		if perFile < 1 {
+			perFile = conns
+		}
 		profile, reason := ChooseProfile(ServerCapabilities{
 			TotalSize:     pr.TotalSize,
 			SupportsRange: pr.SupportsRange,
 			SingleStream:  pr.SingleStream,
 			HTTP2Ready:    t.h2Client != nil && t.h2Client.SupportsHTTP2(ctx, t.url),
-			Conns:         conns,
+			Conns:         perFile,
 		})
 		t.logf("info", "smart profile: chose %q (%s)", profile, reason)
 		t.opts.Profile = profile
@@ -455,7 +475,9 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	effective := t.opts.ChunkSize
 	isAria := t.opts.Profile == "aria2c"
 	isBoth := t.opts.Profile == "both"
+	t.layoutMu.Lock()
 	t.engines = nil
+	t.single = nil
 	t.splitAt = 0
 	if isAria && qs > 0 {
 		n, seg := AriaSplit(qs, int64(t.opts.Split), t.opts.MinSplitSize)
@@ -474,6 +496,15 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		// region2 [mid, end) = aria2c static split (h2 client). Connection
 		// budget halves; a single connection or tiny file degrades to the odm
 		// engine (see below).
+		if conns < 2 {
+			// One connection can't split across two regions without doubling
+			// the TCP budget (max(1,1)+max(1,0) would spawn 2 workers on a
+			// 1-connection budget). Degrade to the single-region odm engine.
+			isBoth = false
+			t.logf("info", "both profile: %d connection(s), using single-region odm engine", conns)
+		}
+	}
+	if isBoth && qs > 0 {
 		conns1 := max(1, conns/2)
 		conns2 := max(1, conns-conns1)
 		t.regionConns = []int{conns1, conns2}
@@ -504,6 +535,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		q = NewChunkQueue(qs, effective)
 	}
 	t.queue = q // set early: resume restore/verification below reads the queue
+	t.layoutMu.Unlock() // layout settled; readers (currentEngine) may proceed
 
 	alreadyDone := int64(0)
 	var controlFile *storage.ControlFile
@@ -699,11 +731,19 @@ func (t *Task) profileUsesH2() bool {
 
 // currentEngine returns the engine a single-profile task's workers use (the
 // shared one, or the first region for both — both paths pick explicitly).
+// Reads under layoutMu so a daemon-side AdjustConns never races Start's layout
+// writes; the single-profile engine is hoisted after first build so the worker
+// spawn loop doesn't allocate a fresh struct per connection.
 func (t *Task) currentEngine() *Engine {
+	t.layoutMu.Lock()
+	defer t.layoutMu.Unlock()
 	if t.engines != nil {
 		return t.engines[0]
 	}
-	return &Engine{q: t.queue, client: t.client, base: 0}
+	if t.single == nil {
+		t.single = &Engine{q: t.queue, client: t.client, base: 0}
+	}
+	return t.single
 }
 
 // formatSegSize renders a segment byte count compactly for log lines
@@ -1260,7 +1300,15 @@ func (t *Task) verifyResumedChunks(ctx context.Context) error {
 		}
 		want := int(end - s.Start + 1)
 		chkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		resp, err := t.client.GetRange(chkCtx, pr.FinalURL, s.Start, end)
+		// Sample through the client that actually fetched the span: region2
+		// (both profile) was downloaded over the h2 client, so comparing it
+		// via the h1 client would flag a valid resume as a mismatch on servers
+		// that serve ranges differently per protocol.
+		cli := t.client
+		if t.engines != nil && s.Start >= t.splitAt {
+			cli = t.engines[1].Client()
+		}
+		resp, err := cli.GetRange(chkCtx, pr.FinalURL, s.Start, end)
 		if err != nil {
 			cancel()
 			return fmt.Errorf("resume check at %d: %w", s.Start, err)
@@ -1305,20 +1353,38 @@ func (t *Task) clearChunkHashes() {
 // restoreChunkHashes seeds the in-memory hash map from a control file being
 // resumed, so hashes of previously-completed chunks survive into subsequent
 // checkpoints instead of being dropped (which would downgrade the next resume
-// to the legacy server-compare fallback). Only hashes for offsets the queue
-// actually accepted as completed are carried over. Caller holds no lock.
+// to the legacy server-compare fallback). Only hashes for offsets the queues
+// actually accepted as completed are carried over.
+//
+// The control file keys hashes by ABSOLUTE offset (persistControl translates
+// region2's base), so the both profile must translate each queue's relative
+// completed offsets to absolute before the lookup — otherwise region2's hashes
+// are silently dropped and the next checkpoint persists them gone.
 func (t *Task) restoreChunkHashes(cf *storage.ControlFile) {
 	if len(cf.ChunkHashes) == 0 || t.queue == nil {
 		return
 	}
-	done := t.queue.CompletedOffsets()
 	t.mu.Lock()
-	for _, off := range done {
+	defer t.mu.Unlock()
+	if t.engines == nil {
+		for _, off := range t.queue.CompletedOffsets() {
+			if sum, ok := cf.ChunkHashes[off]; ok {
+				t.chunkHashes[off] = sum
+			}
+		}
+		return
+	}
+	for _, off := range t.engines[0].CompletedOffsets() {
 		if sum, ok := cf.ChunkHashes[off]; ok {
 			t.chunkHashes[off] = sum
 		}
 	}
-	t.mu.Unlock()
+	for _, off := range t.engines[1].CompletedOffsets() {
+		abs := off + t.engines[1].base
+		if sum, ok := cf.ChunkHashes[abs]; ok {
+			t.chunkHashes[abs] = sum
+		}
+	}
 }
 
 // snapshotChunkHashes returns the recorded hashes for the given completed

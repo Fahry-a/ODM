@@ -161,12 +161,28 @@ func run(argv []string) error {
 				probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
 				pr, perr := probeClient.Probe(probeCtx, u)
 				probeCancel()
-				probeCh <- probeResult{url: u, pr: pr, err: perr}
+				// Honour ctx cancellation: a ^C during the probe pass must not
+				// leave this goroutine blocked on the send (nothing consumes
+				// probeCh once run returns). probeCtx's parent is ctx, so the
+				// in-flight Probe aborts promptly too.
+				select {
+				case probeCh <- probeResult{url: u, pr: pr, err: perr}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}(w)
 	}
 	for range o.URLs {
-		res := <-probeCh
+		// The consumer must mirror the workers' ctx awareness: if the probe
+		// pass is cancelled mid-way, fewer than len(o.URLs) results arrive and
+		// a plain receive would block forever.
+		var res probeResult
+		select {
+		case res = <-probeCh:
+		case <-ctx.Done():
+			return errExit{code: download.ExitCancelled, msg: "cancelled during probe"}
+		}
 		if res.err != nil {
 			logger.Warnf("probe failed for %s: %v", res.url, res.err)
 			files = append(files, scheduler.FileInput{URL: res.url, SupportsRange: false})
@@ -233,7 +249,13 @@ func run(argv []string) error {
 	sch := scheduler.NewScheduler(plan, maker, progCB)
 	uiCtx, uiCancel := context.WithCancel(context.Background())
 	defer uiCancel()
-	go r.RunLoop(uiCtx, 100*time.Millisecond, snap, qSnap)
+	// uiDone guards the final frame: RunLoop renders one last Frame on cancel,
+	// so main must wait for it to exit BEFORE issuing its own Frame(nil,nil) —
+	// otherwise two goroutines write the same stdout concurrently and the
+	// cursor-up/clear sequences interleave into the doubled/truncated lines
+	// seen on ^C.
+	uiDone := make(chan struct{})
+	go r.RunLoop(uiCtx, 100*time.Millisecond, snap, qSnap, uiDone)
 
 	// Wake the redraw loop on SIGWINCH so a terminal resize is reflected on
 	// the very next frame instead of waiting out the 100ms tick (whose
@@ -252,7 +274,13 @@ func run(argv []string) error {
 
 	succeeded, failed, runErr := sch.Run(ctx)
 	uiCancel()
-	// Final frame so the terminal lands on the completed bars.
+	// RunLoop does NOT render a final frame on cancel (see its ctx.Done case);
+	// it only restores the cursor and closes uiDone. Waiting guarantees the
+	// loop is fully gone before THIS goroutine issues the single final frame —
+	// exactly one writer of the post-run screen, so the task lines can't
+	// double or interleave.
+	<-uiDone
+	// Final frame so the terminal lands on the completed/error bars.
 	r.Frame(nil, nil)
 
 	// §13 exit-code mapping. A user-initiated ^C / SIGTERM is "cancelled" (4),
@@ -402,15 +430,29 @@ func printSummary(succeeded, failed, total int) {
 
 // signalCtx builds a context cancelled on SIGINT/SIGTERM so ^C aborts cleanly
 // and surfaces as exit code 4 (cancelled) rather than a panic.
+//
+// The returned cancel also stops the signal handler, so a call to cancel()
+// (the deferred `defer cancel()` in run/runRPC, or the signal path itself)
+// releases the goroutine: it exits on the first signal and the handler is
+// deregistered, leaving no goroutine parked on the signal channel after the
+// program has moved on.
 func signalCtx() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-sig
-		cancel()
+		select {
+		case <-sig:
+			cancel()
+		case <-ctx.Done():
+			// Program moved on (deferred cancel) — nothing to do; the handler
+			// is stopped below.
+		}
 	}()
-	return ctx, cancel
+	return ctx, func() {
+		signal.Stop(sig)
+		cancel()
+	}
 }
 
 // runRPC starts the JSON-RPC + WebSocket server over an empty scheduler daemon
@@ -420,6 +462,13 @@ func runRPC(o *config.Options, engineLog download.LogFn, logger *logging.Logger)
 	if err != nil {
 		return err
 	}
+	// The -o single-file override only makes sense for the one-shot CLI path
+	// (the CLI itself rejects it for multiple URLs). In daemon mode every
+	// addUri task would otherwise write to the SAME OutFile — overlapping
+	// concurrent WriteAt calls corrupt the destination silently (see
+	// storage.File.WriteAt's disjoint-range contract). Clear it so each task
+	// derives its own name from its URL.
+	exec.OutFile = ""
 	mgr, err := download.NewManager(exec, engineLog)
 	if err != nil {
 		return err

@@ -85,10 +85,14 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 		}
 		fmt.Fprintln(out)
 		for i, r := range rows {
-			fmt.Fprintf(out, "    %s[%d]%s %-26s %s%s%s\n",
+			sizeStr := FormatFileSize(r.Size)
+			// Right-align the sizes so the column reads like a table, and pad
+			// the name to a fixed width so the sizes line up regardless of how
+			// long the filename is.
+			fmt.Fprintf(out, "    %s[%d]%s %s %s%s%s\n",
 				colorGreen, i+1, colorReset,
-				r.Name,
-				colorCyan, FormatFileSize(r.Size), colorReset)
+				padToCells(truncateNameTo(r.Name, 40), 40),
+				colorCyan, strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr, colorReset)
 		}
 		fmt.Fprintln(out)
 		return ConfirmAsk(in, out, fmt.Sprintf("%sContinue?%s [Y/n] ", colorYellow, colorReset))
@@ -101,7 +105,11 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 	}
 	fmt.Fprintln(out)
 	for i, r := range rows {
-		fmt.Fprintf(out, "  [%d] %-26s %s\n", i+1, r.Name, FormatFileSize(r.Size))
+		sizeStr := FormatFileSize(r.Size)
+		fmt.Fprintf(out, "  [%d] %s %s\n",
+			i+1,
+			padToCells(truncateNameTo(r.Name, 40), 40),
+			strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr)
 	}
 	fmt.Fprintln(out)
 	return ConfirmAsk(in, out, "Continue? [Y/n] ")
