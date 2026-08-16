@@ -145,12 +145,26 @@ jobs:
         if: steps.version.outputs.skip != 'true'
         run: |
           set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          # PKGBUILD's source= references LOCAL assets as odm-bin-<pkgver>.<ext>.
+          # makepkg --verifysource needs them present in the build dir (they are
+          # not URLs), so stage them into packaging/ with those exact names
+          # before verifying. They are transient — publish happens from
+          # assets/ via aur-sync-action, and the "Clean up" step removes them.
+          cp assets/odm.1 "packaging/odm-bin-${VERSION}.1"
+          cp assets/odm.conf.example "packaging/odm-bin-${VERSION}.conf.example"
+          cp assets/odm.service "packaging/odm-bin-${VERSION}.service"
+          cp assets/LICENSE "packaging/odm-bin-${VERSION}.LICENSE"
           docker run --rm -v "$PWD/packaging:/pkg" -w /pkg archlinux:base-devel bash -c "
             useradd -m builder
             chown -R builder:builder /pkg
             su builder -c 'makepkg --verifysource --nodeps'
             su builder -c 'makepkg --printsrcinfo' > .SRCINFO
           "
+          rm -f "packaging/odm-bin-${VERSION}.1" \
+                "packaging/odm-bin-${VERSION}.conf.example" \
+                "packaging/odm-bin-${VERSION}.service" \
+                "packaging/odm-bin-${VERSION}.LICENSE"
 
       - name: Validate
         if: steps.version.outputs.skip != 'true'
