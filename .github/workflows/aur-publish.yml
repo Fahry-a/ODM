@@ -161,7 +161,10 @@ jobs:
             su builder -c 'makepkg --verifysource --nodeps'
             su builder -c 'makepkg --printsrcinfo' > .SRCINFO
           "
-          rm -f "packaging/odm-bin-${VERSION}.1" \
+          # The archlinux container chowns packaging/ to its 'builder' user,
+          # so the runner (non-root) can't remove the staged files — use sudo
+          # like the Clean up step does.
+          sudo rm -f "packaging/odm-bin-${VERSION}.1" \
                 "packaging/odm-bin-${VERSION}.conf.example" \
                 "packaging/odm-bin-${VERSION}.service" \
                 "packaging/odm-bin-${VERSION}.LICENSE"
