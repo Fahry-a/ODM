@@ -117,6 +117,10 @@ jobs:
 
       - name: Get binary checksum and update PKGBUILD
         if: steps.version.outputs.skip != 'true' && github.event_name == 'workflow_dispatch'
+        # update-aur-checksums.py opens 'PKGBUILD' relative to the cwd, so run
+        # from packaging/ where the file lives (the sed above edits the same
+        # path). scripts/ is at the repo root, hence the ../ prefix.
+        working-directory: packaging
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
@@ -135,7 +139,7 @@ jobs:
           fi
 
           export I686_SUM AMD64_SUM ARMV7H_SUM ARM64_SUM
-          python3 scripts/update-aur-checksums.py
+          python3 ../scripts/update-aur-checksums.py
 
       - name: Verify checksums and regenerate .SRCINFO
         if: steps.version.outputs.skip != 'true'
