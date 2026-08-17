@@ -6,7 +6,9 @@ When BUNDLED=1 (default), only the binary checksum is real; local files
 assets. When BUNDLED=0, all 5 checksums per arch are computed from env vars
 (legacy mode for remote-source builds).
 """
-import os, re, sys
+import os
+import re
+import sys
 
 # Arch name (as used in the PKGBUILD) -> regex matching its sha256sums block.
 PATTERNS = {
@@ -27,8 +29,8 @@ ENV_VARS = {
 def main():
     bundled = os.environ.get('BUNDLED', '1') != '0'
 
-    sums = {}
-    missing = []
+    sums: dict[str, str] = {}
+    missing: list[str] = []
     for arch, var in ENV_VARS.items():
         value = os.environ.get(var, '')
         if not value:

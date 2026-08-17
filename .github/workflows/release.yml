@@ -24,8 +24,13 @@ jobs:
   release:
     name: Build & Release
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
+      # fetch-depth: 0 so `git log` between tags works for the per-release
+      # contributors list (and the changelog extraction below).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -36,47 +41,12 @@ jobs:
       - name: Extract tag version
         id: tag
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/v}"
-          fi
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Tag version: $TAG"
-
-      - name: Extract version from code
-        id: code
-        run: |
-          VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
-          PKGBUILD_VER=$(grep -oP 'pkgver=\K.*' packaging/PKGBUILD)
-          echo "version_go=$VERSION_GO" >> "$GITHUB_OUTPUT"
-          echo "pkgbuild=$PKGBUILD_VER" >> "$GITHUB_OUTPUT"
-          echo "Code versions: version.go=$VERSION_GO pkgbuild=$PKGBUILD_VER"
+          VERSION=$(bash .github/scripts/extract-version.sh "${{ github.event_name }}" "${{ inputs.tag }}")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag version: $VERSION"
 
       - name: Verify versions match
-        run: |
-          TAG="${{ steps.tag.outputs.version }}"
-          VERSION_GO="${{ steps.code.outputs.version_go }}"
-          PKGBUILD="${{ steps.code.outputs.pkgbuild }}"
-
-          echo "Comparing: tag=$TAG vs version.go=$VERSION_GO vs pkgbuild=$PKGBUILD"
-
-          FAIL=0
-          if [ "$TAG" != "$VERSION_GO" ]; then
-            echo "::error::Tag ($TAG) does not match internal/version/version.go ($VERSION_GO)"
-            FAIL=1
-          fi
-          if [ "$TAG" != "$PKGBUILD" ]; then
-            echo "::error::Tag ($TAG) does not match packaging/PKGBUILD ($PKGBUILD)"
-            FAIL=1
-          fi
-
-          if [ "$FAIL" -eq 1 ]; then
-            echo "::error::Version mismatch detected. Bump both versions before tagging."
-            exit 1
-          fi
-
-          echo "All versions match: $TAG"
+        run: bash .github/scripts/verify-version.sh "${{ steps.tag.outputs.version }}"
 
       - name: Delete existing release (overwrite mode)
         if: github.event_name == 'workflow_dispatch' && inputs.overwrite
@@ -89,57 +59,18 @@ jobs:
 
       - name: Extract changelog
         id: changelog
-        run: |
-          VERSION="${{ steps.tag.outputs.version }}"
+        run: bash .github/scripts/extract-changelog.sh "${{ steps.tag.outputs.version }}"
 
-          NOTES=$(awk -v ver="$VERSION" '
-            /^## \[/ {
-              if (found) exit
-              gsub(/^## \[/, ""); gsub(/\].*/, "")
-              if ($0 == ver) found=1
-            }
-            found { print }
-          ' CHANGELOG.md)
-
-          if [ -z "$NOTES" ]; then
-            echo "::error::No changelog entry found for $VERSION in CHANGELOG.md"
-            echo "::error::Add a '## [$VERSION]' section before releasing (see AGENTS.md)."
-            exit 1
-          fi
-
-          echo "$NOTES" > /tmp/release-notes.md
-          echo "Release notes extracted:"
-          cat /tmp/release-notes.md
+      - name: Append contributors to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/build-contributors.sh "${{ steps.tag.outputs.version }}"
 
       - name: Cross-compile
-        run: |
-          VERSION="${{ steps.tag.outputs.version }}"
-          LDFLAGS="-s -w -buildid="
-          export CGO_ENABLED=0
-          export GOFLAGS="-trimpath -mod=readonly"
-          export GOTOOLCHAIN=local
-
-          TARGETS="linux/386 linux/amd64 linux/arm linux/arm64 darwin/amd64 darwin/arm64"
-
-          mkdir -p build
-
-          for TARGET in $TARGETS; do
-            GOOS="${TARGET%/*}"
-            GOARCH="${TARGET#*/}"
-            OUTPUT="build/odm_${VERSION}_${GOOS}_${GOARCH}"
-            echo "Building $OUTPUT ..."
-            GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/odm
-          done
-
-          echo "Build artifacts:"
-          ls -lh build/
+        run: bash .github/scripts/cross-compile.sh "${{ steps.tag.outputs.version }}"
 
       - name: Generate checksums
-        run: |
-          cd build
-          sha256sum odm_${{ steps.tag.outputs.version }}_* > checksums.txt
-          echo "Checksums:"
-          cat checksums.txt
+        run: bash .github/scripts/gen-checksums.sh "${{ steps.tag.outputs.version }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

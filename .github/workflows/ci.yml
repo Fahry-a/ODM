@@ -9,10 +9,17 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded CI run: pushing twice in a row shouldn't queue two
+# identical builds. PR runs keyed by PR ref, main runs by the commit.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -34,13 +41,8 @@ jobs:
       - name: Verify version consistency
         run: |
           VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
-          PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
-          if [ -z "$VERSION_GO" ] || [ "$VERSION_GO" != "$PKGBUILD_VER" ]; then
-            echo "::error::Version mismatch: version.go=$VERSION_GO pkgbuild=$PKGBUILD_VER"
-            echo "::error::The two version locations must stay in sync (see AGENTS.md)."
-            exit 1
-          fi
-          echo "Versions in sync: $VERSION_GO"
+          [ -n "$VERSION_GO" ] || { echo "::error::Could not extract version from version.go"; exit 1; }
+          bash .github/scripts/verify-version.sh "$VERSION_GO"
 
       - name: Lint
         uses: golangci/golangci-lint-action@v9

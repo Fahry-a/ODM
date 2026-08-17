@@ -36,6 +36,7 @@ concurrency:
 jobs:
   aur-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -45,143 +46,28 @@ jobs:
         id: version
         env:
           INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          MODE="republish"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            MODE="release"
-          fi
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-
-          PKGNAME=$(grep -oP '^pkgname=\K.*' packaging/PKGBUILD)
-
-          if [ "$MODE" = "release" ]; then
-            TAG="$INPUT_TAG"
-            if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
-              exit 1
-            fi
-            VERSION="${TAG#v}"
-          else
-            VERSION=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
-            if [ -z "$VERSION" ]; then
-              echo "::error::Could not read pkgver from packaging/PKGBUILD"
-              exit 1
-            fi
-            TAG="v$VERSION"
-
-            # Skip when this version was never released by the pipeline —
-            # a new version goes through auto-tag → release.yml instead.
-            if ! git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "No tag $TAG (new version) — release pipeline handles this; skipping"
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            # Compare against upstream AUR. Identical PKGBUILD = nothing to
-            # publish; this is the defensive loop guard (on top of GitHub's
-            # recursion guard for GITHUB_TOKEN commit-backs).
-            AUR_DIR="$(mktemp -d)"
-            if git clone -q --depth=1 "https://aur.archlinux.org/${PKGNAME}.git" "$AUR_DIR" 2>/dev/null; then
-              if cmp -s packaging/PKGBUILD "$AUR_DIR/PKGBUILD"; then
-                echo "Local PKGBUILD identical to upstream AUR — nothing to publish; skipping"
-                echo "skip=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              echo "up_pkgver=$(grep -oP '^pkgver=\K.*' "$AUR_DIR/PKGBUILD" || true)" >> "$GITHUB_OUTPUT"
-              echo "up_pkgrel=$(grep -oP '^pkgrel=\K.*' "$AUR_DIR/PKGBUILD" || true)" >> "$GITHUB_OUTPUT"
-            else
-              echo "Upstream AUR clone failed (never published?) — publishing as-is"
-              echo "up_pkgver=" >> "$GITHUB_OUTPUT"
-              echo "up_pkgrel=" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Mode=$MODE version=$VERSION tag=$TAG"
+        run: bash .github/scripts/aur/prepare.sh "${{ github.event_name }}" "$INPUT_TAG"
 
       - name: Bump pkgver + stage bundled assets
         if: steps.version.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          # Only pkgver is dry-run here; pkgrel is handled by the AUR action
-          # (pkgrel_mode: auto), and `version` makes it bundle + version the
-          # assets from the stable paths below.
-          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" packaging/PKGBUILD
-          mkdir -p assets
-          cp docs/odm.1 assets/odm.1
-          cp configs/odm.conf.example assets/odm.conf.example
-          cp packaging/odm.service assets/odm.service
-          cp LICENSE assets/LICENSE
+        run: bash .github/scripts/aur/bump-stage.sh "${{ steps.version.outputs.version }}"
 
       - name: Get binary checksum and update PKGBUILD
         if: steps.version.outputs.skip != 'true' && github.event_name == 'workflow_dispatch'
         # update-aur-checksums.py opens 'PKGBUILD' relative to the cwd, so run
         # from packaging/ where the file lives (the sed above edits the same
-        # path). scripts/ is at the repo root, hence the ../ prefix.
+        # path). Scripts live in .github/scripts/ at the repo root, hence the
+        # ../ prefix from packaging/.
         working-directory: packaging
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-
-          curl -fsSL -o /tmp/checksums.txt \
-            "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/checksums.txt"
-
-          I686_SUM=$(awk -v file="odm_${VERSION}_linux_386" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-          AMD64_SUM=$(awk -v file="odm_${VERSION}_linux_amd64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-          ARMV7H_SUM=$(awk -v file="odm_${VERSION}_linux_arm" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-          ARM64_SUM=$(awk -v file="odm_${VERSION}_linux_arm64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-
-          if [ -z "$I686_SUM" ] || [ -z "$AMD64_SUM" ] || [ -z "$ARMV7H_SUM" ] || [ -z "$ARM64_SUM" ]; then
-            echo "::error::Missing binary checksum in release artifacts"
-            exit 1
-          fi
-
-          export I686_SUM AMD64_SUM ARMV7H_SUM ARM64_SUM
-          python3 ../scripts/update-aur-checksums.py
+        run: bash ../.github/scripts/aur/update-checksums.sh "${{ github.repository }}" "${{ steps.version.outputs.version }}"
 
       - name: Verify checksums and regenerate .SRCINFO
         if: steps.version.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          # PKGBUILD's source= references LOCAL assets as odm-bin-<pkgver>.<ext>.
-          # makepkg --verifysource needs them present in the build dir (they are
-          # not URLs), so stage them into packaging/ with those exact names
-          # before verifying. They are transient — publish happens from
-          # assets/ via aur-sync-action, and the "Clean up" step removes them.
-          # PKGBUILD source= names these EXACTLY as aur-sync-action stages
-          # them: <pkgname><ext>-<version><ext>'s version is inserted before
-          # the LAST extension by version_suffix. `.1`→`odm-bin-1.4.0.1`,
-          # `.conf.example`→`odm-bin.conf-1.4.0.example`, `.service`→
-          # `odm-bin-1.4.0.service`, `.LICENSE`→`odm-bin-1.4.0.LICENSE`.
-          cp assets/odm.1 "packaging/odm-bin-${VERSION}.1"
-          cp assets/odm.conf.example "packaging/odm-bin.conf-${VERSION}.example"
-          cp assets/odm.service "packaging/odm-bin-${VERSION}.service"
-          cp assets/LICENSE "packaging/odm-bin-${VERSION}.LICENSE"
-          docker run --rm -v "$PWD/packaging:/pkg" -w /pkg archlinux:base-devel bash -c "
-            useradd -m builder
-            chown -R builder:builder /pkg
-            su builder -c 'makepkg --verifysource --nodeps'
-            su builder -c 'makepkg --printsrcinfo' > .SRCINFO
-          "
-          # The archlinux container chowns packaging/ to its 'builder' user,
-          # so the runner (non-root) can't remove the staged files — use sudo
-          # like the Clean up step does.
-          sudo rm -f "packaging/odm-bin-${VERSION}.1" \
-                "packaging/odm-bin.conf-${VERSION}.example" \
-                "packaging/odm-bin-${VERSION}.service" \
-                "packaging/odm-bin-${VERSION}.LICENSE"
+        run: bash .github/scripts/aur/verify-srcinfo.sh "${{ steps.version.outputs.version }}"
 
       - name: Validate
         if: steps.version.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          errors=0
-          grep -q "^pkgname=odm-bin$" packaging/PKGBUILD || { echo "::error::Missing pkgname"; errors=1; }
-          grep -q "^pkgver=${{ steps.version.outputs.version }}$" packaging/PKGBUILD || { echo "::error::Wrong pkgver"; errors=1; }
-          [ "$errors" -eq 0 ] || exit 1
+        run: bash .github/scripts/aur/validate.sh "${{ steps.version.outputs.version }}"
 
       - name: Publish AUR
         if: steps.version.outputs.skip != 'true'
@@ -215,42 +101,10 @@ jobs:
         if: steps.version.outputs.skip != 'true'
         # Staged assets + makepkg outputs are transient; drop them so the
         # commit-to-main only carries the PKGBUILD edit.
-        run: |
-          rm -rf assets
-          sudo rm -rf packaging/.SRCINFO packaging/odm-bin-*.* 2>/dev/null || true
+        run: bash .github/scripts/aur/cleanup.sh
 
       - name: Commit to main
         if: steps.version.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # The archlinux container (Verify step) chowns packaging/ to its
-          # 'builder' user; restore runner ownership before rewriting files
-          # (same workaround as the Clean up step below).
-          sudo chown -R "$(id -u):$(id -g)" packaging
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-          git fetch origin main
-          # Rebase the PKGBUILD edits onto the latest main, then push
-          # explicitly. A bare `git push` only works on a branch checkout; the
-          # default checkout here is detached, so an explicit branch+refspec is
-          # required to land the commit on main.
-          # Snapshot the bumped PKGBUILD: if a queued prior republish already
-          # committed a pkgrel bump to main, `git checkout -B` would refuse to
-          # overwrite our working-tree edit. Restore it after the checkout.
-          cp packaging/PKGBUILD /tmp/PKGBUILD.bumped
-          git checkout -B aur-publish origin/main
-          cp /tmp/PKGBUILD.bumped packaging/PKGBUILD
-          git add packaging/PKGBUILD
-          if ! git diff --cached --quiet; then
-            COMMIT_MSG="chore(aur): update PKGBUILD for v${{ steps.version.outputs.version }}"
-            if [ "${{ steps.version.outputs.mode }}" = "republish" ]; then
-              COMMIT_MSG="chore(aur): bump pkgrel for v${{ steps.version.outputs.version }}"
-            fi
-            git commit -m "$COMMIT_MSG"
-            git push --force-with-lease origin aur-publish:main
-          else
-            echo "No changes to commit"
-          fi
+        run: bash .github/scripts/aur/commit-main.sh "${{ steps.version.outputs.mode }}" "${{ steps.version.outputs.version }}"

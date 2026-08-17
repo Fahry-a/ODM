@@ -40,8 +40,8 @@ jobs:
         with:
           fetch-depth: 0 # need every tag to compute "latest"
 
-      - name: Extract version from code
-        id: code
+      - name: Extract + validate versions
+        id: validate
         run: |
           set -euo pipefail
           VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
@@ -50,80 +50,22 @@ jobs:
             echo "::error::Could not extract a version from one of the files"
             exit 1
           fi
-          echo "version_go=$VERSION_GO" >> "$GITHUB_OUTPUT"
-          echo "pkgbuild=$PKGBUILD_VER" >> "$GITHUB_OUTPUT"
-          echo "Versions: version.go=$VERSION_GO pkgbuild=$PKGBUILD_VER"
-
-      - name: Validate versions match
-        id: validate
-        run: |
-          set -euo pipefail
-          V="${{ steps.code.outputs.version_go }}"
-          P="${{ steps.code.outputs.pkgbuild }}"
-          if [ "$V" != "$P" ]; then
-            echo "::error::Version mismatch on main: version.go=$V pkgbuild=$P"
-            echo "::error::Bump both files together before pushing."
-            exit 1
-          fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Both files match: $V"
+          bash .github/scripts/verify-version.sh "$VERSION_GO"
+          echo "version=$VERSION_GO" >> "$GITHUB_OUTPUT"
+          echo "Both files match: $VERSION_GO"
 
       - name: Check existing tag / version order
         id: check
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.validate.outputs.version }}"
-          LATEST=$(git tag -l 'v*' | sort -V | tail -1 || true)
-          echo "version=$VERSION"
-          echo "latest=$LATEST"
-
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "Tag v$VERSION already exists — nothing to do"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          elif [ -n "$LATEST" ] && [ "$(printf '%s\n%s' "$VERSION" "${LATEST#v}" | sort -V | tail -1)" = "${LATEST#v}" ]; then
-            echo "Version $VERSION is not newer than the latest tag $LATEST — nothing to do"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Verify changelog entry
-        if: steps.check.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.validate.outputs.version }}"
-          if ! grep -qE "^## \[$VERSION\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## [$VERSION]' entry"
-            echo "::error::Add the release notes for v$VERSION before pushing the version bump."
-            exit 1
-          fi
-          echo "CHANGELOG.md has an entry for $VERSION"
+        run: bash .github/scripts/tag-check.sh "${{ steps.validate.outputs.version }}"
 
       - name: Create and push tag
         if: steps.check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # git tag -a needs a committer identity, which bare runners don't have.
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          VERSION="${{ steps.validate.outputs.version }}"
-          git tag -a "v$VERSION" -m "release: v$VERSION"
-          git push origin "v$VERSION"
-          echo "Created and pushed tag v$VERSION"
+        run: bash .github/scripts/tag-create.sh "${{ steps.validate.outputs.version }}"
 
       - name: Trigger release
         if: steps.check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # A tag pushed with GITHUB_TOKEN does NOT trigger other workflows
-          # (GitHub's recursion guard) — the push above alone would never start
-          # release.yml. Dispatch it explicitly instead; workflow_dispatch is
-          # one of the few events GITHUB_TOKEN is allowed to raise. Dispatch on
-          # the tag ref itself so Release builds the exact tagged source, not
-          # main's latest (which could have advanced past the tag).
-          VERSION="${{ steps.validate.outputs.version }}"
-          gh workflow run release.yml -f "tag=$VERSION" --ref "v$VERSION"
-          echo "Dispatched release.yml for v$VERSION"
+        run: bash .github/scripts/tag-trigger.sh "${{ steps.validate.outputs.version }}"

@@ -1,5 +1,9 @@
 # ODM — Oryn Download Manager
 
+[![CI](https://github.com/Fahry-a/ODM/actions/workflows/ci.yml/badge.svg)](https://github.com/Fahry-a/ODM/actions/workflows/ci.yml)
+[![Release](https://github.com/Fahry-a/ODM/actions/workflows/release.yml/badge.svg)](https://github.com/Fahry-a/ODM/actions/workflows/release.yml)
+[![AUR](https://img.shields.io/aur/version/odm-bin?label=AUR)](https://aur.archlinux.org/packages/odm-bin)
+
 `odm` is a CLI download manager written in Go, inspired by [`aria2c`](https://aria2.github.io/). It ships as a single static binary with no runtime dependencies.
 
 Its core differentiator is the **Connection Balancer** — automatic allocation of parallel connections that adapts between *single-file* and *many-files* (batch) modes, so you set one connection budget and the tool splits it sensibly across files instead of you computing connections-per-file by hand.
