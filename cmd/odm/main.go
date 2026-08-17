@@ -61,9 +61,11 @@ func run(argv []string) error {
 			printUsage(os.Stdout)
 			return nil
 		}
-		printUsage(os.Stderr)
-		fmt.Fprintln(os.Stderr)
-		return err
+		// A flag/validation error is one line: the message plus a pointer to
+		// `-h` for the full syntax. Dumping the entire usage table here drowns
+		// the actual error (and the message already names the offending flags).
+		return errExit{code: download.ExitGeneral,
+			msg: err.Error() + " (run 'odm -h' for usage)"}
 	}
 
 	// Leveled logger (§6.2 --log / --log-level). Default level info; a quiet
@@ -134,6 +136,15 @@ func run(argv []string) error {
 	files := make([]scheduler.FileInput, 0, len(o.URLs))
 	sizes := make(map[string]int64, len(o.URLs))
 	probes := make(map[string]*transport.ProbeResult, len(o.URLs))
+	// profiles holds the concrete engine per URL: the user's --profile for
+	// odm/aria2c/both, or the smart decision resolved after the Balancer pass
+	// (which fixes the per-file connection budget). It feeds the §9 batch prompt
+	// (which shows each file's engine) and is injected into each Task via
+	// SetProfile so Start doesn't re-probe h2 readiness. Populated below only
+	// for smart; explicit profiles need no per-file map (empty is fine).
+	// profileReasons carries ChooseProfile's why (e.g. "no h2") for the prompt.
+	profiles := make(map[string]string, len(o.URLs))
+	profileReasons := make(map[string]string, len(o.URLs))
 	probeClient := mgr.Client()
 	// Probe up to 8 URLs in parallel: N URLs × 15s serial timeouts would stall
 	// a long -i batch before a single download starts. Each probe gets its own
@@ -202,10 +213,28 @@ func run(argv []string) error {
 	if plan.Warning != "" {
 		logger.Warnf("%s", plan.Warning)
 	}
+	// Resolve the concrete engine per file, now that the Balancer has decided
+	// the real per-file connection budget (plan.Parallel[i].Connections — not a
+	// guess from the CLI flags). For smart this is the decision matrix (range
+	// support, size, h2 readiness, budget); for explicit profiles it's the flag.
+	// Resolved once here so the prompt shows it and every task skips the
+	// re-resolution (and its extra h2 HEAD probe) in Start.
+	if o.Profile == "smart" {
+		profiles = make(map[string]string, len(plan.Parallel)+len(plan.Queued))
+		for _, a := range append(append([]scheduler.Allocation{}, plan.Parallel...), plan.Queued...) {
+			if pr := probes[a.URL]; pr != nil {
+				p, reason := resolveProfile(o, pr, a.Connections, mgr.H2Client())
+				profiles[a.URL] = p
+				if reason != "" {
+					profileReasons[a.URL] = reason
+				}
+			}
+		}
+	}
 
 	// §9 confirmation prompt — skipped when -y/--yes OR --quiet (PRD §9).
 	if !o.Yes && !o.Quiet {
-		ok, err := confirmPlan(o, plan, sizes, mgr)
+		ok, err := confirmPlan(o, plan, sizes, profiles, profileReasons, mgr)
 		if err != nil {
 			return err
 		}
@@ -241,6 +270,12 @@ func run(argv []string) error {
 		if err == nil {
 			if pr := probes[url]; pr != nil {
 				t.SetProbe(pr)
+			}
+			if p := profiles[url]; p != "" {
+				// Pin the resolved engine so Start skips the smart re-resolution
+				// (and its extra h2 HEAD probe) — the decision was already made
+				// once, up front, with the same inputs.
+				t.SetProfile(p)
 			}
 		}
 		return t, conns, err
@@ -331,6 +366,34 @@ func batchChecksumWarning(o *config.Options) string {
 	return ""
 }
 
+// resolveProfile picks the concrete engine for one URL, given the Balancer's
+// real per-file connection budget. For the smart profile this is the decision
+// matrix (range support, size, h2 readiness, budget); for the explicit
+// profiles it's just the flag. The reason (from ChooseProfile's matrix) lets
+// the prompt explain why a file landed on a given engine. The result is
+// injected into each task via SetProfile so Start doesn't re-resolve (and
+// re-probe h2) per file.
+func resolveProfile(o *config.Options, pr *transport.ProbeResult, conns int, h2 *transport.Client) (profile, reason string) {
+	if o.Profile != "smart" {
+		return o.Profile, ""
+	}
+	if pr == nil {
+		return "odm", "probe failed"
+	}
+	h2Ready := false
+	if h2 != nil {
+		h2Ready = h2.SupportsHTTP2(context.Background(), pr.FinalURL)
+	}
+	profile, reason = download.ChooseProfile(download.ServerCapabilities{
+		TotalSize:     pr.TotalSize,
+		SupportsRange: pr.SupportsRange,
+		SingleStream:  pr.SingleStream,
+		HTTP2Ready:    h2Ready,
+		Conns:         conns,
+	})
+	return profile, reason
+}
+
 // buildExecOptions maps *config.Options → download.ExecOptions, converting the
 // second-granular CLI fields into time.Duration and parsing --chunk-size
 // ("4M") via the shared ratelimit.ParseRate so byte-suffix rules are uniform.
@@ -394,7 +457,7 @@ func parseChunkSize(s string) (int64, error) {
 
 // confirmPlan renders the §9 prompt for the appropriate mode (single-file vs
 // batch) and returns the user's Y/n answer.
-func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64, mgr *download.Manager) (bool, error) {
+func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64, profiles map[string]string, reasons map[string]string, mgr *download.Manager) (bool, error) {
 	useColor := ui.IsTTY(os.Stdout)
 	if len(o.URLs) == 1 {
 		url := o.URLs[0]
@@ -411,21 +474,20 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 		}
 		return ui.ConfirmSingle(os.Stdin, os.Stdout, disp, name, size, conns, useColor)
 	}
-	rows := ui.RowsFromPlan(plan, sizes)
+	// For the smart profile the per-file engine IS the interesting info — show
+	// it even when it resolves to the default odm engine. Explicit profiles
+	// (odm/aria2c/both) need no per-file tag.
+	rows := ui.RowsFromPlan(plan, sizes, profiles, reasons, o.Profile == "smart")
+	// The per-file budget shown is the MODE's base, not one file's count: in
+	// Mode C (-sf) every parallel file gets SF, with a remainder top-up on the
+	// first ones and single-stream files capped at 1 — so Parallel[0].Connections
+	// can be SF+1 and a non-range file 1, neither of which represents the batch.
+	// Showing SF (the mode's base) is honest and matches what queued files get.
 	connsPerFile := 1
-	if len(plan.Parallel) > 0 {
-		// The honest per-file budget. Parallel[0].Connections can carry a
-		// remainder top-up (Mode C), so a queued file — which inherits exactly
-		// SF — would see a prompt that overstates its allocation. The base
-		// per-file budget is the minimum across the parallel set (non-range
-		// files cap at 1), or the last parallel file's count when no queue.
-		if len(plan.Queued) > 0 && o.SplitFile > 0 {
-			connsPerFile = o.SplitFile // queued files inherit exactly SF (§5.4)
-		} else if o.SplitFile > 0 {
-			connsPerFile = plan.Parallel[len(plan.Parallel)-1].Connections
-		} else {
-			connsPerFile = plan.Parallel[0].Connections // Mode A/B: 1 or the budget
-		}
+	if o.SplitFile > 0 {
+		connsPerFile = o.SplitFile // Mode C base per file
+	} else if len(plan.Parallel) > 0 {
+		connsPerFile = plan.Parallel[0].Connections // Mode A/B: 1 or the budget
 	}
 	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
 }

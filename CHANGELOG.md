@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-08-17
+
+### Added
+- **Batch prompt shows the per-file engine for the smart profile** — after the
+  Balancer fixes each file's connection budget, the smart decision is resolved
+  once per file and shown in the §9 prompt, including *why* (e.g.
+  `[odm — no h2]`, `[both — large+wide]`). The resolved engine is injected
+  into each task via `SetProfile`, so Start skips the re-resolution (and its
+  extra h2 HEAD probe). (`cmd/odm/main.go`, `internal/ui/confirm.go`,
+  `internal/download/task.go`, `internal/download/manager.go`)
+- **`-sf` is now valid with the smart profile** — smart's engine decision
+  consumes the per-file connection budget (`-sf` → Mode C), so rejecting it
+  forced smart into 1-connection Mode B where it could never pick `both`.
+  `-sf` stays rejected for `aria2c`/`both`. (`internal/config/config.go`)
+
+### Fixed
+- **Validation errors dumped the full usage table** — an invalid flag
+  combination printed the entire help text, burying the actual error. Now it's
+  one line plus a `(run 'odm -h' for usage)` hint. (`cmd/odm/main.go`)
+- **Batch prompt "Allocation" could show a remainder-inflated count** — it read
+  `Parallel[last].Connections`, which carries a Mode C remainder top-up (5 when
+  SF=4) or a single-stream cap (1). It now shows the mode's base (`-sf` in
+  Mode C). (`cmd/odm/main.go`)
+
 ## [1.4.1] - 2026-08-17
 
 ### Fixed
@@ -575,7 +599,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/Fahry-a/ODM/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/Fahry-a/ODM/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/Fahry-a/ODM/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/Fahry-a/ODM/compare/v1.3.0...v1.3.1

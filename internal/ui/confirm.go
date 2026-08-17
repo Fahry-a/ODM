@@ -89,10 +89,11 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 			// Right-align the sizes so the column reads like a table, and pad
 			// the name to a fixed width so the sizes line up regardless of how
 			// long the filename is.
-			fmt.Fprintf(out, "    %s[%d]%s %s %s%s%s\n",
+			fmt.Fprintf(out, "    %s[%d]%s %s %s%s%s%s\n",
 				colorGreen, i+1, colorReset,
 				padToCells(truncateNameTo(r.Name, 40), 40),
-				colorCyan, strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr, colorReset)
+				colorCyan, strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr, colorReset,
+				profileSuffix(r.Profile, r.Reason))
 		}
 		fmt.Fprintln(out)
 		return ConfirmAsk(in, out, fmt.Sprintf("%sContinue?%s [Y/n] ", colorYellow, colorReset))
@@ -106,10 +107,11 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 	fmt.Fprintln(out)
 	for i, r := range rows {
 		sizeStr := FormatFileSize(r.Size)
-		fmt.Fprintf(out, "  [%d] %s %s\n",
+		fmt.Fprintf(out, "  [%d] %s %s%s\n",
 			i+1,
 			padToCells(truncateNameTo(r.Name, 40), 40),
-			strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr)
+			strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr,
+			profileSuffix(r.Profile, r.Reason))
 	}
 	fmt.Fprintln(out)
 	return ConfirmAsk(in, out, "Continue? [Y/n] ")
@@ -117,18 +119,35 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 
 // FileRow is one line of the batch prompt's file list.
 type FileRow struct {
-	Name string
-	Size int64
+	Name    string
+	Size    int64
+	Profile string // engine profile (odm/aria2c/both); "" = not known yet
+	Reason  string // why smart chose this profile ("" = none)
 }
 
 // RowsFromPlan builds FileRows for the batch prompt from a Balancer plan. Since
 // the plan doesn't carry per-file sizes (the probe happens later), callers pass
 // the probed size map keyed by URL; missing entries report -1 (unknown).
-func RowsFromPlan(plan *scheduler.Plan, sizes map[string]int64) []FileRow {
+// profiles (keyed by URL) carries the concrete engine per file — for the smart
+// profile it's the decision made after probing, shown so the user sees which
+// engine each file will actually use. reasons (keyed by URL) carries
+// ChooseProfile's why, so the prompt can explain the decision. showProfiles
+// gates the suffix: true only for smart, where the resolved engine is
+// informative even when it's "odm".
+func RowsFromPlan(plan *scheduler.Plan, sizes map[string]int64, profiles map[string]string, reasons map[string]string, showProfiles bool) []FileRow {
 	out := make([]FileRow, 0, len(plan.Parallel)+len(plan.Queued))
 	all := append(append([]scheduler.Allocation{}, plan.Parallel...), plan.Queued...)
 	for _, a := range all {
-		out = append(out, FileRow{Name: shortName(a.URL), Size: sizes[a.URL]})
+		p := profiles[a.URL]
+		if !showProfiles {
+			p = "" // explicit profiles: no per-file tag
+		}
+		out = append(out, FileRow{
+			Name:    shortName(a.URL),
+			Size:    sizes[a.URL],
+			Profile: p,
+			Reason:  reasons[a.URL],
+		})
 	}
 	return out
 }
@@ -139,4 +158,19 @@ func shortName(u string) string {
 		return u[i+1:]
 	}
 	return u
+}
+
+// profileSuffix renders the per-file engine tag shown after the size in the
+// batch prompt, e.g. " [aria2c]" or " [odm — no h2]". Empty (no profile
+// resolved yet, or explicit-profile mode where the tag is noise) renders
+// nothing. reason appends the smart decision's why so the user sees *why* a
+// file landed on a given engine.
+func profileSuffix(p, reason string) string {
+	if p == "" {
+		return ""
+	}
+	if reason != "" {
+		return " [" + p + " — " + reason + "]"
+	}
+	return " [" + p + "]"
 }

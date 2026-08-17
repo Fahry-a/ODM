@@ -115,6 +115,12 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 // Client exposes the transport client (RPC tests reuse it).
 func (m *Manager) Client() *transport.Client { return m.client }
 
+// H2Client exposes the HTTP/2-enabled transport client (aria2c/both/smart
+// profiles), or nil when the profile never builds one. The CLI probe pass uses
+// it to check h2 readiness for the smart decision; the download engine reuses
+// it as region2's client.
+func (m *Manager) H2Client() *transport.Client { return m.h2client }
+
 // ClientFor returns the transport client for the given profile: the h1-only
 // client for odm, the h2-enabled one for aria2c/both/smart (falling back to
 // h1 when the profile doesn't need h2 or the h2 client was never built).

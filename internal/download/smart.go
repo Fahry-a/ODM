@@ -7,11 +7,15 @@
 //	 1. no range support / sizeless / single-stream → odm (fixed chunks are
 //	    meaningless without ranged GETs; single whole-file GET)
 //	 2. TotalSize < 8 MiB                    → odm (split overhead not worth it)
-//	 3. server doesn't speak HTTP/2          → odm (h2 profiles gain nothing)
+//	 3. server doesn't speak HTTP/2          → odm (the aria2c/both engines only
+//	    win under h2; over HTTP/1.1, static splits are capped at
+//	    MaxConnPerServer — often 1 — so odm's work-stealing over many
+//	    connections is strictly better)
 //	 4. Conns <= 2                           → odm (no parallelism to split)
 //	 5. TotalSize >= 256 MiB && Conns >= 6   → both (large file, wide budget:
-//	    two engines side by side)
-//	 6. otherwise                            → aria2c (h2 streams)
+//	    two engines side by side over h2)
+//	 6. otherwise                            → aria2c (h2 streams multiplex over
+//	    one TCP connection)
 //
 // Each row returns a human reason for the confirmation prompt / log.
 

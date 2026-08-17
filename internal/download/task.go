@@ -341,6 +341,17 @@ func (t *Task) SetProbe(pr *transport.ProbeResult) {
 	}
 }
 
+// SetProfile pins a concrete engine profile on the task so Start skips the
+// smart re-resolution (and its extra h2 HEAD probe). The CLI path resolves
+// smart per-file after probing and injects the decision here; the RPC daemon
+// path leaves it empty and Start resolves normally. Must be called before
+// Start, like SetProbe.
+func (t *Task) SetProfile(p string) {
+	if p != "" {
+		t.opts.Profile = p
+	}
+}
+
 // AdjustConns changes the desired connection count at runtime. When target is
 // lower than the current count, excess workers gracefully drain after finishing
 // their current chunk (no mid-chunk cancels). When target is higher, additional
@@ -415,9 +426,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	}
 	// Smart profile: decide the concrete engine now that the probe answered
 	// range support + size, and check h2 readiness through the h2 client.
-	// The CLI path already resolved smart to a concrete profile in the
-	// TaskMaker (it has the h2 probe pass); here we only handle the RPC
-	// daemon path where Start probes lazily.
+	// The CLI path already resolved smart to a concrete profile (SetProfile,
+	// after the probe pass) and injected it, so this only runs for tasks whose
+	// profile is still literally "smart" — the RPC daemon path where Start
+	// probes lazily.
 	if t.opts.Profile == "smart" {
 		// The scheduler applies the Balancer's per-file allocation via
 		// SetConns BEFORE Start runs, so t.conns holds this file's real budget

@@ -765,7 +765,14 @@ func TestRowsFromPlan(t *testing.T) {
 		"http://h/a.bin": 100,
 		"http://h/b.bin": 200,
 		"http://h/c.bin": -1, // unknown
-	})
+	}, map[string]string{
+		"http://h/a.bin": "aria2c",
+		"http://h/b.bin": "both",
+		"http://h/c.bin": "",
+	}, map[string]string{
+		"http://h/a.bin": "h2 streams",
+		"http://h/b.bin": "large+wide",
+	}, true) // showProfiles (smart mode)
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(rows))
 	}
@@ -774,6 +781,19 @@ func TestRowsFromPlan(t *testing.T) {
 	}
 	if rows[2].Size != -1 {
 		t.Fatalf("unknown-size row must report -1, got %d", rows[2].Size)
+	}
+	// Per-file profile tags flow through when showProfiles is set.
+	if rows[0].Profile != "aria2c" || rows[1].Profile != "both" || rows[2].Profile != "" {
+		t.Fatalf("profiles wrong: %+v %+v %+v", rows[0], rows[1], rows[2])
+	}
+	// Smart decision reasons flow through too.
+	if rows[0].Reason != "h2 streams" || rows[1].Reason != "large+wide" || rows[2].Reason != "" {
+		t.Fatalf("reasons wrong: %+v %+v %+v", rows[0], rows[1], rows[2])
+	}
+	// Explicit-profile mode (showProfiles=false) drops the tags.
+	rows2 := RowsFromPlan(plan, map[string]int64{"http://h/a.bin": 100}, map[string]string{"http://h/a.bin": "aria2c"}, nil, false)
+	if rows2[0].Profile != "" {
+		t.Fatalf("showProfiles=false must blank the profile, got %q", rows2[0].Profile)
 	}
 }
 

@@ -441,8 +441,14 @@ func (o *Options) Validate() error {
 	default:
 		return fmt.Errorf("invalid --profile %q (want odm|aria2c|both|smart)", o.Profile)
 	}
-	if o.Profile != "odm" && o.SplitFile != 0 {
-		return fmt.Errorf("--split-file is only valid with the odm profile (got --profile %s)", o.Profile)
+	// -sf controls the per-file connection budget (Mode C). That's meaningful
+	// for the odm AND smart profiles: smart's engine decision consumes the
+	// per-file budget (large file + ≥6 conns → both; low conns → odm), so
+	// rejecting -sf for smart would force it into 1-connection Mode B where it
+	// can never pick both. aria2c/both don't use the Balancer's Mode C (they
+	// have their own split semantics), so -sf stays rejected there.
+	if o.Profile != "odm" && o.Profile != "smart" && o.SplitFile != 0 {
+		return fmt.Errorf("--split-file is only valid with the odm or smart profile (got --profile %s)", o.Profile)
 	}
 	if o.Profile == "both" && o.IsSet("chunk-size") {
 		return errors.New("--chunk-size is not supported with --profile both (fixed 50/50 split)")

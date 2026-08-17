@@ -150,6 +150,9 @@ func TestValidate(t *testing.T) {
 		{"profile smart", func(o *Options) *Options { o.Profile = "smart"; return o }, true},
 		{"profile bogus", func(o *Options) *Options { o.Profile = "banana"; return o }, false},
 		{"sf + aria2c", func(o *Options) *Options { o.Profile = "aria2c"; o.SplitFile = 4; return o }, false},
+		{"sf + both", func(o *Options) *Options { o.Profile = "both"; o.SplitFile = 4; return o }, false},
+		{"sf + smart", func(o *Options) *Options { o.Profile = "smart"; o.SplitFile = 4; return o }, true},
+		{"sf + smart > c", func(o *Options) *Options { o.Profile = "smart"; o.SplitFile = 9; o.Connections = 4; return o }, false},
 		{"chunk-size + both", func(o *Options) *Options {
 			o.Profile = "both"
 			o.changedFlag("chunk-size")
