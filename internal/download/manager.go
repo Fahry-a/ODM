@@ -57,6 +57,7 @@ type ExecOptions struct {
 	Referer       string
 	Proxy         string
 	CheckCert     bool
+	MaxRedirect   int
 
 	Profile          string // engine profile: odm|aria2c|both|smart ("" = odm)
 	Split            int    // aria2c: --split (number of segments), default 5
@@ -77,6 +78,7 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 		Proxy:            opts.Proxy,
 		CheckCertificate: opts.CheckCert,
 		Timeout:          opts.Timeout,
+		MaxRedirect:      opts.MaxRedirect,
 	})
 	if err != nil {
 		return nil, err
@@ -97,6 +99,7 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 			Proxy:            opts.Proxy,
 			CheckCertificate: opts.CheckCert,
 			Timeout:          opts.Timeout,
+			MaxRedirect:      opts.MaxRedirect,
 			HTTP2:            true,
 		})
 		if err != nil {

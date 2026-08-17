@@ -195,6 +195,14 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 			a.Connections = conns[i]
 			parallel = append(parallel, a)
 		} else {
+			// Queued files inherit SF when they're admitted (Mode C per §5.4 and
+			// the Scheduler's contract "each queued task inherits the same
+			// per-file connection budget (Mode C: SF)"). A queued single-stream
+			// file still caps at 1 (single-stream fallback, §11.2).
+			a.Connections = SF
+			if !files[i].SupportsRange {
+				a.Connections = 1
+			}
 			queued = append(queued, a)
 		}
 	}

@@ -366,6 +366,7 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		Referer:          o.Referer,
 		Proxy:            o.Proxy,
 		CheckCert:        o.CheckCertificate,
+		MaxRedirect:      o.MaxRedirect,
 		Profile:          o.Profile,
 		Split:            o.Split,
 		MinSplitSize:     minSplit,
@@ -413,7 +414,18 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 	rows := ui.RowsFromPlan(plan, sizes)
 	connsPerFile := 1
 	if len(plan.Parallel) > 0 {
-		connsPerFile = plan.Parallel[0].Connections
+		// The honest per-file budget. Parallel[0].Connections can carry a
+		// remainder top-up (Mode C), so a queued file — which inherits exactly
+		// SF — would see a prompt that overstates its allocation. The base
+		// per-file budget is the minimum across the parallel set (non-range
+		// files cap at 1), or the last parallel file's count when no queue.
+		if len(plan.Queued) > 0 && o.SplitFile > 0 {
+			connsPerFile = o.SplitFile // queued files inherit exactly SF (§5.4)
+		} else if o.SplitFile > 0 {
+			connsPerFile = plan.Parallel[len(plan.Parallel)-1].Connections
+		} else {
+			connsPerFile = plan.Parallel[0].Connections // Mode A/B: 1 or the budget
+		}
 	}
 	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
 }

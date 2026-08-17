@@ -150,6 +150,38 @@ func TestModeC_SFExceedsParallelUsesFullN(t *testing.T) {
 	}
 }
 
+func TestModeC_QueuedInheritsSF(t *testing.T) {
+	// -c 10 -sf 3, 8 urls: 3 parallel (4/3/3), 5 queued — each queued file
+	// must inherit SF=3 (the Scheduler's documented "Mode C: SF" contract),
+	// not the Mode-B default of 1.
+	p, err := Compute(10, mkRange(8), 3, 32)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(p.Parallel) != 3 || len(p.Queued) != 5 {
+		t.Fatalf("want 3/5, got %d/%d", len(p.Parallel), len(p.Queued))
+	}
+	for i, a := range p.Queued {
+		if a.Connections != 3 {
+			t.Fatalf("queued[%d] want 3 (SF), got %d", i, a.Connections)
+		}
+	}
+	// A queued single-stream file caps at 1 (§11.2 single-stream fallback).
+	files := []FileInput{
+		{URL: "a", SupportsRange: true}, {URL: "b", SupportsRange: true},
+		{URL: "c", SupportsRange: false},
+	}
+	p2, err := Compute(6, files, 2, 32)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	for i, a := range p2.Queued {
+		if files[2+i].SupportsRange == false && a.Connections != 1 {
+			t.Fatalf("queued single-stream %d want 1, got %d", i, a.Connections)
+		}
+	}
+}
+
 func TestValidation_CBelowOne(t *testing.T) {
 	if _, err := Compute(0, mkRange(1), 0, 32); err == nil {
 		t.Fatalf("want error for C=0")

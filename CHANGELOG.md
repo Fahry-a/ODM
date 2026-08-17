@@ -5,6 +5,29 @@ All notable changes to ODM (Oryn Download Manager) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.4.1] - 2026-08-17
+
+### Fixed
+- **`--max-redirect` was dead config** — the value never flowed from
+  `config.Options` → `download.ExecOptions` → `transport.NewClient`, so the
+  transport client always used Go's zero value (`0`) and refused the *first*
+  redirect with "max redirects (0) exceeded". Any URL that redirects once —
+  e.g. GitHub release assets via `release-assets.githubusercontent.com` —
+  failed the probe and aborted the download. (`cmd/odm/main.go`,
+  `internal/download/manager.go`)
+- **Mode C queued files got 1 connection instead of `-sf`** — the Connection
+  Balancer allocated `SF` connections/file to files running in parallel but
+  only `1` to queued files, contradicting PRD §5.4 and the Scheduler's
+  documented contract. Queued files now inherit exactly `SF` (still capped to
+  1 for single-stream URLs). (`internal/scheduler/balancer.go`)
+- **Batch prompt overstated the per-file connection budget** — the §9
+  "Allocation" line used the first parallel file's connection count, which
+  carries a Mode C remainder top-up, so it displayed e.g. "4 connections/file"
+  while queued files actually run with `SF=3`. The prompt now reports the
+  honest per-file budget. (`cmd/odm/main.go`)
+
 ## [1.4.0] - 2026-08-16
 
 ### Added
@@ -552,7 +575,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/Fahry-a/ODM/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/Fahry-a/ODM/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/Fahry-a/ODM/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Fahry-a/ODM/compare/v1.2.0...v1.3.0
