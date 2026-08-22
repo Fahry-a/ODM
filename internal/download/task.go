@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,6 +51,11 @@ const (
 	// resumeProbeLen is how many bytes of each sampled chunk are compared.
 	resumeVerifyChunks = 4
 	resumeProbeLen     = 1024
+
+	// stallDecayWindow is how long a zero-byte window must last before the
+	// displayed speed decays to 0 (see rateMeasure.tick). Shorter than this a
+	// quiet window reads as jitter, not a stall.
+	stallDecayWindow = 2 * time.Second
 )
 
 func (s TaskState) String() string {
@@ -249,6 +255,11 @@ func (rm *rateMeasure) tick(delta int64) bool {
 				// Previous 60/40 caused stale speed display for 1-2s after bursts.
 				rm.bps = int64(float64(rm.bps)*0.3 + float64(bps)*0.7)
 			}
+		} else if elapsed >= stallDecayWindow {
+			// No bytes at all this window: decay the displayed speed toward zero
+			// so a stalled connection doesn't freeze the bar at its last speed
+			// forever.
+			rm.bps = 0
 		}
 	}
 	rm.lastTS = t
@@ -961,6 +972,15 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 		return err
 	}
 	defer resp.Body.Close()
+	// A 200 here means the server ignored the Range header for THIS request —
+	// writing the full body at the chunk's offset would corrupt the file
+	// (chunk 3's slot would hold bytes from position 0). GetRange accepts both
+	// 200 and 206 so the single-stream degeneration path can reuse it; the
+	// multi-connection path must not. Retry as a transient error.
+	if resp.StatusCode != http.StatusPartialContent {
+		transport.SkipBody(resp.Body)
+		return fmt.Errorf("server ignored range request at offset %d (status %d)", absStart, resp.StatusCode)
+	}
 
 	body := resp.Body
 	if !t.lim.Unlimited() {

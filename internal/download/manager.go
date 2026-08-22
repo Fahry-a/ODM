@@ -296,10 +296,15 @@ func ExitCodeFrom(succeeded, failed, cancelled int) int {
 }
 
 // ResolveDest resolves the path a task for `url` would write to. Used by the
-// confirmation prompt before the download actually starts (§9).
+// confirmation prompt before the download actually starts (§9). Mirrors
+// deriveFilename's query-strip so the prompted name matches what Start will
+// actually write.
 func (m *Manager) ResolveDest(url string) string {
 	name := m.opts.OutFile
 	if name == "" {
+		if i := strings.LastIndexByte(url, '?'); i >= 0 {
+			url = url[:i]
+		}
 		name = filepath.Base(url)
 		if name == "" || name == "." || name == "/" {
 			name = "download.bin"

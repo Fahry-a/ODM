@@ -38,3 +38,32 @@ func TestBatchChecksumWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestDedupeURLs pins the batch dedupe guard: two identical URLs would spawn
+// two Tasks writing the same destination concurrently, silently corrupting the
+// file. First-seen order must be preserved.
+func TestDedupeURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{name: "no dups", in: []string{"https://a/x", "https://b/y"}, want: []string{"https://a/x", "https://b/y"}},
+		{name: "exact dup removed, order kept", in: []string{"https://a/x", "https://b/y", "https://a/x"}, want: []string{"https://a/x", "https://b/y"}},
+		{name: "all same collapses to one", in: []string{"u", "u", "u"}, want: []string{"u"}},
+		{name: "empty stays empty", in: nil, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dedupeURLs(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("dedupeURLs = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("dedupeURLs = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}

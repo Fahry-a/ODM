@@ -311,6 +311,17 @@ func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) {
 	// started would otherwise Add to a WaitGroup whose Wait may have already
 	// returned. Refused adds are dropped — the daemon is exiting anyway.
 	if !s.AddCounter() {
+		// The refused task must not linger in the queued list: it would show up
+		// in TellWaiting forever and never run. Remove it (first match by id —
+		// Enqueue owns this entry; nothing else pops from the tail).
+		s.mu.Lock()
+		for i, q := range s.queued {
+			if q.task.ID() == st.task.ID() {
+				s.queued = append(s.queued[:i], s.queued[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
 		return
 	}
 	s.admitNext(ctx)
