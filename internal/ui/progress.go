@@ -266,8 +266,29 @@ func (r *Renderer) Interject(line string) {
 //     still show the completed batch.
 func (r *Renderer) updateCache(live, queued []download.ProgressView) []download.ProgressView {
 	if live == nil && queued == nil {
-		// Final-frame call: keep cache as-is, just re-emit. Don't touch the
-		// retired-promotion path — promotion already happened in prior frames.
+		// Final-frame call: keep cache as-is and re-emit — with one repair.
+		// The run is over (main only issues this after the scheduler has
+		// returned), but the terminal snapshot of a task can still be sitting
+		// unconsumed in the progress channel when the loop tears down (select
+		// picked ctx.Done over the buffered send). A cached view holding all
+		// its bytes IS finished, whatever stale state it carries; without this
+		// the last screen shows an active-at-100% row and "Total: 0/N".
+		for id, v := range r.cur.cache {
+			if v.State == download.StateCompleted || v.State == download.StateError {
+				continue
+			}
+			if v.TotalSize > 0 && v.BytesDone >= v.TotalSize {
+				v.State = download.StateCompleted
+				v.Connections = 0
+				v.Speed = 0
+				v.ETA = 0
+				r.cur.cache[id] = v
+			}
+		}
+		// Drop the last-seen slices too: ordered() prefers them over the
+		// cache, so a stale active entry there would shadow the promoted one.
+		r.cur.live = nil
+		r.cur.queue = nil
 		return r.cur.ordered()
 	}
 

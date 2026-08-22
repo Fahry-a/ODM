@@ -128,7 +128,9 @@ func statusGlyph(v download.ProgressView) (string, Color) {
 //
 //	Total: X/Y completed  <bytes>  <speed>  ETA <eta>  +<elapsed>  [bar]  ZZ%
 //
-// elapsed ≤ 0 (no clock started, non-TTY) omits the elapsed segment. The bar
+// elapsed ≤ 0 (no clock started, non-TTY) omits the elapsed segment. When
+// every task is completed the speed/ETA segments are dropped (nothing is in
+// flight) and only +<elapsed> remains. The bar
 // is the full BarWidth (non-TTY output has no width constraint).
 func RenderSummary(completed, total int, speedBps int64, eta, elapsed time.Duration, bytesDone, totalSize int64, useColor bool) string {
 	return renderSummaryWidth(completed, total, speedBps, eta, elapsed, bytesDone, totalSize, useColor, 0, BarWidth)
@@ -178,20 +180,57 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 		leftColored = string(colorGreen) + leftText + string(colorReset)
 	}
 
+	// When EVERY task has finished, "0 B/s  ETA ?" is pure noise: nothing is
+	// in flight, so the right block carries just the wall-clock total.
+	allDone := total > 0 && completed >= total
+
 	// Full right block (right-aligned on a TTY): <speed>  ETA <eta>  +<elapsed>
 	// [bar]  <pct>. The aggregate bytes are deliberately NOT here — with the
 	// 30-cell bar, speed, ETA and elapsed the line would exceed 120 columns;
 	// the bytes move to the compact tier, and the per-file lines already carry
 	// each file's done/total. Colours: speed yellow (live), ETA/elapsed grey
 	// (secondary), bar its pacman colours, percent green (done).
-	right := fmt.Sprintf("%s  ETA %s", sp, etaStr)
-	if elStr != "" {
-		right += "  " + elStr
+	var right string
+	if !allDone {
+		right = sp + "  ETA " + etaStr
 	}
-	right += fmt.Sprintf("  [%s]  %s", bar, pctColored)
+	if elStr != "" {
+		if right != "" {
+			right += "  "
+		}
+		right += elStr
+	}
+	if right != "" {
+		right += "  "
+	}
+	right += fmt.Sprintf("[%s]  %s", bar, pctColored)
 	if useColor {
-		right = strings.Replace(right, sp, string(colorYellow)+sp+string(colorReset), 1)
-		right = strings.Replace(right, elStr, string(colorCyan)+elStr+string(colorReset), 1)
+		if !allDone {
+			right = strings.Replace(right, sp, string(colorYellow)+sp+string(colorReset), 1)
+		}
+		if elStr != "" {
+			right = strings.Replace(right, elStr, string(colorCyan)+elStr+string(colorReset), 1)
+		}
+	}
+
+	// All-done summary: nothing is in flight, so don't right-align a tiny
+	// block into a desert of spaces on wide terminals. Left-attach the whole
+	// result line instead — it reads like a completion report:
+	// "Total: 2/2 completed  140 MiB/140 MiB  +00:00:33  [--------]  100%".
+	if allDone && termWidth > 0 {
+		line := leftColored
+		if bytesStr != "" && totalSize > 0 {
+			line += "  " + bytesStr
+		}
+		if elStr != "" {
+			line += "  " + elStr
+		}
+		line += fmt.Sprintf("  [%s]  %s", bar, pctColored)
+		if displayWidth(line) <= termWidth {
+			return line
+		}
+		// Too wide here (narrow terminal): fall through to the adaptive
+		// tiers below instead of collapsing to the bare percent.
 	}
 
 	if termWidth > 0 {
@@ -217,7 +256,14 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 		return pctColored
 	}
 
-	// Fixed-width fallback (non-TTY, tests)
+	// Fixed-width fallback (non-TTY, tests). All-done drops the dead speed/
+	// ETA segments, same as the TTY block.
+	if allDone {
+		if useColor {
+			return fmt.Sprintf("%s  %s  [%s]  %s", leftColored, elStr, bar, pctColored)
+		}
+		return fmt.Sprintf("%s  %s  [%s]  %s", leftText, elStr, bar, pctCol)
+	}
 	if useColor {
 		return fmt.Sprintf("%s  |  %s%s%s  |  ETA %s  %s  [%s]  %s",
 			leftColored, string(colorYellow), sp, string(colorReset), etaStr, elStr, bar, pctColored)

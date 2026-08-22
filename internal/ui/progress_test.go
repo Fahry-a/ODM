@@ -422,6 +422,37 @@ func TestTruncateName_RuneSafe(t *testing.T) {
 
 func countRunes(s string) int { return len([]rune(s)) }
 
+// TestRenderTaskLine_CompletedNoETA pins the finished-file row: a completed
+// task has no remaining time, so the ETA cell renders blank instead of the
+// "?" that FormatDuration(0) paints (which reads like missing data).
+func TestRenderTaskLine_CompletedNoETA(t *testing.T) {
+	v := download.ProgressView{Filename: "f", State: download.StateCompleted, TotalSize: 100, BytesDone: 100}
+	line := renderTaskLine(v, false, -1, 8, BarWidth, layoutFull)
+	if strings.Contains(line, "?") {
+		t.Fatalf("completed row must not show '?' ETA: %q", line)
+	}
+}
+
+// TestRenderSummary_AllDoneDropsSpeedAndETA pins the finished-batch summary:
+// with nothing in flight, "0 B/s ETA ?" is dropped and only +<elapsed> stays.
+func TestRenderSummary_AllDoneDropsSpeedAndETA(t *testing.T) {
+	s := renderSummaryWidth(2, 2, 0, 0, 5*time.Second, 2<<20, 2<<20, false, 120, BarWidth)
+	for _, noise := range []string{"ETA", "?", "B/s"} {
+		if strings.Contains(s, noise) {
+			t.Fatalf("all-done summary must drop %q: %q", noise, s)
+		}
+	}
+	if !strings.Contains(s, "+00:00:05") {
+		t.Fatalf("elapsed missing from all-done summary: %q", s)
+	}
+
+	// Still in flight → speed and ETA stay.
+	live := renderSummaryWidth(1, 2, 44_000_000, 30*time.Second, 5*time.Second, 1<<20, 2<<20, false, 120, BarWidth)
+	if !strings.Contains(live, "ETA") || !strings.Contains(live, "B/s") {
+		t.Fatalf("in-flight summary must keep speed+ETA: %q", live)
+	}
+}
+
 // TestFrameRows_ASCIIOnly pins the row-fit contract's foundation: given ASCII
 // input names, every rendered row is pure printable ASCII plus ANSI codes.
 // Ambiguous-width Unicode glyphs (↓ ✗ ⏸ …) render TWO cells wide on many
@@ -473,6 +504,32 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+// TestFinalFrame_PromotesDroppedRetirement pins the teardown race fix: the
+// terminal snapshot of a finished task can sit unconsumed in the progress
+// channel when RunLoop exits (select picked ctx.Done), leaving the cache with
+// an active-at-100% view. The post-run Frame(nil,nil) must re-derive it —
+// full bytes over a known total IS completion.
+func TestFinalFrame_PromotesDroppedRetirement(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRenderer(&out, false)
+	r.tty = true
+	r.sizeFn = func(io.Writer) (int, int) { return 120, 40 }
+
+	r.Frame([]download.ProgressView{
+		{ID: "t1", Filename: "a", State: download.StateActive, TotalSize: 100, BytesDone: 100, Connections: 1, Speed: 5},
+	}, nil)
+
+	out.Reset()
+	r.Frame(nil, nil)
+	got := out.String()
+	if !strings.Contains(got, "Total: 1/1 completed") {
+		t.Fatalf("final frame must count the byte-complete task as done: %q", got)
+	}
+	if strings.Contains(got, "[x1]") {
+		t.Fatalf("finished task must not show live connections: %q", got)
+	}
 }
 
 // TestEnd_AccountsTrailingNewline pins the ^C duplicate-row fix, part 1: End's
