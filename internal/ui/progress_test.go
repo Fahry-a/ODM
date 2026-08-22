@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +48,7 @@ func TestRenderTaskLine_Format(t *testing.T) {
 		Filename: "linux-cachyos", TotalSize: 120 << 20, Speed: 25 << 20,
 		BytesDone: 86 << 20, Connections: 16, State: download.StateActive, ETA: 5 * time.Second,
 	}
-	line := renderTaskLine(v, false, -1, 0, 20, BarWidth, layoutFull)
+	line := renderTaskLine(v, false, -1, 20, BarWidth, layoutFull)
 	for _, want := range []string{"linux-cachyos", "86.0M/120.0M", "x16", "71%", "%"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %s", want, line)
@@ -88,10 +90,10 @@ func TestRenderTaskLine_FixedColumns(t *testing.T) {
 		return i
 	}
 
-	ref := renderTaskLine(variants[0], false, -1, 0, 20, BarWidth, layoutFull)
+	ref := renderTaskLine(variants[0], false, -1, 20, BarWidth, layoutFull)
 	refBar, refPct, refLen := barIdx(ref), pctIdx(ref), len([]rune(ref))
 	for _, v := range variants {
-		line := renderTaskLine(v, false, -1, 0, 20, BarWidth, layoutFull)
+		line := renderTaskLine(v, false, -1, 20, BarWidth, layoutFull)
 		if got := barIdx(line); got != refBar {
 			t.Fatalf("bar column shifted: want idx %d got %d\n  ref: %q\n  got: %q", refBar, got, ref, line)
 		}
@@ -123,7 +125,7 @@ func TestRenderTaskLine_WideRuneNameStaysInBudget(t *testing.T) {
 		ETA:         5 * time.Second,
 	}
 	const nameW = 20
-	line := renderTaskLine(v, false, -1, 0, nameW, BarWidth, layoutFull)
+	line := renderTaskLine(v, false, -1, nameW, BarWidth, layoutFull)
 	want := nameW + infoBlockWidthFor(BarWidth)
 	if d := displayWidth(line); d != want {
 		t.Fatalf("line display width %d, want %d\n%q", d, want, line)
@@ -247,22 +249,22 @@ func TestRenderTaskLine_StatusGlyph(t *testing.T) {
 		state download.TaskState
 		want  string
 	}{
-		{download.StateActive, "\u2193"},    // ↓
-		{download.StateRetrying, "\u21bb"},  // ↻
-		{download.StateError, "\u2717"},     // ✗
-		{download.StateCompleted, "\u2713"}, // ✓
-		{download.StatePaused, "\u23f8"},    // ⏸
-		{download.StateQueued, "\u2026"},    // …
+		{download.StateActive, ">"},
+		{download.StateRetrying, "!"},
+		{download.StateError, "x"},
+		{download.StateCompleted, "+"},
+		{download.StatePaused, "|"},
+		{download.StateQueued, "."},
 	}
 	for _, tc := range cases {
 		v := download.ProgressView{Filename: "f", State: tc.state, TotalSize: 100, BytesDone: 10}
-		line := renderTaskLine(v, false, -1, 0, 8, BarWidth, layoutFull)
+		line := renderTaskLine(v, false, -1, 8, BarWidth, layoutFull)
 		if !strings.Contains(line, tc.want) {
 			t.Fatalf("state %v: line missing glyph %q: %q", tc.state, tc.want, line)
 		}
 	}
 	// The glyph prefix must be exactly 2 display cells (glyph + space).
-	line := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: 100, BytesDone: 10}, false, -1, 0, 8, BarWidth, layoutFull)
+	line := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: 100, BytesDone: 10}, false, -1, 8, BarWidth, layoutFull)
 	if d := displayWidth(line[:strings.Index(line, "f")]); d != colGlyph {
 		t.Fatalf("glyph column is %d cells, want %d: %q", d, colGlyph, line)
 	}
@@ -271,8 +273,8 @@ func TestRenderTaskLine_StatusGlyph(t *testing.T) {
 // TestRenderTaskLine_ErrorBadge pins the trailing error badge: it appears
 // only when Errors > 0, after the percent, so the common line is unchanged.
 func TestRenderTaskLine_ErrorBadge(t *testing.T) {
-	ok := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: 100, BytesDone: 10}, false, -1, 0, 8, BarWidth, layoutFull)
-	bad := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateError, TotalSize: 100, BytesDone: 10, Errors: 3}, false, -1, 0, 8, BarWidth, layoutFull)
+	ok := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: 100, BytesDone: 10}, false, -1, 8, BarWidth, layoutFull)
+	bad := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateError, TotalSize: 100, BytesDone: 10, Errors: 3}, false, -1, 8, BarWidth, layoutFull)
 	if strings.Contains(ok, " e") {
 		t.Fatalf("error-free line must not carry a badge: %q", ok)
 	}
@@ -288,7 +290,7 @@ func TestRenderTaskLine_ErrorBadge(t *testing.T) {
 // TestRenderTaskLine_SizelessPct pins the honest percent: a stream with no
 // known total shows "?" instead of a misleading 0%.
 func TestRenderTaskLine_SizelessPct(t *testing.T) {
-	line := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: -1, BytesDone: 100}, false, -1, 0, 8, BarWidth, layoutFull)
+	line := renderTaskLine(download.ProgressView{Filename: "f", State: download.StateActive, TotalSize: -1, BytesDone: 100}, false, -1, 8, BarWidth, layoutFull)
 	if !strings.Contains(line, "?") {
 		t.Fatalf("sizeless line must show the unknown percent: %q", line)
 	}
@@ -301,7 +303,7 @@ func TestRenderTaskLine_SizelessPct(t *testing.T) {
 // line is the percent alone, right-aligned into the available width.
 func TestRenderTaskLine_PctOnly(t *testing.T) {
 	v := download.ProgressView{Filename: "this-name-cannot-fit", State: download.StateActive, TotalSize: 100, BytesDone: 50}
-	line := renderTaskLine(v, false, -1, 0, 9, 0, layoutPct)
+	line := renderTaskLine(v, false, -1, 9, 0, layoutPct)
 	if d := displayWidth(line); d != 9 {
 		t.Fatalf("pct-only line must fill the 9-cell slot, got %d: %q", d, line)
 	}
@@ -327,7 +329,7 @@ func pctIdx(line string) int {
 func TestRenderSummary_DegradesTiny(t *testing.T) {
 	for _, w := range []int{60, 30, 20, 10, 6, 4} {
 		barW, _, _, _ := layoutFor(w)
-		s := RenderSummaryWidth(1, 2, 44_000_000, 32*time.Second, 0, 750<<20, 1<<30, false, w, barW, 0)
+		s := RenderSummaryWidth(1, 2, 44_000_000, 32*time.Second, 0, 750<<20, 1<<30, false, w, barW)
 		if d := displayWidth(s); d > w {
 			t.Fatalf("width %d: summary %d cells too wide: %q", w, d, s)
 		}
@@ -419,6 +421,160 @@ func TestTruncateName_RuneSafe(t *testing.T) {
 }
 
 func countRunes(s string) int { return len([]rune(s)) }
+
+// TestFrameRows_ASCIIOnly pins the row-fit contract's foundation: given ASCII
+// input names, every rendered row is pure printable ASCII plus ANSI codes.
+// Ambiguous-width Unicode glyphs (↓ ✗ ⏸ …) render TWO cells wide on many
+// terminals while displayWidth counts one — each such row silently exceeds
+// the terminal width, wraps onto an extra physical row, and shatters the
+// "cursor-up N rows" redraw contract into duplicated task lines after ^C.
+// ASCII cannot misrender anywhere.
+func TestFrameRows_ASCIIOnly(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRenderer(&out, false)
+	r.tty = true
+	r.useColor = true // worst case: ANSI codes interleaved with content
+	r.sizeFn = func(io.Writer) (int, int) { return 120, 40 }
+
+	view := []download.ProgressView{
+		{ID: "t1", Filename: "a.zip", State: download.StateActive, TotalSize: 100, BytesDone: 10},
+		{ID: "t2", Filename: "b.zip", State: download.StatePaused, TotalSize: 100, BytesDone: 50},
+		{ID: "t3", Filename: "c.zip", State: download.StateError, TotalSize: 100, BytesDone: 0, Errors: 2},
+	}
+	lines := r.composeLines(view, aggregate(view))
+	if len(lines) < 4 {
+		t.Fatalf("expected task rows + summary, got %d", len(lines))
+	}
+	for i, l := range lines {
+		for _, ru := range stripANSI(l) {
+			if ru > 127 {
+				t.Fatalf("row %d contains non-ASCII rune %q (%U): %q", i, ru, ru, l)
+			}
+		}
+	}
+}
+
+// stripANSI removes CSI escape sequences so width/content assertions see only
+// visible characters.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' {
+			for ; i < len(s); i++ {
+				c := s[i]
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+					i++
+					break
+				}
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// TestEnd_AccountsTrailingNewline pins the ^C duplicate-row fix, part 1: End's
+// trailing newline consumes a screen row, so lastLines must grow by one — the
+// caller's post-End final frame then cursor-ups over the old frame AND the
+// blank row, and the redraw starts at the original top row instead of leaving
+// the previous frame's first task line stranded above (the duplicated row).
+func TestEnd_AccountsTrailingNewline(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRenderer(&out, false)
+	r.tty = true
+	r.sizeFn = func(io.Writer) (int, int) { return 120, 40 }
+
+	r.Frame([]download.ProgressView{
+		{ID: "t1", Filename: "a", State: download.StateActive, TotalSize: 100, BytesDone: 10},
+	}, nil)
+	if r.lastLines != 2 { // task + summary
+		t.Fatalf("frame lastLines = %d, want 2", r.lastLines)
+	}
+
+	out.Reset()
+	r.End()
+	if r.lastLines != 3 {
+		t.Fatalf("after End lastLines = %d, want 3 (rows + newline row)", r.lastLines)
+	}
+
+	r.Frame(nil, nil) // main.go's final frame
+	if n := strings.Count(out.String(), "\x1b[A"); n != 3 {
+		t.Fatalf("final frame should cursor-up 3 rows (old rows + blank), did %d", n)
+	}
+}
+
+// TestRunLoop_EndBeforeDone pins part 2 of the teardown fix: RunLoop's defers
+// run LIFO, so End() must complete BEFORE close(done). main waits on done and
+// immediately draws the final frame — if the cursor restore were still pending,
+// the two writers would interleave escape sequences. Observable contract: by
+// the time done closes, the cursor-show sequence is already in the output.
+func TestRunLoop_EndBeforeDone(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRenderer(&out, false)
+	r.tty = true
+	r.sizeFn = func(io.Writer) (int, int) { return 120, 40 }
+
+	snap := make(chan []download.ProgressView, 1)
+	qsnap := make(chan []download.ProgressView, 1)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.RunLoop(ctx, time.Hour, snap, qsnap, done)
+
+	cancel()
+	<-done
+	if !strings.Contains(out.String(), ansiCursorShow) {
+		t.Fatal("cursor restore must be flushed before done closes (End before close(done))")
+	}
+}
+
+// TestInterject_FrameSafeLog pins the ^C duplicate-output fix: an engine log
+// line printed while the renderer owns a TTY screen must erase the frame,
+// print the line, and redraw the frame — never leave stale rows that the next
+// frame's cursor-up can't reach.
+func TestInterject_FrameSafeLog(t *testing.T) {
+	var out bytes.Buffer
+	r := NewRenderer(&out, false)
+	r.tty = true
+	r.sizeFn = func(io.Writer) (int, int) { return 120, 40 }
+
+	r.Frame([]download.ProgressView{
+		{ID: "t1", Filename: "a", State: download.StateActive, TotalSize: 100, BytesDone: 10},
+	}, nil)
+
+	out.Reset()
+	r.Interject("2026/08/22 INFO: resuming a.bin: 10 bytes already written\n")
+
+	got := out.String()
+	// The frame rows were cleared before the line was printed...
+	if !strings.Contains(got, "\x1b[A\x1b[2K") {
+		t.Fatalf("interject must erase the live frame first; got %q", got)
+	}
+	if !strings.Contains(got, "resuming a.bin") {
+		t.Fatalf("log line missing from output: %q", got)
+	}
+	// ...and the task + summary rows were redrawn underneath it.
+	for _, want := range []string{"a", "Total: 0/1 completed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("frame not redrawn after interject (missing %q): %q", want, got)
+		}
+	}
+	if strings.Count(got, "Total:") != 1 {
+		t.Fatalf("expected exactly one summary row after interject, got %q", got)
+	}
+
+	// The bookkeeping stays consistent: a subsequent frame must cursor-up over
+	// exactly the redrawn rows (task + summary = 2), leaving the log line
+	// above intact.
+	out.Reset()
+	r.Frame([]download.ProgressView{
+		{ID: "t1", Filename: "a", State: download.StateActive, TotalSize: 100, BytesDone: 20},
+	}, nil)
+	if n := strings.Count(out.String(), "\x1b[A"); n != 2 {
+		t.Fatalf("next frame should cursor-up 2 rows, did %d: %q", n, out.String())
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Bug §3.1 — vanished completed task is retained; §3.2 — no double count.
@@ -513,13 +669,10 @@ func TestAggregate_CountsUniqueIDs(t *testing.T) {
 func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 	width := 20
 	seen := map[string]bool{}
-	// The bounce position is FRAME-driven (indeterminateTick per render), the
-	// pacman face is TIME-driven (faceTick = wall-clock seconds). These are two
-	// independent axes; this test drives the bounce by frame and the face by
-	// simulated wall-clock seconds that advance in lock-step with frames only
-	// at the nominal 100ms cadence (frame/pacFaceInterval).
+	// The bounce position is FRAME-driven (indeterminateTick per render); the
+	// face size rides on the same position (big on a dot cell, small between).
 	posAt := func(frame int) string {
-		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), int64(frame/pacFaceInterval), "")
+		return BarIndeterminate(0, -1, width, bouncePosition(frame, width), "")
 	}
 	// Collect a handful of distinct frames; the bounce position must change.
 	for i := range 8 {
@@ -543,66 +696,57 @@ func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
 		t.Fatalf("bounce must reverse direction at the turn: %q == %q", posAt(width-1), posAt(width))
 	}
 	// The bounce is a triangle wave of period 2*(width-1); one period later the
-	// slot repeats. The face animation has its own wall-clock period
-	// (2*pacFaceInterval seconds); at the nominal 100ms cadence that is
-	// 20*pacFaceInterval frames, so the combined frame period is
-	// LCM(2*(width-1), 20*pacFaceInterval).
-	combinedPeriod := lcm(2*(width-1), 20*pacFaceInterval)
-	if got, want := posAt(combinedPeriod), posAt(0); got != want {
-		t.Fatalf("bounce should be periodic with combined period %d: got %q want %q", combinedPeriod, got, want)
+	// slot repeats exactly.
+	bouncePeriod := 2 * (width - 1)
+	if got, want := posAt(bouncePeriod), posAt(0); got != want {
+		t.Fatalf("bounce should be periodic with period %d: got %q want %q", bouncePeriod, got, want)
 	}
 	// Sanity: static (pos -1) still lands pacman in the middle (not leftmost)
 	// and contains both face and dots.
-	static := BarIndeterminate(0, -1, width, -1, 0, "")
-	if strings.HasPrefix(static, "c") || !strings.Contains(static, "c") || !strings.Contains(static, "o") {
+	static := BarIndeterminate(0, -1, width, -1, "")
+	if strings.HasPrefix(static, "c") || (!strings.Contains(static, "c") && !strings.Contains(static, "C")) || !strings.Contains(static, "o") {
 		t.Fatalf("static indeterminate layout malformed: %q", static)
 	}
 }
 
-// lcm computes the least common multiple of a and b.
-func lcm(a, b int) int {
-	if a == 0 || b == 0 {
-		return 0
-	}
-	return a * b / gcd(a, b)
-}
-
-func gcd(a, b int) int {
-	for b != 0 {
-		a, b = b, a%b
-	}
-	return a
-}
-
-// TestBarIndeterminate_FaceAnimation tests that the pacman face animates
-// between 'c' (lowercase) and 'C' (uppercase) every pacFaceInterval wall-clock
-// seconds — INDEPENDENT of the render frame count, so a burst of frames (a
-// resize storm, an event flush) can't make the face flicker faster.
-func TestBarIndeterminate_FaceAnimation(t *testing.T) {
+// TestBarIndeterminate_EatSyncedFace pins the ILoveCandy eat animation: the
+// face is BIG ('C') exactly when pacman sits on a dot cell — dots occupy
+// absolute even positions in barLine — and small ('c') while travelling
+// between dots. The size follows the EAT moment, not the wall clock.
+func TestBarIndeterminate_EatSyncedFace(t *testing.T) {
 	width := 30
-	// faceTick 0 → cycle 0 → 'c'.
-	bar0 := BarIndeterminate(0, -1, width, -1, 0, "")
-	if !strings.Contains(bar0, "c") {
-		t.Fatalf("faceTick 0 should contain lowercase 'c', got %q", bar0)
+	total := int64(300)
+
+	// done such that eaten = width/10 = 3 cells → face at cell 3 (odd,
+	// between dots) → small 'c'.
+	small := BarIndeterminate(30, total, width, -1, "")
+	faceIdx := strings.IndexAny(small, "cC")
+	if faceIdx != 3 {
+		t.Fatalf("expected pacman at cell 3 for 10%% of a 30-cell bar, got %q", small)
 	}
-	// faceTick pacFaceInterval → cycle 1 → 'C'.
-	bar1 := BarIndeterminate(0, -1, width, -1, pacFaceInterval, "")
-	if !strings.Contains(bar1, "C") {
-		t.Fatalf("faceTick %d should contain uppercase 'C', got %q", pacFaceInterval, bar1)
+	if small[faceIdx] != 'c' {
+		t.Fatalf("pacman between dots must be small 'c', got %q", small)
 	}
-	// faceTick 2*pacFaceInterval → cycle 0 → 'c' again.
-	bar2 := BarIndeterminate(0, -1, width, -1, 2*pacFaceInterval, "")
-	if !strings.Contains(bar2, "c") {
-		t.Fatalf("faceTick %d should contain lowercase 'c' again, got %q", 2*pacFaceInterval, bar2)
+
+	// done such that eaten = width/2 = 15 cells → face at cell 15 (odd)... use
+	// an even landing instead: 20% of width → eaten=6 (even, dot cell) → big.
+	big := BarIndeterminate(60, total, width, -1, "")
+	faceIdx = strings.IndexAny(big, "cC")
+	if faceIdx != 6 {
+		t.Fatalf("expected pacman at cell 6 for 20%% of a 30-cell bar, got %q", big)
 	}
-	// Critical: MANY frames rendered within the same second must NOT flip the
-	// face — the animation is wall-clock-bound, not frame-bound. A stream of
-	// 1000 frames all within faceTick 0 still shows 'c'.
-	for f := 0; f < 1000; f++ {
-		b := BarIndeterminate(0, -1, width, -1, 0, "")
-		if strings.Contains(b, "C") {
-			t.Fatalf("frame burst within the same second must not flip the face (got %q at frame %d)", b, f)
-		}
+	if big[faceIdx] != 'C' {
+		t.Fatalf("pacman on top of a dot must be big 'C', got %q", big)
+	}
+
+	// Indeterminate bounce honours the same rule: even position → big.
+	atEven := BarIndeterminate(0, -1, width, 4, "")
+	if !strings.Contains(atEven, "C") {
+		t.Fatalf("bouncing pacman on even cell 4 must be big 'C', got %q", atEven)
+	}
+	atOdd := BarIndeterminate(0, -1, width, 5, "")
+	if !strings.Contains(atOdd, "c") || strings.Contains(atOdd, "C") {
+		t.Fatalf("bouncing pacman on odd cell 5 must be small 'c', got %q", atOdd)
 	}
 }
 

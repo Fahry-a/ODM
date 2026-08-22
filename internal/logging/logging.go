@@ -81,6 +81,16 @@ func New(level Level, logFile string) (*Logger, error) {
 	return l, nil
 }
 
+// SetOutput redirects the primary stream (default stderr). The CLI wires this
+// to the UI renderer's frame-safe printer during an interactive run so engine
+// logs can't corrupt the live progress frame; the --log file mirror is
+// unaffected. Safe for concurrent use.
+func (l *Logger) SetOutput(w io.Writer) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.from.SetOutput(w)
+}
+
 // logf fans a formatted message to the primary writer (and the file mirror) if
 // the level passes the threshold.
 func (l *Logger) logf(lvl Level, format string, args ...any) {
