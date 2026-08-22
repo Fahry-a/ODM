@@ -256,6 +256,13 @@ func run(argv []string) error {
 	// ~100ms cadence the PRD calls out (§11.1 "throttled progress"). The
 	// scheduler's ProgressCB pushes into it.
 	r := ui.NewRenderer(os.Stdout, o.Quiet)
+	// While the renderer owns a TTY screen, engine logs must go through it:
+	// a bare stderr write between frames shifts the terminal cursor, the next
+	// frame's cursor-up under-counts, and stale rows survive as duplicated
+	// task lines (the classic ^C mess). Quiet runs keep plain stderr.
+	if r.Live() {
+		logger.SetOutput(ui.InterjectWriter(r))
+	}
 	snap := make(chan []download.ProgressView, 16)
 	qSnap := make(chan []download.ProgressView, 16)
 	progCB := func(live, queued []download.ProgressView) {

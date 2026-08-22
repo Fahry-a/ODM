@@ -14,29 +14,23 @@ import (
 // BarWidth is the visual width of the pacman bar (in cells) on wide terminals.
 const BarWidth = 30
 
-// pacFace is the pacman icon — the "c" from ILoveCandy in the original Arch
-// animation; rendered as "c" per the PRD §8 spec text.
+// pacFace is the pacman icon between dots — lowercase 'c', the "small,
+// mouth-closed" frame of the original Arch ILoveCandy animation.
 const pacFace = "c"
 
-// pacFaceAlt is the alternate pacman face for the expand/shrink animation
-// (uppercase 'C' every second).
+// pacFaceAlt is the pacman icon at the moment it lands on a dot — uppercase
+// 'C', the "big, mouth-open" eating frame. Which one shows is POSITION-driven:
+// the remaining dots sit on absolute even cells (see barLine), so an even
+// pacman position means it is on top of a dot (big), an odd one means it is
+// moving between dots (small). Tying the size to the eat moment instead of a
+// wall-clock flip makes the head visibly swallow each dot as it passes.
 const pacFaceAlt = "C"
-
-// pacFaceInterval is the wall-clock interval (in seconds) each face state
-// lasts, so the expand/shrink cycle (c→C→c) takes 2×faceInterval —
-// "setiap detik huruf c berubah besar lalu kecil". The face animation is
-// TIME-driven, not frame-driven: tying it to the render frame counter made it
-// speed up when frames arrive faster than the ~100ms cadence (a SIGWINCH
-// resize storm, an event burst), so the face would flicker gede-kecil rapidly.
-// faceTick below is wall-clock seconds, so the cycle stays ~1s per state no
-// matter how many frames render in between.
-const pacFaceInterval = 1
 
 // Bar renders one pacman progress bar into a fixed-width string. `done`/`total`
 // are done/total bytes; we compute the fraction eaten and draw:
 //
 //	eaten region  → "-" (blank/dashes)
-//	pacman face   → "c" or "C" (animates every second)
+//	pacman face   → "c" between dots, "C" on top of a dot (eating)
 //	remaining     → "o o o …" (dots with spaces between)
 //
 // The bar is always exactly `width` display cells: dashes and face take 1 cell
@@ -51,30 +45,18 @@ const pacFaceInterval = 1
 //     pos<0 the bar falls back to the static centre layout Bar() stored before
 //     (kept for callers/tests that don't drive the tick).
 func Bar(done, total int64, width int) string {
-	return BarIndeterminate(done, total, width, -1, 0, "")
+	return BarIndeterminate(done, total, width, -1, "")
 }
 
 // BarIndeterminate is Bar with an explicit pacman position for the sizeless
 // (indeterminate) case. pos==-1 means "no animation slot provided" and the
 // static centred layout is used (back-compat with the pure Bar() contract the
-// tests pin). pos is clamped to [0,width-1]. faceTick is the wall-clock time
-// in seconds (see faceIntervalFor); a negative value disables the face
-// animation (static 'c'), which is what the summary's Bar() uses. prefix is
-// rendered before the bar content (e.g. "x4 " for connection count) and is
-// included in the width budget.
-func BarIndeterminate(done, total int64, width int, pos int, faceTick int64, prefix string) string {
+// tests pin). pos is clamped to [0,width-1]. prefix is rendered before the bar
+// content (e.g. "x4 " for connection count) and is included in the width
+// budget.
+func BarIndeterminate(done, total int64, width int, pos int, prefix string) string {
 	if width < 2 {
 		width = 2
-	}
-
-	// Determine which pacman face to show (animates every pacFaceInterval
-	// seconds of wall-clock time, independent of render cadence).
-	face := pacFace
-	if faceTick >= 0 {
-		cycle := (faceTick / pacFaceInterval) % 2
-		if cycle == 1 {
-			face = pacFaceAlt
-		}
 	}
 
 	if total <= 0 {
@@ -82,7 +64,7 @@ func BarIndeterminate(done, total int64, width int, pos int, faceTick int64, pre
 		// position we honour it; otherwise pacman parks at the middle.
 		if pos < 0 {
 			half := width / 2
-			return barLine(half, face, width, prefix)
+			return barLine(half, width, prefix)
 		}
 		if pos >= width-1 {
 			pos = width - 1
@@ -90,7 +72,7 @@ func BarIndeterminate(done, total int64, width int, pos int, faceTick int64, pre
 		if pos < 0 {
 			pos = 0
 		}
-		return barLine(pos, face, width, prefix)
+		return barLine(pos, width, prefix)
 	}
 	if done >= total {
 		return strings.Repeat("-", width) // fully eaten
@@ -100,17 +82,24 @@ func BarIndeterminate(done, total int64, width int, pos int, faceTick int64, pre
 	if eaten >= width {
 		eaten = width - 1
 	}
-	return barLine(eaten, face, width, prefix)
+	return barLine(eaten, width, prefix)
 }
 
 // barLine renders: prefix + `eaten` dashes + face + remaining fill from a
 // fixed alternating dot pattern (first position after face is always 'o',
 // then space, then 'o', etc.), padded to exactly `width` display cells.
+// The face size follows the eat moment: dots sit on absolute even cells, so
+// an even pacman position means it is swallowing a dot ('C', big) and an odd
+// one means it is travelling between dots ('c', small).
 // Unlike the previous re-spaced approach (which recomputed spacedDots from
 // the remaining width every frame, causing dots to shift right), this keeps
 // the same alternating sequence anchored to the face position so dots never
 // jump — they shift at most 1 cell per frame as the face advances.
-func barLine(eaten int, face string, width int, prefix string) string {
+func barLine(eaten int, width int, prefix string) string {
+	face := pacFace // small: moving between dots
+	if eaten%2 == 0 {
+		face = pacFaceAlt // big: on top of a dot — eating it
+	}
 	pLen := len([]rune(prefix))
 	avail := width - pLen
 	if avail < 1 {

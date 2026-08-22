@@ -69,7 +69,7 @@ func TestRenderTaskLine_SuperSmall(t *testing.T) {
 	}
 	for _, width := range []int{120, 80, 66, 60, 45, 40, 30, 25, 20, 15, 12, 11, 10, 8, 5, 4} {
 		barW, nameW, _, layout := layoutFor(width)
-		line := renderTaskLine(v, false, -1, 0, nameW, barW, layout)
+		line := renderTaskLine(v, false, -1, nameW, barW, layout)
 		if d := displayWidth(line); d > width {
 			t.Errorf("width %d: line %d cells too wide: %q", width, d, line)
 		}
@@ -93,7 +93,7 @@ func TestRenderTaskLine_FitsNarrowWidths(t *testing.T) {
 	}
 	for _, width := range []int{120, 80, 60, 40, 30, 20} {
 		barW, nameW, _, layout := layoutFor(width)
-		line := renderTaskLine(v, false, -1, 0, nameW, barW, layout)
+		line := renderTaskLine(v, false, -1, nameW, barW, layout)
 		if d := displayWidth(line); d > width {
 			t.Errorf("width %d: line %d cells too wide: %q", width, d, line)
 		}
@@ -111,7 +111,7 @@ func TestRenderTaskLine_CompactKeepsPctAndName(t *testing.T) {
 		Filename: "file.tar.zst", TotalSize: 100, Speed: 5,
 		BytesDone: 50, Connections: 4, State: download.StateActive, ETA: time.Second,
 	}
-	line := renderTaskLine(v, true, -1, 0, 6, 0, layoutNamePct)
+	line := renderTaskLine(v, true, -1, 6, 0, layoutNamePct)
 	if !strings.Contains(line, "50%") {
 		t.Fatalf("barless line must show percent: %q", line)
 	}
@@ -253,7 +253,7 @@ func TestNonTTYSummary_UnchangedLayout(t *testing.T) {
 func TestRenderSummary_FitsAllWidths(t *testing.T) {
 	for _, w := range []int{120, 80, 72, 60, 45, 30, 20, 10, 4} {
 		barW, _, _, _ := layoutFor(w)
-		got := RenderSummaryWidth(0, 2, 44_000_000, 32*time.Second, 0, 24<<20, 1<<30, false, w, barW, 0)
+		got := RenderSummaryWidth(0, 2, 44_000_000, 32*time.Second, 0, 24<<20, 1<<30, false, w, barW)
 		if d := displayWidth(got); d > w {
 			t.Errorf("width %d: summary %d cells too wide: %q", w, d, got)
 		}

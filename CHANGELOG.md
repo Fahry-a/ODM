@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Mid-download range-ignore corruption is fully closed** — a ranged chunk
+  request answered `200` (server stops honouring Range mid-flight) is retried
+  as a transient error instead of being written at the chunk's offset, and a
+  `206` whose `Content-Range` start mismatches the requested offset is now
+  rejected the same way. Regression tests cover both (honest-206-then-200s,
+  lying-206). (`internal/download/task.go`, `internal/download/rangeignore_test.go`)
+- **^C no longer duplicates task lines** — engine logs (`resuming …`,
+  retry warnings) are routed through the renderer's frame-safe `Interject`
+  printer while a TUI run owns the screen; a bare stderr write between frames
+  used to shift the terminal cursor so stale frame rows survived as duplicate
+  lines. (`cmd/odm/main.go`, `internal/ui/progress.go`, `internal/logging/logging.go`)
+- **Cancelled tasks render as paused, not errors** — after ^C/SIGTERM a task's
+  final state is `|` (grey, partial bytes kept) instead of a red error glyph,
+  matching the honest cancelled summary. (`internal/download/task.go`)
+
+### Changed
+- **Pacman face is eat-synced** — the head shows big `C` exactly when it lands
+  on a dot cell and small `c` while travelling between dots (position-driven,
+  ILoveCandy-style), replacing the wall-clock c↔C flip every second.
+  (`internal/ui/bar.go`)
+- **Status glyphs are pure ASCII** (`> ! x + | .`) — Unicode marks like ↓ ✗ ⏸
+  are East-Asian-Width ambiguous: some terminals render them two cells wide
+  while the width math counts one, so rows silently wrap onto an extra
+  physical line at ^C (when every task flips state at once) and the redraw
+  contract shatters into duplicated task lines. Frame erases also start from
+  a pinned column (`\r`). Pinned by `TestFrameRows_ASCIIOnly`.
+  (`internal/ui/summary.go`, `internal/ui/render.go`, `internal/ui/progress.go`)
+
 ## [1.4.2] - 2026-08-17
 
 ### Added

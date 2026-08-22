@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -720,6 +721,15 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	t.adjustDone = true
 	t.adjustMu.Unlock()
 
+	// A cancelled context (^C / SIGTERM) is not an error: partial bytes are
+	// preserved and --continue resumes. Paint the task as paused instead of
+	// the red error glyph so the final screen matches the "cancelled" summary.
+	if err := ctx.Err(); err != nil {
+		t.setState(StatePaused)
+		t.persistControl()
+		t.emitFinal(progressSink)
+		return err
+	}
 	if t.errors.Load() > 0 {
 		t.setState(StateError)
 		// Persist completed chunks before exiting so partial progress
@@ -940,6 +950,19 @@ func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.Ca
 	return context.WithTimeout(ctx, tmo)
 }
 
+// contentRangeStartsWith reports whether a Content-Range header value
+// ("bytes S-E/T") declares S == want. A 206 without a parseable start is
+// treated as hostile — RFC 9110 requires the header on single-range 206s.
+func contentRangeStartsWith(cr string, want int64) bool {
+	rest, ok := strings.CutPrefix(cr, "bytes ")
+	if !ok {
+		return false
+	}
+	startStr, _, _ := strings.Cut(rest, "-")
+	start, err := strconv.ParseInt(startStr, 10, 64)
+	return err == nil && start == want
+}
+
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress. h receives every
 // byte written to disk so the caller can record the chunk's SHA-256 on success.
@@ -980,6 +1003,13 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	if resp.StatusCode != http.StatusPartialContent {
 		transport.SkipBody(resp.Body)
 		return fmt.Errorf("server ignored range request at offset %d (status %d)", absStart, resp.StatusCode)
+	}
+	// A 206 whose Content-Range doesn't start at the requested offset is the
+	// same corruption vector as a 200: the bytes belong somewhere else on
+	// disk. Verify before a single byte is written.
+	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, absStart) {
+		transport.SkipBody(resp.Body)
+		return fmt.Errorf("server sent wrong range for offset %d (Content-Range %q)", absStart, cr)
 	}
 
 	body := resp.Body

@@ -9,9 +9,11 @@
 //
 //	<glyph> <file_name>  <size>  <speed>  <ETA>  [x<N> [bar]]  <pct>% [e<N>]
 //
-// The glyph column is a one-cell status symbol (↓ active, ↻ retrying, ✗ error,
-// ✓ completed, ⏸ paused, … queued) so a glance tells the state even without
-// colour. The [x<N>] connection count sits inside the bar brackets, pacman
+// The glyph column is a one-cell ASCII status symbol (> active, ! retrying,
+// x error, + completed, | paused, . queued) so a glance tells the state even
+// without colour — ASCII on purpose: ambiguous-width Unicode glyphs render
+// two cells wide on some terminals and break the row-fit contract (see
+// statusGlyph). The [x<N>] connection count sits inside the bar brackets, pacman
 // style. An error count badge (e<N>) appears after the percent only when the
 // task actually errored, so the common line never grows. The sizeless
 // (indeterminate) bar animates a position-bounce across frames instead of
@@ -81,13 +83,13 @@ const (
 // columns never shift. A sizeless stream shows "?" for the percent instead of
 // a misleading 0%.
 // indeterminatePos drives the sizeless bar animation; pass -1 for a static
-// (centred) indeterminate bar. faceTick is the wall-clock second counter for
-// the pacman face animation (c/C every pacFaceInterval seconds); see
-// faceIntervalFor. A negative value freezes the face (static 'c').
+// (centred) indeterminate bar. The pacman face size is position-driven (big
+// 'C' on a dot cell, small 'c' between dots — see barLine), so no clock input
+// is needed here.
 //
 // The other layouts shed columns for narrow terminals (see layoutFor); the
 // colouring is applied per layout (no bracket → no bracket colouring).
-func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, faceTick int64, nameWidth int, barWidth int, layout lineLayout) string {
+func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int, nameWidth int, barWidth int, layout lineLayout) string {
 	if nameWidth < 4 && layout != layoutPct {
 		nameWidth = 4
 	}
@@ -135,7 +137,7 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 		connDisplay = connStr + strings.Repeat(" ", colConns-len(connStr))
 	}
 
-	bar := BarIndeterminate(v.BytesDone, v.TotalSize, barWidth, indeterminatePos, faceTick, "")
+	bar := BarIndeterminate(v.BytesDone, v.TotalSize, barWidth, indeterminatePos, "")
 	// Honest percent: "?" for a sizeless stream (no total to measure against),
 	// otherwise the rounded 0..100 with the shared unknownGlyph for weirdness.
 	pctStr := unknownGlyph

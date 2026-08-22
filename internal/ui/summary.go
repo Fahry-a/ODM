@@ -99,20 +99,27 @@ func FormatDuration(d time.Duration) string {
 // statusGlyph returns the one-cell state symbol and its colour for a task.
 // The glyph gives the state at a glance without colour; the colour reinforces
 // it on terminals that support ANSI.
+//
+// The symbols are deliberately plain ASCII. Unicode marks like ↓ ✗ ⏸ are
+// East-Asian-Width "Ambiguous": many terminals render them TWO cells wide
+// while displayWidth counts one, so every such row silently exceeds the
+// terminal width, wraps onto an extra physical row, and breaks the redraw
+// contract ("cursor-up N rows") — the duplicated task lines after ^C. One
+// wrong cell per row is all it takes; ASCII can't misrender anywhere.
 func statusGlyph(v download.ProgressView) (string, Color) {
 	switch v.State {
 	case download.StateActive:
-		return "↓", colorYellow // ↓ downloading
+		return ">", colorYellow // > downloading
 	case download.StateRetrying:
-		return "↻", colorRed // ↻ retrying
+		return "!", colorRed // ! retrying
 	case download.StateError:
-		return "✗", colorRed // ✗ failed
+		return "x", colorRed // x failed
 	case download.StateCompleted:
-		return "✓", colorGreen // ✓ done
+		return "+", colorGreen // + done
 	case download.StatePaused:
-		return "⏸", colorGrey // ⏸ paused
+		return "|", colorGrey // | paused
 	case download.StateQueued:
-		return "…", colorGrey // … waiting
+		return ".", colorGrey // . waiting
 	}
 	return " ", ""
 }
@@ -124,19 +131,17 @@ func statusGlyph(v download.ProgressView) (string, Color) {
 // elapsed ≤ 0 (no clock started, non-TTY) omits the elapsed segment. The bar
 // is the full BarWidth (non-TTY output has no width constraint).
 func RenderSummary(completed, total int, speedBps int64, eta, elapsed time.Duration, bytesDone, totalSize int64, useColor bool) string {
-	return renderSummaryWidth(completed, total, speedBps, eta, elapsed, bytesDone, totalSize, useColor, 0, BarWidth, -1)
+	return renderSummaryWidth(completed, total, speedBps, eta, elapsed, bytesDone, totalSize, useColor, 0, BarWidth)
 }
 
 // RenderSummaryWidth is like RenderSummary but right-aligns the info block to
 // the given terminal width, matching the pacman-style task line layout. barWidth
-// lets the caller shrink the bar on narrow terminals (see layoutFor). faceTick
-// is the wall-clock second counter for the aggregate bar's pacman face; pass a
-// negative value for a static face (legacy/non-animated callers).
-func RenderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int, barWidth int, faceTick int64) string {
-	return renderSummaryWidth(completed, total, speedBps, eta, elapsed, bytesDone, totalSize, useColor, termWidth, barWidth, faceTick)
+// lets the caller shrink the bar on narrow terminals (see layoutFor).
+func RenderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int, barWidth int) string {
+	return renderSummaryWidth(completed, total, speedBps, eta, elapsed, bytesDone, totalSize, useColor, termWidth, barWidth)
 }
 
-func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int, barWidth int, faceTick int64) string {
+func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.Duration, bytesDone, totalSize int64, useColor bool, termWidth int, barWidth int) string {
 	if barWidth < 2 {
 		barWidth = 2
 	}
@@ -152,10 +157,10 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 		pctStr = fmt.Sprintf("%d%%", pct)
 	}
 	pctCol := fitWidth(pctStr, colPct)
-	// The aggregate bar animates its pacman face in step with the per-file bars
-	// (same wall-clock faceTick), so "Total" doesn't sit still while the file
-	// lines' pacmen pulse.
-	bar := BarIndeterminate(bytesDone, totalSize, barWidth, -1, faceTick, "")
+	// The aggregate bar's pacman pulses in step with the per-file bars — the
+	// same position-driven eat animation — so "Total" doesn't sit still while
+	// the file lines' pacmen move.
+	bar := BarIndeterminate(bytesDone, totalSize, barWidth, -1, "")
 	if useColor {
 		bar = colorizeBar(bar, true)
 	}

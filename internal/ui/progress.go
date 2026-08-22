@@ -17,6 +17,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"odm/internal/download"
@@ -142,6 +143,12 @@ type Renderer struct {
 	// so a state change with no byte progress doesn't re-emit a near-identical
 	// line every interval.
 	lastLoggedDoneKey string
+
+	// mu serialises every stdout write (Frame, Begin, End, Interject). The
+	// engine logs through InterjectWriter from task goroutines while RunLoop
+	// frames from its own — without the mutex their escape sequences would
+	// interleave mid-sequence and shred the frame.
+	mu sync.Mutex
 }
 
 // NewRenderer builds a Renderer writing to w. It auto-downgrades to non-TTY
@@ -167,17 +174,79 @@ func NewRenderer(w io.Writer, quiet bool) *Renderer {
 
 // Begin hides the cursor (TTY mode).
 func (r *Renderer) Begin() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.tty {
 		fmt.Fprint(r.w, ansiCursorHide)
 	}
 }
 
 // End shows the cursor again + trailing newline so the shell prompt lands below.
+// The newline consumes one screen row, so lastLines grows by one to match: the
+// caller's next Frame must cursor-up over the blank row too, or the redraw
+// lands one row low and the top row of the previous frame survives on screen
+// (the duplicated task line seen after ^C).
 func (r *Renderer) End() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.tty {
 		fmt.Fprint(r.w, ansiCursorShow)
+		r.lastLines++
 	}
 	fmt.Fprintln(r.w)
+}
+
+// Live reports whether the renderer owns a TTY screen (interactive run, not
+// quiet). The CLI uses it to decide whether engine logs should be routed
+// through InterjectWriter.
+func (r *Renderer) Live() bool { return r.tty && !r.quiet }
+
+// InterjectWriter returns an io.Writer that prints each Write (a logging
+// package emits one entry per Write, newline included) through Renderer.
+// Interject instead of raw stderr — see Interject for why that matters.
+func InterjectWriter(r *Renderer) io.Writer { return interruptWriter{r} }
+
+type interruptWriter struct{ r *Renderer }
+
+func (w interruptWriter) Write(p []byte) (int, error) {
+	w.r.Interject(string(p))
+	return len(p), nil
+}
+
+// Interject prints an out-of-band line (engine log output) without corrupting
+// the live frame: erase the frame rows, print the line, redraw the frame
+// underneath. A bare write between two frames shifts the terminal cursor, so
+// the next Frame's cursor-up under-counts and stale rows survive above the
+// new frame — the duplicated task lines seen on ^C. Routing every engine log
+// through here keeps the renderer the single owner of the screen.
+func (r *Renderer) Interject(line string) {
+	line = strings.TrimRight(line, "\n")
+	if line == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.quiet {
+		return
+	}
+	if !r.tty {
+		fmt.Fprintln(r.w, line)
+		return
+	}
+	// \r first: cursor-up preserves the column, so the erase must start from a
+	// known column. If any foreign write ever left the cursor mid-line, the
+	// redraw would otherwise begin glued to stale row tails.
+	fmt.Fprint(r.w, "\r")
+	for range r.lastLines {
+		fmt.Fprint(r.w, ansiCursorUp+ansiClearLine)
+	}
+	r.lastLines = 0
+	fmt.Fprintln(r.w, line)
+	redrawn := r.composeLines(r.cur.ordered(), aggregate(r.cur.ordered()))
+	for _, l := range redrawn {
+		fmt.Fprintln(r.w, l)
+	}
+	r.lastLines = len(redrawn)
 }
 
 // updateCache merges the frame's live + queued snapshots into r.cur.cache and
@@ -327,6 +396,9 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 		return
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	view := r.updateCache(live, queued)
 	st := aggregate(view)
 
@@ -338,9 +410,26 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 		return
 	}
 
-	// TTY: build lines, truncated to width so wrapping can't desync cursor-up.
-	// Width AND height are re-read per frame: a mid-run resize (usually via
-	// SIGWINCH waking the ticker) is picked up on the very next frame.
+	lines := r.composeLines(view, st)
+	// Move cursor up over the previous frame, clearing each row. \r first so
+	// the erase starts from a known column even if a foreign write ever left
+	// the cursor mid-line.
+	fmt.Fprint(r.w, "\r")
+	for i := 0; i < r.lastLines; i++ {
+		fmt.Fprint(r.w, ansiCursorUp+ansiClearLine)
+	}
+	for _, l := range lines {
+		fmt.Fprintln(r.w, l)
+	}
+	r.lastLines = len(lines)
+	r.indeterminateTick++
+}
+
+// composeLines builds one frame's rows for a TTY: per-file task lines plus
+// the aggregate summary, truncated to terminal width so wrapping can't desync
+// cursor-up accounting. Width AND height are re-read per frame: a mid-run
+// resize is picked up on the very next frame.
+func (r *Renderer) composeLines(view []download.ProgressView, st viewStats) []string {
 	width, height := r.sizeFn(r.w)
 	// Layered degradation for narrow terminals: full columns down to 96 cols,
 	// speed/ETA dropped below 66, bar dropped below 45; under that the line is
@@ -349,17 +438,11 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	lines := make([]string, 0, len(view)+1)
 	hidden := 0
 	pos := bouncePosition(r.indeterminateTick, barW)
-	// faceTick: wall-clock seconds for the pacman face animation, shared by the
-	// per-file bars and the aggregate summary bar so they pulse in step. Being
-	// time-driven (not frame-counter-driven) means a burst of frames — a
-	// SIGWINCH resize storm, an event flush — can't make the face flicker
-	// gede-kecil rapidly; it toggles at most once per pacFaceInterval second.
-	faceTick := nowFn().Unix()
 	elapsed := time.Duration(0)
 	if !r.startedAt.IsZero() {
 		elapsed = nowFn().Sub(r.startedAt)
 	}
-	// Row budget: keep the task list + summary (+ the "N more…" line when
+	// Row budget: keep the task list + summary (+ the "N more..." line when
 	// tasks are cut off) inside the terminal height so the cursor-up count
 	// always matches physical rows. A batch taller than the screen used to
 	// scroll the list and corrupt the next redraw.
@@ -370,7 +453,7 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	if st.total > 0 {
 		rowBudget-- // reserve one row for the summary
 	}
-	rowBudget-- // reserve one row for the "N more…" line when needed
+	rowBudget-- // reserve one row for the "N more..." line when needed
 	if rowBudget < 0 {
 		rowBudget = 0
 	}
@@ -382,29 +465,20 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 			hidden++
 			continue
 		}
-		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), faceTick, nameWidth, barW, layout)
+		line := renderTaskLine(v, r.useColor, sizelessPos(v, pos), nameWidth, barW, layout)
 		lines = append(lines, truncateToWidth(line, width))
 	}
 	// Only show summary when there are tasks — avoids the misleading
 	// "Total: 0/0" before any snapshots arrive.
 	if st.total > 0 {
-		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, elapsed, st.bytesDone, st.totalSize, r.useColor, width, barW, faceTick), width))
+		lines = append(lines, truncateToWidth(RenderSummaryWidth(st.completed, st.total, st.speed, st.maxETA, elapsed, st.bytesDone, st.totalSize, r.useColor, width, barW), width))
 	}
 	// When tasks were cut off the visible list, say so instead of leaving the
 	// user wondering where the rest went. ANSI-free so the width math holds.
 	if hidden > 0 {
-		lines = append(lines, truncateToWidth(fmt.Sprintf("%d more…", hidden), width))
+		lines = append(lines, truncateToWidth(fmt.Sprintf("%d more...", hidden), width))
 	}
-
-	// Move cursor up over the previous frame, clearing each row.
-	for i := 0; i < r.lastLines; i++ {
-		fmt.Fprint(r.w, ansiCursorUp+ansiClearLine)
-	}
-	for _, l := range lines {
-		fmt.Fprintln(r.w, l)
-	}
-	r.lastLines = len(lines)
-	r.indeterminateTick++
+	return lines
 }
 
 // sizelessPos returns the bounce position for a task's indeterminate bar, or -1
@@ -523,7 +597,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 			if !isActive(v) {
 				continue
 			}
-			b.WriteString(renderTaskLine(v, r.useColor, -1, -1, 40, BarWidth, layoutFull))
+			b.WriteString(renderTaskLine(v, r.useColor, -1, 40, BarWidth, layoutFull))
 			b.WriteByte('\n')
 		}
 		b.WriteString(summary)
@@ -552,8 +626,12 @@ func (r *Renderer) RunLoop(ctx context.Context, interval time.Duration,
 ) {
 	r.startedAt = nowFn()
 	r.Begin()
+	// Defers run LIFO: End() must execute BEFORE close(done) — main waits on
+	// done and then immediately draws the final frame, so the cursor restore
+	// has to be finished first or the two writers interleave their escape
+	// sequences (the doubled lines seen on ^C).
+	defer close(done)
 	defer r.End()
-	defer close(done) // after End: main waits until the cursor is restored + trailing newline flushed
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
