@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Finished downloads stop showing a phantom ETA "?"** — a completed task's
+  ETA cell is blank (nothing remains to estimate) and the batch summary drops
+  the `0 B/s  ETA ?` segments once every task is done, leaving only the
+  `+<elapsed>` wall-clock total. (`internal/ui/render.go`, `internal/ui/summary.go`)
 - **Mid-download range-ignore corruption is fully closed** — a ranged chunk
   request answered `200` (server stops honouring Range mid-flight) is retried
   as a transient error instead of being written at the chunk's offset, and a
