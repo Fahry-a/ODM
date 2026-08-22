@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,7 +78,10 @@ func (s *Server) checkSecret(req *jsonRPCRequest) bool {
 	if !ok {
 		return false
 	}
-	return first == "token:"+s.secret
+	// Constant-time compare: a plain == leaks the secret one byte at a time
+	// through response timing on a network-exposed daemon (--rpc-listen-all).
+	return strings.HasPrefix(first, "token:") &&
+		subtle.ConstantTimeCompare([]byte(first[6:]), []byte(s.secret)) == 1
 }
 
 // --- HTTP dispatch ---------------------------------------------------------
@@ -94,12 +98,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 // checkQuerySecret authenticates the WebSocket upgrade against ?secret=<value>
 // when a secret is configured (the framed `token:` mechanism doesn't fit a
-// browser opening ws://... directly).
+// browser opening ws://... directly). Constant-time compare, same reason as
+// checkSecret.
 func (s *Server) checkQuerySecret(r *http.Request) bool {
 	if s.secret == "" {
 		return true
 	}
-	return r.URL.Query().Get("secret") == s.secret
+	return subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("secret")), []byte(s.secret)) == 1
 }
 
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {

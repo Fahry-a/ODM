@@ -105,6 +105,15 @@ func run(argv []string) error {
 			msg: "--output/-o is only valid with a single URL (every task would write the same file)"}
 	}
 
+	// Duplicate URLs in a batch would spawn two Tasks writing the same
+	// destination concurrently — overlapping WriteAt corrupts the file silently
+	// (storage.File.WriteAt's disjoint-range contract). Dedupe, keep first-seen
+	// order.
+	if dups := dedupeURLs(o.URLs); len(dups) < len(o.URLs) {
+		o.URLs = dups
+		fmt.Fprintln(os.Stderr, "note: duplicate URLs removed")
+	}
+
 	exec, err := buildExecOptions(o)
 	if err != nil {
 		return err
@@ -322,10 +331,11 @@ func run(argv []string) error {
 	// not a network/partial failure: the scheduler returns context.Canceled and
 	// the in-flight tasks' partial bytes are preserved for --continue.
 	code := download.ExitCodeFrom(succeeded, failed, 0)
-	if runErr == context.Canceled {
+	cancelled := runErr == context.Canceled
+	if cancelled {
 		code = download.ExitCancelled
 	}
-	printSummary(succeeded, failed, len(o.URLs))
+	printSummary(succeeded, failed, len(o.URLs), cancelled)
 	if runErr != nil && runErr != context.Canceled {
 		return errExit{code: code, msg: runErr.Error()}
 	}
@@ -351,6 +361,21 @@ func preHelpOrVersion(argv []string) bool {
 		}
 	}
 	return false
+}
+
+// dedupeURLs removes exact duplicates keeping first-seen order. Two identical
+// URLs in one batch would produce two Tasks writing the same file concurrently.
+func dedupeURLs(urls []string) []string {
+	seen := make(map[string]struct{}, len(urls))
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	return out
 }
 
 // batchChecksumWarning returns the warning to print when --checksum is dropped
@@ -492,14 +517,19 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
 }
 
-// printSummary writes the final outcome line (§12 step 9).
-func printSummary(succeeded, failed, total int) {
-	verb := "succeeded"
-	if failed > 0 {
-		verb = "finished with errors"
+// printSummary writes the final outcome line (§12 step 9). cancelled=true means
+// the run was interrupted (^C/SIGTERM) — in-flight tasks then count as failed
+// even though nothing actually errored, so the message says so and reminds the
+// user that --continue resumes where it left off.
+func printSummary(succeeded, failed, total int, cancelled bool) {
+	switch {
+	case cancelled:
+		fmt.Fprintf(os.Stdout, "\nodm: cancelled — %d/%d files done; partial progress kept, re-run with --continue to resume\n",
+			succeeded, total)
+	default:
+		fmt.Fprintf(os.Stdout, "\nodm: %d/%d files succeeded (%d failed)\n",
+			succeeded, total, failed)
 	}
-	fmt.Fprintf(os.Stdout, "\nodm: %s — %d/%d files %s (%d failed)\n",
-		verb, succeeded, total, verb, failed)
 }
 
 // signalCtx builds a context cancelled on SIGINT/SIGTERM so ^C aborts cleanly
