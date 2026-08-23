@@ -75,10 +75,11 @@ type Options struct {
 	Timeout     int // --timeout      (seconds)
 
 	// HTTP identity / headers.
-	UserAgent string   // --user-agent
-	Headers   []string // --header/-H (repeatable: "Key: value")
-	Referer   string   // --referer
-	Proxy     string   // --proxy (http/https/socks5)
+	UserAgent  string   // --user-agent
+	Headers    []string // --header/-H (repeatable: "Key: value")
+	LoadCookie string   // --load-cookies <file> (Netscape cookie file)
+	Referer    string   // --referer
+	Proxy      string   // --proxy (http/https/socks5)
 
 	// TLS / integrity.
 	CheckCertificate bool   // --check-certificate
@@ -265,6 +266,8 @@ func (o *Options) setFromKey(key, val string) error {
 		return setInt(val, &o.Timeout, key)
 	case "user-agent":
 		o.UserAgent = val
+	case "load-cookies":
+		o.LoadCookie = val
 	case "referer":
 		o.Referer = val
 	case "proxy":
@@ -342,6 +345,7 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.IntVarP(&o.Timeout, "timeout", "t", o.Timeout, "Connection timeout (seconds)")
 	fs.StringVarP(&o.UserAgent, "user-agent", "u", o.UserAgent, "Custom User-Agent header")
 	fs.StringArrayVarP(&o.Headers, "header", "H", o.Headers, "Add a custom HTTP header (repeatable: 'Key: value')")
+	fs.StringVar(&o.LoadCookie, "load-cookies", o.LoadCookie, "Load cookies from a Netscape-format file and send them as a Cookie header")
 	fs.StringVar(&o.Referer, "referer", o.Referer, "Set the Referer header")
 	fs.StringVarP(&o.Proxy, "proxy", "p", o.Proxy, "Proxy (http/https/socks5)")
 	fs.BoolVar(&o.CheckCertificate, "check-certificate", o.CheckCertificate, "Verify TLS certificates")

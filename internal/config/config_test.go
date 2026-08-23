@@ -288,3 +288,61 @@ func TestCaptureChangedAndIsSet(t *testing.T) {
 		t.Fatalf("split-file (via -sf) should be marked changed")
 	}
 }
+
+func TestCookieHeader(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cookies.txt")
+	content := "# Netscape HTTP Cookie File\n" +
+		"# This is a generated file! Do not edit.\n" +
+		"\n" +
+		".example.com\tTRUE\t/\tTRUE\t1900000000\tsession\tabc123\n" +
+		"#HttpOnly_.example.com\tTRUE\t/\tTRUE\t1900000000\ttoken\tXYZ\n" +
+		"malformed-line-no-tabs\n" +
+		".other.com\tTRUE\t/\tFALSE\t1900000000\ttheme\tdark\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := cookieHeader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"session=abc123", "token=XYZ", "theme=dark"} {
+		if !strings.Contains(hdr, want) {
+			t.Errorf("cookie header missing %q: %s", want, hdr)
+		}
+	}
+	if !strings.HasPrefix(hdr, "Cookie: ") {
+		t.Errorf("header must start 'Cookie: ': %q", hdr)
+	}
+
+	// Missing file → clean error.
+	if _, err := cookieHeader(filepath.Join(dir, "nope.txt")); err == nil {
+		t.Error("expected error for missing cookie file")
+	}
+
+	// Empty file → "no cookies found".
+	empty := filepath.Join(dir, "empty.txt")
+	os.WriteFile(empty, []byte("# only comments\n\n"), 0o600)
+	if _, err := cookieHeader(empty); err == nil || !strings.Contains(err.Error(), "no cookies") {
+		t.Errorf("want 'no cookies found', got %v", err)
+	}
+}
+
+// TestLoadCookies_InjectedIntoHeaders pins the Setup-level wiring: --load-cookies
+// appends the parsed Cookie header to Headers (the existing -H pipeline).
+func TestLoadCookies_InjectedIntoHeaders(t *testing.T) {
+	dir := t.TempDir()
+	cpath := filepath.Join(dir, "c.txt")
+	os.WriteFile(cpath, []byte(".example.com\tTRUE\t/\tTRUE\t1900000000\tsid\tS1\n"), 0o600)
+
+	o := DefaultPtr()
+	o.LoadCookie = cpath
+	hdr, err := cookieHeader(o.LoadCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Headers = append(o.Headers, hdr)
+	if len(o.Headers) != 1 || !strings.Contains(o.Headers[0], "sid=S1") {
+		t.Fatalf("cookie not injected into headers: %+v", o.Headers)
+	}
+}

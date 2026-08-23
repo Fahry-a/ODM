@@ -23,6 +23,7 @@ retry-wait           = 2          # delay between retries (seconds)
 timeout              = 30         # dial+headers timeout (seconds)
 # user-agent          = odm/1.0
 # header              = Key: value    # repeatable; or use -H on the CLI
+# load-cookies        = ~/cookies.txt # Netscape cookies.txt → Cookie header
 # referer             =
 # proxy               =              # http/https/socks5
 check-certificate    = true       # verify TLS

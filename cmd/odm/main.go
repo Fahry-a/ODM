@@ -730,6 +730,7 @@ HTTP / network:
   -t, --timeout SEC      dial+headers timeout             (default 30)
   -u, --user-agent UA    custom User-Agent               (default %s)
   -H, --header K:V       add a custom header (repeatable)
+      --load-cookies FILE  load Netscape cookies.txt as a Cookie header
       --referer URL      set the Referer header
   -p, --proxy URL        http/https/socks5 proxy
       --check-cert BOOL  verify TLS                       (default true)

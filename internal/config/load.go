@@ -110,7 +110,63 @@ func (o *Options) LoadLayers(fs *pflag.FlagSet, positional []string) error {
 		return err
 	}
 	o.URLs = urls
-	return o.Validate()
+	if err := o.Validate(); err != nil {
+		return err
+	}
+	// 7. --load-cookies: parse the Netscape cookie file into a Cookie header
+	// appended to Headers. Done after validation so a bad file is a clean
+	// one-line error; the header rides the existing -H pipeline untouched.
+	if o.LoadCookie != "" {
+		hdr, err := cookieHeader(o.LoadCookie)
+		if err != nil {
+			return err
+		}
+		o.Headers = append(o.Headers, hdr)
+	}
+	return nil
+}
+
+// cookieHeader reads a Netscape-format cookies.txt and returns a
+// "Cookie: k=v; k2=v2" header line. Format (tab-separated):
+//
+//	domain \t flag \t path \t secure \t expiry \t name \t value
+//
+// with "#HttpOnly_..." prefixed httponly rows and # comments to skip. Only
+// the name=value pairs matter for an outbound Cookie header — domain/path/
+// secure filtering would need per-request URL knowledge ODM's flat header
+// model doesn't have, so all cookies are sent (matching curl's flat-file
+// behaviour closely enough for authenticated downloads).
+func cookieHeader(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("load-cookies %q: %w", path, err)
+	}
+	defer f.Close()
+	var pairs []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "# ") { // real comments start "# "
+			continue
+		}
+		line = strings.TrimPrefix(line, "#HttpOnly_") // httponly marker prefix
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue // malformed row: skip, don't fail the whole file
+		}
+		name, value := fields[5], fields[6]
+		if name == "" {
+			continue
+		}
+		pairs = append(pairs, name+"="+value)
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("load-cookies %q: %w", path, err)
+	}
+	if len(pairs) == 0 {
+		return "", fmt.Errorf("load-cookies %q: no cookies found", path)
+	}
+	return "Cookie: " + strings.Join(pairs, "; "), nil
 }
 
 // resolveURLs implements batch URL parsing:
