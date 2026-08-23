@@ -49,8 +49,9 @@ type ExecOptions struct {
 	Continue      bool
 	ChunkSize     int64
 	Timeout       time.Duration
-	Checksum      string // "algo:hex" or ""
-	ChecksumURL   string // sidecar URL to fetch the digest from
+	Checksum      string   // "algo:hex" or ""
+	ChecksumURL   string   // sidecar URL to fetch the digest from
+	Mirrors       []string // alternate URLs serving the same file
 	LimitRate     string // "5M"/"500K"/""=unlimited
 	TaskLimitRate string // "2M"/""=unlimited — per-task cap
 	UserAgent     string
@@ -162,6 +163,7 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		UserAgent:        m.opts.UserAgent,
 		Checksum:         m.opts.Checksum,
 		ChecksumURL:      m.opts.ChecksumURL,
+		Mirrors:          m.opts.Mirrors,
 		TaskLimitRate:    m.opts.TaskLimitRate,
 		Profile:          profile,
 		Split:            m.opts.Split,

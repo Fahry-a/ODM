@@ -193,6 +193,9 @@ type Task struct {
 	sink       func(ProgressView)
 	workerWg   sync.WaitGroup
 
+	// mirrorIdx rotates chunk requests across opts.Mirrors (round-robin).
+	mirrorIdx atomic.Uint64
+
 	adjustMu   sync.Mutex // guards adjustDone + workerWg.Add race
 	adjustDone bool       // true after workerWg.Wait() returns
 }
@@ -222,7 +225,8 @@ type TaskOptions struct {
 
 	Collision string // what to do when the destination exists: ""|"overwrite" | "rename" (--auto-rename) | "skip" (--skip-existing)
 
-	ChecksumURL string // --checksum-url: fetch "algo:digest" from this sidecar URL before downloading
+	ChecksumURL string   // --checksum-url: fetch "algo:digest" from this sidecar URL before downloading
+	Mirrors     []string // --mirror (repeatable): alternate URLs serving the SAME file; chunks rotate across them
 }
 
 // uniqueName returns dir/name rewritten to base.N.ext with the lowest N≥1
@@ -1108,7 +1112,18 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	if absEnd < 0 {
 		absEnd = -1
 	}
-	resp, err := eng.Client().GetRange(chunkCtx, pr.FinalURL, absStart, absEnd, t.resumeETag)
+	// Mirror rotation: each chunk request takes the next URL in the mirror
+	// list (round-robin across all workers), so a batch of chunks spreads over
+	// every source. The primary URL stays in the rotation too — it's slot 0.
+	url := pr.FinalURL
+	if n := len(t.opts.Mirrors); n > 0 {
+		i := t.mirrorIdx.Add(1) % uint64(n+1)
+		if i > 0 {
+			url = t.opts.Mirrors[i-1]
+			t.logf("info", "chunk %d from mirror %s", c.Index, url)
+		}
+	}
+	resp, err := eng.Client().GetRange(chunkCtx, url, absStart, absEnd, t.resumeETag)
 	if err != nil {
 		return err
 	}

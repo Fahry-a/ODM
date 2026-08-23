@@ -83,9 +83,10 @@ type Options struct {
 
 	// TLS / integrity.
 	CheckCertificate bool   // --check-certificate
-	Checksum         string // --checksum "algo:hash"
-	ChecksumURL      string // --checksum-url: sidecar URL carrying the digest
-	SessionLog       string // --session-log: JSONL event file for wrappers
+	Checksum         string   // --checksum "algo:hash"
+	ChecksumURL      string   // --checksum-url: sidecar URL carrying the digest
+	Mirrors          []string // --mirror (repeatable): alternate URLs for the same file
+	SessionLog       string   // --session-log: JSONL event file for wrappers
 	LimitRate        string // --limit-rate "5M"/"500K"  ("" = unlimited)
 	TaskLimitRate    string // --limit-rate-per-task "2M" (per-task cap, additive to global)
 	ChunkSize        string // --chunk-size "4M"
@@ -293,6 +294,8 @@ func (o *Options) setFromKey(key, val string) error {
 		o.Checksum = val
 	case "checksum-url":
 		o.ChecksumURL = val
+	case "mirror":
+		o.Mirrors = append(o.Mirrors, val)
 	case "session-log":
 		o.SessionLog = val
 	case "limit-rate":
@@ -369,6 +372,7 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.CheckCertificate, "check-certificate", o.CheckCertificate, "Verify TLS certificates")
 	fs.StringVar(&o.Checksum, "checksum", o.Checksum, "Verify checksum, format algo:hash (md5/sha1/sha256)")
 	fs.StringVar(&o.ChecksumURL, "checksum-url", o.ChecksumURL, "Fetch the checksum from this sidecar URL (sha256sum/md5sum-style file)")
+	fs.StringArrayVar(&o.Mirrors, "mirror", o.Mirrors, "Alternate URL serving the SAME file; chunks rotate across mirrors (repeatable)")
 	fs.StringVar(&o.SessionLog, "session-log", o.SessionLog, "Append JSONL progress/summary events to this file (for wrappers/GUIs)")
 	fs.StringVarP(&o.LimitRate, "limit-rate", "l", o.LimitRate, "Global speed limit, e.g. 5M, 500K")
 	fs.StringVar(&o.TaskLimitRate, "limit-rate-per-task", o.TaskLimitRate, "Per-task speed cap, additive to global, e.g. 2M")

@@ -479,6 +479,7 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		Timeout:          time.Duration(o.Timeout) * time.Second,
 		Checksum:         o.Checksum,
 		ChecksumURL:      o.ChecksumURL,
+		Mirrors:          o.Mirrors,
 		LimitRate:        o.LimitRate,
 		TaskLimitRate:    o.TaskLimitRate,
 		UserAgent:        o.UserAgent,
