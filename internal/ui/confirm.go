@@ -43,13 +43,19 @@ func ConfirmAsk(in io.Reader, out io.Writer, prompt string) (bool, error) {
 }
 
 // ConfirmSingle renders the §9 single-file prompt and asks for confirmation.
+// profile/reason show the resolved engine ("smart" mode resolves it per file,
+// mirroring the batch prompt's per-file tag); empty renders no Engine row.
 // When useColor is true, labels are yellow, the filename is cyan, size is
 // green, and the "Continue?" prompt is bold yellow.
-func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int64, conns int, useColor bool) (bool, error) {
+func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int64, conns int, profile, reason string, useColor bool) (bool, error) {
 	if useColor {
 		fmt.Fprintf(out, "  %sFile       :%s %s%s%s\n", colorYellow, colorReset, colorCyan, filename, colorReset)
 		fmt.Fprintf(out, "  %sSize       :%s %s%s%s\n", colorYellow, colorReset, colorGreen, FormatFileSize(size), colorReset)
 		fmt.Fprintf(out, "  %sConnections:%s %s%d parallel%s\n", colorYellow, colorReset, colorMagenta, conns, colorReset)
+		if p := profileSuffix(profile, reason); p != "" {
+			engine := strings.TrimPrefix(p, " ")
+			fmt.Fprintf(out, "  %sEngine     :%s %s%s%s\n", colorYellow, colorReset, colorCyan, engine, colorReset)
+		}
 		fmt.Fprintf(out, "  %sDestination:%s %s\n", colorYellow, colorReset, dest)
 		fmt.Fprintln(out)
 		return ConfirmAsk(in, out, fmt.Sprintf("%sContinue?%s [Y/n] ", colorYellow, colorReset))
@@ -57,6 +63,9 @@ func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int6
 	fmt.Fprintln(out, "File       :", filename)
 	fmt.Fprintln(out, "Size       :", FormatFileSize(size))
 	fmt.Fprintln(out, "Connections:", conns, "parallel")
+	if p := profileSuffix(profile, reason); p != "" {
+		fmt.Fprintln(out, "Engine     :", strings.TrimPrefix(p, " "))
+	}
 	fmt.Fprintln(out, "Destination:", dest)
 	fmt.Fprintln(out)
 	return ConfirmAsk(in, out, "Continue? [Y/n] ")

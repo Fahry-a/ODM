@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-23
+
+### Fixed
+- **Batch summary carries aggregate bytes again** — the Total line shows
+  `121.7 MiB/1.8 GiB` next to speed/ETA (and `3.3 MiB/3.3 MiB` on an
+  all-done batch) so the whole-batch progress is readable without mental
+  math. (`internal/ui/summary.go`)
+- **Speeds just under 1024 KiB no longer clip** — "1015.3 KiB/s" is 12 cells
+  but the column was 11, truncating the `/s` and jagging the row for a frame;
+  the column grew to 12 and the full-layout tier floor moved to 97 columns.
+  (`internal/ui/render.go`)
+- **Single-file prompt shows the resolved engine under smart** — same
+  `[odm — no h2]`-style tag the batch prompt has, as an `Engine:` row.
+  (`internal/ui/confirm.go`, `cmd/odm/main.go`)
+
+### Changed
+- **Completed task lines keep the full grid** — a finished file's bar lands in
+  the same column as the active rows above it (blank speed/ETA cells instead
+  of a compact receipt), and its size sits flush against the bar bracket, so
+  the batch stays right-aligned from first frame to last. The all-done summary
+  is right-aligned the same way. (`internal/ui/render.go`,
+  `internal/ui/summary.go`)
+
 ## [1.5.0] - 2026-08-23
 
 ### Fixed
@@ -634,7 +657,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/Fahry-a/ODM/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/Fahry-a/ODM/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/Fahry-a/ODM/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/Fahry-a/ODM/compare/v1.4.0...v1.4.1

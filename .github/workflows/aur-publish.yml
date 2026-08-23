@@ -75,7 +75,7 @@ jobs:
         # bundled assets (version), pkgrel reset/bump (pkgrel_mode auto), and
         # pruning stale odm-bin-<ver>.* assets (rm_patterns). Sources resolve
         # against GITHUB_WORKSPACE (repo root).
-        uses: Fahry-a/aur-sync-action@4957ce53c31cfa8e3cc04980ea4329aaeb1f79cc # v1 (v1.2.3)
+        uses: Fahry-a/aur-sync-action@c10cd4f4c033de91f7bcc4f77614156d1b97c5d3 # v1 (v1.2.4)
         with:
           package_name: odm-bin
           ssh_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

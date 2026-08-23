@@ -71,6 +71,7 @@ func TestRenderTaskLine_FixedColumns(t *testing.T) {
 		{Filename: base.Filename, TotalSize: base.TotalSize, Speed: 0, BytesDone: base.BytesDone, Connections: 1, State: base.State, ETA: 10 * time.Hour}, // caps at 99:59
 		{Filename: base.Filename, TotalSize: 500, Speed: 50, BytesDone: 100, Connections: 1, State: base.State, ETA: time.Second},
 		{Filename: base.Filename, TotalSize: -1, Speed: -1, BytesDone: 0, Connections: 1, State: base.State, ETA: 0},
+		{Filename: base.Filename, TotalSize: base.TotalSize, Speed: 0, BytesDone: base.TotalSize, Connections: 0, State: download.StateCompleted, ETA: 0}, // blank speed/ETA cells, same grid
 	}
 
 	// Anchor: the '[' that opens the pacman bar and the trailing '%' must sit
@@ -361,7 +362,7 @@ func TestConfirmAsk(t *testing.T) {
 
 func TestConfirmSingle(t *testing.T) {
 	var out bytes.Buffer
-	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, false)
+	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, "", "", false)
 	if err != nil || !ok {
 		t.Fatalf("should confirm yes, got ok=%v err=%v", ok, err)
 	}
@@ -372,7 +373,7 @@ func TestConfirmSingle(t *testing.T) {
 
 func TestConfirmSingle_Color(t *testing.T) {
 	var out bytes.Buffer
-	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, true)
+	ok, err := ConfirmSingle(strings.NewReader("y\n"), &out, "file.tar.zst", "/dest/file.tar.zst", 120<<20, 16, "odm", "no h2", true)
 	if err != nil || !ok {
 		t.Fatalf("should confirm yes, got ok=%v err=%v", ok, err)
 	}

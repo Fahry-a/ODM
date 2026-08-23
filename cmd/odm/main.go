@@ -504,7 +504,15 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 		if i := strings.LastIndexByte(name, '/'); i >= 0 {
 			disp = name[i+1:]
 		}
-		return ui.ConfirmSingle(os.Stdin, os.Stdout, disp, name, size, conns, useColor)
+		// Mirror the batch prompt's per-file engine tag: smart resolves the
+		// engine per file (shown even when it's plain odm), explicit profiles
+		// carry no extra tag.
+		var profile, reason string
+		if o.Profile == "smart" {
+			profile = profiles[url]
+			reason = reasons[url]
+		}
+		return ui.ConfirmSingle(os.Stdin, os.Stdout, disp, name, size, conns, profile, reason, useColor)
 	}
 	// For the smart profile the per-file engine IS the interesting info — show
 	// it even when it resolves to the default odm engine. Explicit profiles

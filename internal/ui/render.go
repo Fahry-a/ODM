@@ -41,7 +41,7 @@ const (
 	// colGlyph is the status-symbol column: one glyph + a space.
 	colGlyph = 2
 	colSize  = 14 // "999.9M/999.9M" (hybrid done/total)
-	colSpeed = 11 // "999.9 MiB/s", "1023 B/s"
+	colSpeed = 12 // "1015.3 KiB/s" (values just under 1024 are the widest)
 	colETA   = 8  // "HH:MM:SS"
 
 	// colConns is a fixed-width slot for the connection indicator "[xN] " so
@@ -130,9 +130,13 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	speed := FormatSpeed(v.Speed)
 	eta := FormatDuration(v.ETA)
 	if v.State == download.StateCompleted {
-		// A finished file has no remaining time; estimateETA returns 0 and
-		// FormatDuration(0) paints "?" which reads like missing data. The
-		// cell stays blank so the fixed-width columns keep their alignment.
+		// A finished file has no speed/ETA left; estimateETA returning 0 used
+		// to paint "?" which read like missing data, so the cells go blank.
+		// They must stay INSIDE the fixed-width grid (not be dropped): the
+		// bar has to sit in the same column as the still-downloading rows,
+		// otherwise finishing a batch jags every completed line ~29 cells
+		// left of the active ones.
+		speed = ""
 		eta = ""
 	}
 
@@ -159,39 +163,51 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	// name is padded by display cells (padToCells), not runes, so a wide CJK
 	// filename can't push the info block past the terminal edge.
 	//
-	// Completed tasks render compact instead: their speed/ETA/connection
-	// cells would be dead blanks inside the fixed grid (a hole of ~25 cells
-	// before the bar), so a finished line reads like a receipt —
-	// "+ name  size  [eaten-bar]  100%".
+	// Completed tasks keep the SAME grid (blank speed/ETA/conn cells) so their
+	// bar lands in the same column as the active rows above/below — dropping
+	// the dead cells used to shift every finished bar ~29 cells left of the
+	// live ones and jagged the batch as it completed.
 	var line string
-	if v.State == download.StateCompleted && (layout == layoutFull || layout == layoutNoSpeedETA) {
-		line = fmt.Sprintf("%s%s  %s  [%s]  %s",
+	// Completed rows carry blank speed/ETA/conn cells; rather than leaving
+	// that run of blanks between the size and the bar (a hole mid-line), they
+	// collapse into padding AFTER the name so the size sits flush against the
+	// bar bracket. Total width is unchanged, so the bar column still matches
+	// the active rows exactly: "+ name ........ 3.3M/3.3M [----] 100%".
+	glueSizeToBar := func(pad int) string {
+		return fmt.Sprintf("%s%s%s%s[%s]  %s",
+			glyphCell, nameCell,
+			strings.Repeat(" ", pad),
+			fitWidth(size, colSize), bar, pctCol)
+	}
+	switch layout {
+	case layoutPct:
+		line = fitWidth(pctStr, nameWidth)
+	case layoutNoSpeedETA:
+		if speed == "" && eta == "" {
+			line = glueSizeToBar(2 + 2 + colConns)
+			break
+		}
+		line = fmt.Sprintf("%s%s  %s  %s[%s]  %s",
 			glyphCell, nameCell,
 			fitWidth(size, colSize),
-			bar, pctCol)
-	} else {
-		switch layout {
-		case layoutPct:
-			line = fitWidth(pctStr, nameWidth)
-		case layoutNoSpeedETA:
-			line = fmt.Sprintf("%s%s  %s  %s[%s]  %s",
-				glyphCell, nameCell,
-				fitWidth(size, colSize),
-				connDisplay, bar, pctCol)
-		case layoutNameBarPct:
-			line = fmt.Sprintf("%s%s  %s[%s]  %s",
-				glyphCell, nameCell,
-				connDisplay, bar, pctCol)
-		case layoutNamePct:
-			line = fmt.Sprintf("%s%s  %s", glyphCell, nameCell, pctCol)
-		default: // layoutFull
-			line = fmt.Sprintf("%s%s  %s  %s  %s  %s[%s]  %s",
-				glyphCell, nameCell,
-				fitWidth(size, colSize),
-				fitWidth(speed, colSpeed),
-				fitWidth(eta, colETA),
-				connDisplay, bar, pctCol)
+			connDisplay, bar, pctCol)
+	case layoutNameBarPct:
+		line = fmt.Sprintf("%s%s  %s[%s]  %s",
+			glyphCell, nameCell,
+			connDisplay, bar, pctCol)
+	case layoutNamePct:
+		line = fmt.Sprintf("%s%s  %s", glyphCell, nameCell, pctCol)
+	default: // layoutFull
+		if speed == "" && eta == "" {
+			line = glueSizeToBar(2 + 2 + colSpeed + 2 + colETA + 2 + colConns)
+			break
 		}
+		line = fmt.Sprintf("%s%s  %s  %s  %s  %s[%s]  %s",
+			glyphCell, nameCell,
+			fitWidth(size, colSize),
+			fitWidth(speed, colSpeed),
+			fitWidth(eta, colETA),
+			connDisplay, bar, pctCol)
 	}
 
 	if useColor {

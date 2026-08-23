@@ -184,15 +184,20 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 	// in flight, so the right block carries just the wall-clock total.
 	allDone := total > 0 && completed >= total
 
-	// Full right block (right-aligned on a TTY): <speed>  ETA <eta>  +<elapsed>
-	// [bar]  <pct>. The aggregate bytes are deliberately NOT here — with the
-	// 30-cell bar, speed, ETA and elapsed the line would exceed 120 columns;
-	// the bytes move to the compact tier, and the per-file lines already carry
-	// each file's done/total. Colours: speed yellow (live), ETA/elapsed grey
+	// Full right block (right-aligned on a TTY): <bytes>  <speed>  ETA <eta>
+	// +<elapsed>  [bar]  <pct>. Aggregate bytes mirror the per-file lines'
+	// done/total so the summary answers "how far along is the whole batch"
+	// without mental math. Colours: speed yellow (live), ETA/elapsed grey
 	// (secondary), bar its pacman colours, percent green (done).
 	var right string
 	if !allDone {
 		right = sp + "  ETA " + etaStr
+	}
+	if totalSize > 0 && bytesStr != "" {
+		if right != "" {
+			right += "  "
+		}
+		right += bytesStr
 	}
 	if elStr != "" {
 		if right != "" {
@@ -211,26 +216,6 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 		if elStr != "" {
 			right = strings.Replace(right, elStr, string(colorCyan)+elStr+string(colorReset), 1)
 		}
-	}
-
-	// All-done summary: nothing is in flight, so don't right-align a tiny
-	// block into a desert of spaces on wide terminals. Left-attach the whole
-	// result line instead — it reads like a completion report:
-	// "Total: 2/2 completed  140 MiB/140 MiB  +00:00:33  [--------]  100%".
-	if allDone && termWidth > 0 {
-		line := leftColored
-		if bytesStr != "" && totalSize > 0 {
-			line += "  " + bytesStr
-		}
-		if elStr != "" {
-			line += "  " + elStr
-		}
-		line += fmt.Sprintf("  [%s]  %s", bar, pctColored)
-		if displayWidth(line) <= termWidth {
-			return line
-		}
-		// Too wide here (narrow terminal): fall through to the adaptive
-		// tiers below instead of collapsing to the bare percent.
 	}
 
 	if termWidth > 0 {
