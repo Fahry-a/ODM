@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -218,6 +219,30 @@ type TaskOptions struct {
 	Split            int    // aria2c: --split (segments count), default 5
 	MinSplitSize     int64  // aria2c: --min-split-size, default 20 MiB
 	MaxConnPerServer int    // aria2c: -x (per-server connection cap, default 1)
+
+	Collision string // what to do when the destination exists: ""|"overwrite" | "rename" (--auto-rename) | "skip" (--skip-existing)
+}
+
+// uniqueName returns dir/name rewritten to base.N.ext with the lowest N≥1
+// that doesn't exist yet ("f.tar.gz" → "f.1.tar.gz"): the counter goes before
+// filepath.Ext's last extension, so compound extensions stay readable.
+func uniqueName(dir, name string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s.%d%s", base, i, ext)
+		if _, err := os.Stat(filepath.Join(dir, candidate)); err != nil {
+			return candidate
+		}
+	}
+}
+
+// sizeOrUnknown renders size for log lines: "?" when unknown (<0).
+func sizeOrUnknown(size int64) string {
+	if size < 0 {
+		return "?"
+	}
+	return strconv.FormatInt(size, 10)
 }
 
 // rateMeasure keeps a short rolling window of bytes vs time to produce a stable
@@ -481,6 +506,32 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		outName = "download.bin"
 	}
 	t.outPath = filepath.Join(dir, outName)
+
+	// Collision policy (applies to fresh downloads only — an explicit --continue
+	// resume owns its .odm file and must never be renamed away from it).
+	if !t.opts.Continue {
+		switch t.opts.Collision {
+		case "skip":
+			if st, err := os.Stat(t.outPath); err == nil && st.Mode().IsRegular() {
+				// Size match when known → genuinely complete, skip as success;
+				// otherwise the file exists but we can't vouch for it.
+				if pr.TotalSize > 0 && st.Size() == pr.TotalSize {
+					t.logf("info", "skipping %s: already downloaded (%d bytes)", outName, st.Size())
+					t.bytesDone.Store(st.Size())
+					t.setState(StateCompleted)
+					return nil
+				}
+				t.logf("warn", "--skip-existing: %s exists with a different size (%d ≠ %s), re-downloading", outName, st.Size(), sizeOrUnknown(pr.TotalSize))
+			}
+		case "rename":
+			if _, err := os.Stat(t.outPath); err == nil {
+				outName = uniqueName(dir, outName)
+				pr.Filename = outName
+				t.outPath = filepath.Join(dir, outName)
+				t.logf("info", "%s exists — saving as %s", filepath.Base(t.outPath), outName)
+			}
+		}
+	}
 
 	// Probe-derived size check before opening. A SingleStream verdict means the
 	// server won't honour ranged GETs, so the queue MUST hold exactly one

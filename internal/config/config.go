@@ -95,10 +95,12 @@ type Options struct {
 	MaxConnPerServer int    // -x/--max-connection-per-server: aria2c per-server cap
 
 	// Behaviour.
-	Yes      bool // --yes/-y
-	Quiet    bool // --quiet/-q
-	DryRun   bool // --dry-run: probe + plan only, no download
-	Continue bool // --continue/-x  (resume via .odm control file)
+	Yes          bool // --yes/-y
+	Quiet        bool // --quiet/-q
+	DryRun       bool // --dry-run: probe + plan only, no download
+	AutoRename   bool // --auto-rename: existing destination → name.1.ext
+	SkipExisting bool // --skip-existing: size-matched existing file → skip
+	Continue     bool // --continue/-x  (resume via .odm control file)
 
 	// Paths / logging.
 	ConfigFile string // --config
@@ -281,6 +283,10 @@ func (o *Options) setFromKey(key, val string) error {
 		return setBool(val, &o.Quiet, key)
 	case "dry-run":
 		return setBool(val, &o.DryRun, key)
+	case "auto-rename":
+		return setBool(val, &o.AutoRename, key)
+	case "skip-existing":
+		return setBool(val, &o.SkipExisting, key)
 	case "checksum":
 		o.Checksum = val
 	case "limit-rate":
@@ -340,6 +346,8 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 
 	fs.BoolVarP(&o.Yes, "yes", "y", o.Yes, "Skip the confirmation prompt")
 	fs.BoolVar(&o.DryRun, "dry-run", o.DryRun, "Probe URLs and show the download plan without downloading")
+	fs.BoolVar(&o.AutoRename, "auto-rename", o.AutoRename, "If the destination exists, save as name.1.ext instead of overwriting")
+	fs.BoolVar(&o.SkipExisting, "skip-existing", o.SkipExisting, "Skip files that already exist with a matching size")
 	fs.BoolVarP(&o.Quiet, "quiet", "q", o.Quiet, "Disable the progress bar (for cron/scripts)")
 	fs.BoolVarP(&o.Continue, "continue", "x", o.Continue, "Resume an incomplete file (uses the .odm control file)")
 
@@ -420,6 +428,9 @@ func (o *Options) Validate() error {
 	}
 	if o.SplitFile != 0 && o.SplitFile > o.Connections {
 		return errors.New("split-file (-sf) cannot be greater than the total connection budget (-c)")
+	}
+	if o.AutoRename && o.SkipExisting {
+		return errors.New("--auto-rename and --skip-existing are mutually exclusive (pick one collision policy)")
 	}
 	if o.RPCPort < 1 || o.RPCPort > 65535 {
 		return errors.New("--rpc-listen-port out of range (1-65535)")

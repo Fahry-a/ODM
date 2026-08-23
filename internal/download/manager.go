@@ -63,6 +63,8 @@ type ExecOptions struct {
 	Split            int    // aria2c: --split (number of segments), default 5
 	MinSplitSize     int64  // aria2c: --min-split-size (default 20 MiB)
 	MaxConnPerServer int    // aria2c: -x (per-server connection cap, default 1)
+
+	Collision string // ""|"overwrite" | "rename" (--auto-rename) | "skip" (--skip-existing)
 }
 
 // NewManager builds a Manager. The underlying transport.Client + rate limiter
@@ -163,6 +165,7 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		Split:            m.opts.Split,
 		MinSplitSize:     m.opts.MinSplitSize,
 		MaxConnPerServer: m.opts.MaxConnPerServer,
+		Collision:        m.opts.Collision,
 	}, m.ClientFor(profile), m.lim, m.logf)
 	// Region 2 of the both profile speaks HTTP/2 — attach the Manager's h2
 	// client so Start can give it to the second engine.

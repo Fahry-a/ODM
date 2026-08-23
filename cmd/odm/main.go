@@ -475,7 +475,21 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		Split:            o.Split,
 		MinSplitSize:     minSplit,
 		MaxConnPerServer: o.MaxConnPerServer,
+		Collision:        collisionPolicy(o),
 	}, nil
+}
+
+// collisionPolicy resolves --auto-rename/--skip-existing into the engine's
+// Collision mode. Both flags together is rejected in config validation.
+func collisionPolicy(o *config.Options) string {
+	switch {
+	case o.AutoRename:
+		return "rename"
+	case o.SkipExisting:
+		return "skip"
+	default:
+		return ""
+	}
 }
 
 // parseChunkSize turns a "4M"/"512K" string into bytes. Defaults to 4 MiB when
