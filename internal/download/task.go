@@ -528,9 +528,17 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	}
 	t.outPath = filepath.Join(dir, outName)
 
-	// Collision policy (applies to fresh downloads only — an explicit --continue
-	// resume owns its .odm file and must never be renamed away from it).
-	if !t.opts.Continue {
+	// Collision policy — applies only when this run is NOT resuming: a
+	// resumable .odm control file owns this destination and must never be
+	// renamed away from it. (--continue is on by default, so gate on the
+	// control file's presence, not on the flag.)
+	resumable := false
+	if t.opts.Continue {
+		if _, cerr := storage.LoadControl(t.outPath); cerr == nil {
+			resumable = true
+		}
+	}
+	if !resumable {
 		switch t.opts.Collision {
 		case "skip":
 			if st, err := os.Stat(t.outPath); err == nil && st.Mode().IsRegular() {
@@ -549,7 +557,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 				outName = uniqueName(dir, outName)
 				pr.Filename = outName
 				t.outPath = filepath.Join(dir, outName)
-				t.logf("info", "%s exists — saving as %s", filepath.Base(t.outPath), outName)
+				t.logf("info", "%s exists — saving as %s", outName, outName)
 			}
 		}
 	}

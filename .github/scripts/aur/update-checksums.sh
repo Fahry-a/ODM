@@ -12,10 +12,10 @@ VERSION="$2"
 curl -fsSL -o /tmp/checksums.txt \
   "https://github.com/${REPO}/releases/download/v${VERSION}/checksums.txt"
 
-I686_SUM=$(awk -v file="odm_${VERSION}_linux_386" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-AMD64_SUM=$(awk -v file="odm_${VERSION}_linux_amd64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-ARMV7H_SUM=$(awk -v file="odm_${VERSION}_linux_arm" '$2 == file { print $1; exit }' /tmp/checksums.txt)
-ARM64_SUM=$(awk -v file="odm_${VERSION}_linux_arm64" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+I686_SUM=$(awk -v file="odm_${VERSION}_linux_386.tar.gz" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+AMD64_SUM=$(awk -v file="odm_${VERSION}_linux_amd64.tar.gz" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+ARMV7H_SUM=$(awk -v file="odm_${VERSION}_linux_arm.tar.gz" '$2 == file { print $1; exit }' /tmp/checksums.txt)
+ARM64_SUM=$(awk -v file="odm_${VERSION}_linux_arm64.tar.gz" '$2 == file { print $1; exit }' /tmp/checksums.txt)
 
 if [ -z "$I686_SUM" ] || [ -z "$AMD64_SUM" ] || [ -z "$ARMV7H_SUM" ] || [ -z "$ARM64_SUM" ]; then
   echo "::error::Missing binary checksum in release artifacts"
