@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -633,11 +634,14 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 // summary event closes the run. Writes are best-effort — a log failure must
 // never fail the download, so errors are swallowed.
 type sessionLog struct {
+	mu  sync.Mutex
 	f   *os.File
 	enc *json.Encoder
 }
 
 func (s *sessionLog) encode(v map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.enc == nil {
 		s.enc = json.NewEncoder(s.f)
 	}

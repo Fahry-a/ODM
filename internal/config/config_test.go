@@ -374,8 +374,8 @@ func TestParseMetalink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0] != "https://mirror1.example/x.iso" || got[1] != "https://mirror2.example/x.iso" {
-		t.Fatalf("urls = %v", got)
+	if len(got) != 1 || got[0] != "https://mirror1.example/x.iso" {
+		t.Fatalf("metalink must yield ONE target (primary); mirrors go to --mirror: %v", got)
 	}
 	if len(o3.Mirrors) != 1 || o3.Mirrors[0] != "https://mirror2.example/x.iso" {
 		t.Fatalf("mirrors = %v (first URL must be primary, not a mirror)", o3.Mirrors)

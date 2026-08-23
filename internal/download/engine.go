@@ -100,8 +100,9 @@ func AriaSplit(totalSize, split, minSplit int64) (n int64, chunkSize int64) {
 // StaticQueue is a fixed-list work queue with no work-stealing: exactly n
 // segments covering [0, totalSize) contiguously (last one possibly short),
 // each to be taken by exactly one worker. Next returns each segment once;
-// Requeue is a no-op (aria2c model — a failed segment is retried by the same
-// worker via the per-chunk retry loop in downloadChunk).
+// Requeue returns false (aria2c model — a failed segment is retried by the
+// same worker via the per-chunk retry loop in downloadChunk; beyond that the
+// task fails so resume can salvage).
 //
 // The segment layout is deterministic from (totalSize, n), so resume can
 // rebuild the same boundaries from the control file without storing the
@@ -149,11 +150,15 @@ func (q *StaticQueue) Next() (Chunk, bool) {
 	return Chunk{}, false
 }
 
-// Requeue is a no-op: the aria2c model retries a failed segment inside the
-// same worker (downloadChunk's per-attempt loop), never handing it to
-// another worker. Always returns true so the worker loop's retry path never
-// treats a segment as permanently failed here.
-func (q *StaticQueue) Requeue(_ Chunk, _ int) bool { return true }
+// Requeue returns false: the aria2c model retries a failed segment inside the
+// same worker (downloadChunk's per-attempt loop). When downloadChunk has
+// exhausted that budget and calls Requeue, there is no further mechanism to
+// revisit the segment — returning true (the old behaviour) made the worker
+// silently skip it, producing a "completed" task with an un-downloaded hole.
+// Returning false routes the failure into the worker's error accounting so
+// the task fails honestly, keeping its control file for --continue to
+// salvage the segments that did land.
+func (q *StaticQueue) Requeue(_ Chunk, _ int) bool { return false }
 
 // MarkDone records a completed segment. Idempotent.
 func (q *StaticQueue) MarkDone(c Chunk) {

@@ -489,18 +489,23 @@ func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64, 
 	return r, nil
 }
 
-// PermanentError wraps an error that retrying cannot fix: a 4xx status other
-// than 408 (request timeout) or 429 (rate limited). A dead link stays dead no
-// matter how many times we ask; burning the full retry budget on it only
-// stalls the batch. Exported so the download engine can detect it with
-// errors.As no matter which package raised it.
-type PermanentError struct {
-	Err    error
-	Status int
+// StatusError carries an HTTP status alongside an error. "Permanent" (the
+// fail-fast classification, see IsPermanent) is a property of the STATUS —
+// the same type also carries retryable statuses like 429 so callers can react
+// to them (e.g. adaptive back-off) without string matching. Detect with
+// errors.As from any package.
+type StatusError struct {
+	Err       error
+	Status    int
+	Permanent bool
 }
 
-func (e PermanentError) Error() string { return e.Err.Error() }
-func (e PermanentError) Unwrap() error { return e.Err }
+func (e StatusError) Error() string { return e.Err.Error() }
+func (e StatusError) Unwrap() error { return e.Err }
+
+// PermanentError is kept as an alias name for clarity at call sites that only
+// care about permanent failures; it IS a StatusError.
+type PermanentError = StatusError
 
 // IsPermanent classifies an HTTP status: client errors are permanent except
 // 408 and 429 (both retryable by nature).
@@ -509,11 +514,14 @@ func IsPermanent(status int) bool {
 		status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
 }
 
+// WithStatus attaches an HTTP status to err — permanent per IsPermanent,
+// otherwise a plain (retryable) StatusError so the status stays inspectable.
+func WithStatus(err error, status int) error {
+	return StatusError{Err: err, Status: status, Permanent: IsPermanent(status)}
+}
+
 // PermanentWrap marks err permanent when status is a non-retryable 4xx;
-// otherwise it passes through unchanged.
+// otherwise it wraps as a plain StatusError (status still carried).
 func PermanentWrap(err error, status int) error {
-	if IsPermanent(status) {
-		return PermanentError{Err: err, Status: status}
-	}
-	return err
+	return WithStatus(err, status)
 }

@@ -427,7 +427,10 @@ func (s *Server) methodChangeOption(req *jsonRPCRequest, resp *jsonRPCResponse) 
 				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be an integer"}
 				return *resp
 			}
-			s.daemon.ChangeConns(download.TaskID(gid), nc)
+			if !s.daemon.ChangeConns(download.TaskID(gid), nc) {
+				resp.Error = &rpcError{Code: codeInternalError, Message: "task not found (or not started yet)"}
+				return *resp
+			}
 		}
 	}
 	resp.Result = "OK"

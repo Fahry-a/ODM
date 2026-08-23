@@ -13,7 +13,7 @@ import (
 
 // TestLimitRate_StableAggregate is the spec rate-limiting acceptance test:
 // --limit-rate is a GLOBAL token bucket shared across all workers of all tasks
-//, so the aggregate throughput stays near the configured cap regardless
+// , so the aggregate throughput stays near the configured cap regardless
 // of how many connections are active. A naive per-connection split would make
 // -c 8 hit ~8× the cap; here both -c 1 and -c 8 must land close to the same cap.
 //

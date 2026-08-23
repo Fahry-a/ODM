@@ -79,9 +79,11 @@ func TestStaticQueue_CoverageAndNoStealing(t *testing.T) {
 	if _, ok := q.Next(); ok {
 		t.Fatal("drained queue must return false")
 	}
-	// Requeue is a no-op but always "accepted".
-	if !q.Requeue(Chunk{}, 0) {
-		t.Fatal("Requeue must return true (no permanent failure in static mode)")
+	// Requeue returns false: a segment whose retry budget is exhausted fails
+	// the task (error accounting) instead of being silently skipped — the old
+	// no-op-true produced "completed" files with un-downloaded holes.
+	if q.Requeue(Chunk{}, 0) {
+		t.Fatal("Requeue must return false so exhausted segments fail the task")
 	}
 }
 
@@ -329,5 +331,124 @@ func TestAria2cProfile_DegradesToH1(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "out.bin"))
 	if err != nil || string(got) != string(payload) {
 		t.Fatalf("h1 degradation produced wrong file: %v", err)
+	}
+}
+
+// TestAria_ConnsDisplayCappedToSplit pins the [xN] fix: with 4 segments and a
+// 16-connection budget, Snapshot().Connections must report 4 (the actual
+// worker count), not the raw budget.
+func TestAria_ConnsDisplayCappedToSplit(t *testing.T) {
+	payload := make([]byte, 200*1024*1024) // big enough: split_eff = 4 at minSplit 20M
+	srv := serveRangeServer(t, payload)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim, _ := ratelimit.New("")
+	task := NewTask(TaskID("t"), srv.URL, TaskOptions{
+		OutputName: "out.bin",
+		Dir:        dir,
+		Retry:      1,
+		RetryWait:  time.Millisecond,
+		Timeout:    10 * time.Second,
+		Profile:    "aria2c",
+		Split:      4, // explicit --split 4 → ariaSplit must be ≤ 4
+	}, cli, lim, nil)
+	task.SetProbe(&transport.ProbeResult{FinalURL: srv.URL, SupportsRange: true, TotalSize: int64(len(payload)), Filename: "out.bin"})
+	task.SetProfile("aria2c")
+	var maxSeen atomic.Int32
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if c := int32(task.Snapshot().Connections); c > 0 {
+				for {
+					cur := maxSeen.Load()
+					if c <= cur || maxSeen.CompareAndSwap(cur, c) {
+						break
+					}
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	if err := task.Start(context.Background(), 16, nil); err != nil {
+		t.Fatal(err)
+	}
+	close(stop)
+	if got := maxSeen.Load(); got > 4 {
+		t.Fatalf("max Snapshot Connections during run = %d, want ≤ split (4)", got)
+	}
+}
+
+// TestAria_ExhaustedSegmentFailsTask pins the C1 fix: when downloadChunk's
+// retry budget is exhausted on a static segment, the task must FAIL (control
+// file kept for resume) — the old Requeue-always-true silently skipped the
+// segment and reported "completed" with an un-downloaded hole.
+func TestAria_ExhaustedSegmentFailsTask(t *testing.T) {
+	payload := make([]byte, 4*1024*1024)
+	for i := range payload {
+		payload[i] = byte(i%251 + 1)
+	}
+	// Segment starting at 2 MiB always fails with a transient (500) status.
+	failStart := int64(2 * 1024 * 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", itoaS(len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		start, _, _ := parseClientRangeS(r.Header.Get("Range"), len(payload))
+		if start == failStart {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		s, e, ok := parseClientRangeS(r.Header.Get("Range"), len(payload))
+		if !ok {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Range", "bytes "+itoaS(int(s))+"-"+itoaS(int(e))+"/"+itoaS(len(payload)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[s : e+1])
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim, _ := ratelimit.New("")
+	task := NewTask(TaskID("t"), srv.URL, TaskOptions{
+		OutputName: "out.bin",
+		Dir:        dir,
+		Retry:      1, // small budget so exhaustion happens fast
+		RetryWait:  time.Millisecond,
+		Timeout:    10 * time.Second,
+		ChunkSize:  1024 * 1024,
+		Profile:    "aria2c",
+		Split:      4,
+	}, cli, lim, nil)
+	task.SetProbe(&transport.ProbeResult{FinalURL: srv.URL, SupportsRange: true, TotalSize: int64(len(payload)), Filename: "out.bin"})
+	task.SetProfile("aria2c")
+	err = task.Start(context.Background(), 2, nil)
+	if err == nil {
+		t.Fatal("task must FAIL when a static segment exhausts its retries")
+	}
+	if task.State() != StateError {
+		t.Fatalf("state = %v, want error", task.State())
+	}
+	// Control file survives for --continue.
+	if _, cerr := os.Stat(filepath.Join(dir, "out.bin.odm")); cerr != nil {
+		t.Fatalf("control file must survive a failed aria task for resume: %v", cerr)
 	}
 }

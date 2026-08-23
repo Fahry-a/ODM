@@ -8,7 +8,7 @@ import (
 )
 
 // TestExampleConfigParsesAndValidates guards the shipped configs/odm.conf.example
-//: it must parse cleanly with the project's own parser and the
+// : it must parse cleanly with the project's own parser and the
 // resulting layered defaults must Validate. This catches a typo'd key, a bad
 // default value, or a stray example-only entry drifting out of sync with the
 // real key set between releases.

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -59,6 +59,10 @@ const (
 	// displayed speed decays to 0 (see rateMeasure.tick). Shorter than this a
 	// quiet window reads as jitter, not a stall.
 	stallDecayWindow = 2 * time.Second
+
+	// throttleCooldown is how long after the latest 429 before a successful
+	// chunk restores the user's configured rate (see downloadChunk/throttleOK).
+	throttleCooldown = 30 * time.Second
 )
 
 func (s TaskState) String() string {
@@ -121,10 +125,10 @@ type Task struct {
 	// → permanent failure of THIS layout) instead of stitching old chunks to
 	// new bytes. "" = no If-Range (fresh downloads).
 	resumeETag string
-	probe   atomic.Pointer[transport.ProbeResult]
-	disk    *storage.File
-	queue   workQueue
-	outPath string
+	probe      atomic.Pointer[transport.ProbeResult]
+	disk       *storage.File
+	queue      workQueue
+	outPath    string
 
 	// ariaSplit is the effective segment count computed for the aria2c
 	// profile (0 for odm). Used to cap workers at the segment count and to
@@ -195,6 +199,10 @@ type Task struct {
 
 	// mirrorIdx rotates chunk requests across opts.Mirrors (round-robin).
 	mirrorIdx atomic.Uint64
+
+	// lastThrottle tracks the most recent 429 so throttleOK only restores the
+	// configured rate after a quiet period, not on the first healthy chunk.
+	lastThrottle atomic.Int64 // unix nanos; 0 = never throttled
 
 	adjustMu   sync.Mutex // guards adjustDone + workerWg.Add race
 	adjustDone bool       // true after workerWg.Wait() returns
@@ -412,6 +420,13 @@ func (t *Task) AdjustConns(target int, ctx context.Context, sink func(ProgressVi
 	if sink == nil {
 		sink = t.sink
 	}
+	// A task admitted by the RPC daemon but not yet Started has no baseCtx —
+	// the increase path below would spawn workers on a nil context (panic).
+	// Start reads connTarget when it launches, so an early adjustment still
+	// takes effect; we just can't spawn goroutines for it yet.
+	if ctx == nil {
+		return false
+	}
 	old := t.connTarget.Swap(int32(target))
 	// If target < old, workers self-terminate via the graceful drain check at
 	// the top of their loop — no further action needed for reduction.
@@ -513,10 +528,18 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		t.logf("info", "smart profile: chose %q (%s)", profile, reason)
 		t.opts.Profile = profile
 	}
-	if pr.Filename == "" {
-		pr.Filename = deriveFilename(pr.FinalURL, t.opts.OutputName)
-	} else if t.opts.OutputName != "" {
-		pr.Filename = t.opts.OutputName // explicit -o wins
+	if pr.Filename == "" || (t.opts.OutputName != "") {
+		// Filename refinement publishes a COPIED probe: pr is shared with
+		// Snapshot() readers, and in-place mutation raced with them.
+		pr2 := *pr
+		if pr2.Filename == "" {
+			pr2.Filename = deriveFilename(pr2.FinalURL, t.opts.OutputName)
+		}
+		if t.opts.OutputName != "" {
+			pr2.Filename = t.opts.OutputName // explicit -o wins
+		}
+		t.probe.Store(&pr2)
+		pr = &pr2
 	}
 	t.setState(StateActive)
 
@@ -548,6 +571,12 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 					t.logf("info", "skipping %s: already downloaded (%d bytes)", outName, st.Size())
 					t.bytesDone.Store(st.Size())
 					t.setState(StateCompleted)
+					// Emit so the skipped task appears in the final UI frame /
+					// RPC state instead of vanishing (every other completion
+					// path emits before returning).
+					if progressSink != nil {
+						progressSink(t.Snapshot())
+					}
 					return nil
 				}
 				t.logf("warn", "--skip-existing: %s exists with a different size (%d ≠ %s), re-downloading", outName, st.Size(), sizeOrUnknown(pr.TotalSize))
@@ -555,9 +584,15 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		case "rename":
 			if _, err := os.Stat(t.outPath); err == nil {
 				outName = uniqueName(dir, outName)
-				pr.Filename = outName
+				// Publish via a COPIED probe: pr is shared with Snapshot()
+				// readers (UI/RPC pollers), and mutating pr.Filename in place
+				// raced with them. Same for deriveFilename below.
+				pr2 := *pr
+				pr2.Filename = outName
+				t.probe.Store(&pr2)
+				pr = &pr2
 				t.outPath = filepath.Join(dir, outName)
-				t.logf("info", "%s exists — saving as %s", outName, outName)
+				t.logf("info", "%s exists — saving as %s", filepath.Base(t.outPath), outName)
 			}
 		}
 	}
@@ -642,7 +677,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	} else {
 		q = NewChunkQueue(qs, effective)
 	}
-	t.queue = q // set early: resume restore/verification below reads the queue
+	t.queue = q         // set early: resume restore/verification below reads the queue
 	t.layoutMu.Unlock() // layout settled; readers (currentEngine) may proceed
 
 	alreadyDone := int64(0)
@@ -760,6 +795,11 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 
 	// 3. Launch workers.
 	t.conns.Store(int32(conns))
+	// Don't clobber a connTarget an RPC changeOption already raised before
+	// Start ran: keep the larger of (param, current target).
+	if cur := t.connTarget.Load(); int(cur) > conns {
+		conns = int(cur)
+	}
 	t.connTarget.Store(int32(conns))
 	if pr.TotalSize <= 0 && pr.SingleStream {
 		// Single-stream fallback: exactly one worker on the single whole-file chunk.
@@ -785,6 +825,11 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		if pr.TotalSize > 0 && !t.profileUsesH2() && t.opts.MaxConnPerServer > 0 && workerCount > t.opts.MaxConnPerServer {
 			workerCount = t.opts.MaxConnPerServer
 		}
+		// The displayed/live connection count must reflect the CAP, not the raw
+		// budget: with 4 segments and -c 16 the UI used to show [x16] while only
+		// 4 workers existed.
+		t.conns.Store(int32(workerCount))
+		t.connTarget.Store(int32(workerCount))
 	}
 	if t.engines != nil {
 		// both profile: spawn per-region workers with the region's conns.
@@ -1001,10 +1046,21 @@ func (t *Task) retireIfAboveTarget() bool {
 }
 
 // isPermanent reports whether err is a retry-proof failure (a
-// transport.PermanentError anywhere in its Unwrap chain).
+// transport.StatusError flagged permanent anywhere in its Unwrap chain).
 func isPermanent(err error) bool {
-	var pe transport.PermanentError
-	return errors.As(err, &pe)
+	var se transport.StatusError
+	return errors.As(err, &se) && se.Permanent
+}
+
+// throttleOK restores the configured rate after a successful chunk — but only
+// once throttleCooldown has passed since the latest 429. Without the cooldown,
+// the first healthy worker (chunks complete every few hundred ms on an active
+// download) would undo the halving while others are still being throttled.
+func (t *Task) throttleOK() {
+	last := t.lastThrottle.Load()
+	if last == 0 || time.Since(time.Unix(0, last)) >= throttleCooldown {
+		t.lim.ResetRate()
+	}
 }
 
 // statusErr classifies an HTTP status from a ranged/plain GET: permanent for
@@ -1041,23 +1097,35 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		// the digest is only recorded on a fully-successful attempt — a hash is
 		// never stored for a partially-written chunk.
 		h := sha256.New()
+		before := t.bytesDone.Load()
 		err := t.fetchAndWrite(ctx, eng, c, sink, h)
 		if err == nil {
 			t.storeChunkHash(eng.AbsStart(c.Start), hex.EncodeToString(h.Sum(nil)))
-			t.lim.ResetRate()
+			t.throttleOK()
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Roll back this attempt's progress delta: fetchAndWrite already counted
+		// the partial bytes via noteBytes, and the retry would count them AGAIN,
+		// pushing BytesDone past TotalSize (honest-metrics fix; data integrity
+		// is unaffected — the hasher is per-attempt too).
+		if d := t.bytesDone.Load() - before; d > 0 {
+			t.bytesDone.Add(-d)
+			t.noteBytes(-d, sink)
+		}
 		// A 429 means the server is throttling THIS client's aggregate rate:
 		// halve the shared limiter so every worker eases off, not just this
-		// chunk's retries. A successful chunk later restores the configured rate.
-		var pe transport.PermanentError
-		if errors.As(err, &pe) && pe.Status == http.StatusTooManyRequests {
+		// chunk's retries. The restore is cooldown-based (throttleOK), not
+		// per-chunk-success — one healthy worker must not undo the halving
+		// while others are still being 429'd.
+		var se transport.StatusError
+		if errors.As(err, &se) && se.Status == http.StatusTooManyRequests {
 			if t.lim.BackOffSignal() {
 				t.logf("warn", "server asked to slow down (429) — global rate halved")
 			}
+			t.lastThrottle.Store(time.Now().UnixNano())
 		}
 		// A permanent failure won't heal; skip the remaining attempts AND the
 		// worker-level requeue passes (the worker checks isPermanent too).
@@ -1124,14 +1192,20 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	// list (round-robin across all workers), so a batch of chunks spreads over
 	// every source. The primary URL stays in the rotation too — it's slot 0.
 	url := pr.FinalURL
+	ifRange := t.resumeETag
 	if n := len(t.opts.Mirrors); n > 0 {
 		i := t.mirrorIdx.Add(1) % uint64(n+1)
 		if i > 0 {
 			url = t.opts.Mirrors[i-1]
+			// If-Range carries the PRIMARY's ETag — a mirror with a different
+			// ETag scheme would answer 200 and be misread as resource drift.
+			// Mirrors get no If-Range; their Content-Range validation still
+			// guards every response.
+			ifRange = ""
 			t.logf("info", "chunk %d from mirror %s", c.Index, url)
 		}
 	}
-	resp, err := eng.Client().GetRange(chunkCtx, url, absStart, absEnd, t.resumeETag)
+	resp, err := eng.Client().GetRange(chunkCtx, url, absStart, absEnd, ifRange)
 	if err != nil {
 		return err
 	}
@@ -1140,16 +1214,32 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	// either it ignored Range entirely (writing the full body at the chunk's
 	// offset would corrupt the file — chunk 3's slot would hold bytes from
 	// position 0), or an If-Range resume detected that the resource changed
-	// since the interrupted run. Both are drift: retrying won't fix a changed
-	// resource, so a permanent error fails the task fast (the control file is
-	// dropped by Start's error path and a fresh re-download starts clean).
+	// since the interrupted run. Both are drift: retrying won't fix it, so
+	// this is classified PERMANENT explicitly (a plain statusErr would leave
+	// 200 retryable — the old behaviour caused a retry-storm before failing).
 	if resp.StatusCode != http.StatusPartialContent {
 		transport.SkipBody(resp.Body)
-		op := fmt.Sprintf("server ignored range request at offset %d", absStart)
+		op := "server ignored range request"
 		if t.resumeETag != "" {
-			op = fmt.Sprintf("resume target changed since last run (If-Range mismatch) at offset %d", absStart)
+			op = "resume target changed since last run (If-Range mismatch)"
 		}
-		return statusErr(op, resp.StatusCode)
+		return transport.StatusError{
+			Err:       fmt.Errorf("%s at offset %d (status %d)", op, absStart, resp.StatusCode),
+			Status:    resp.StatusCode,
+			Permanent: true,
+		}
+	}
+	// A 206 whose Content-Range doesn't start at the requested offset is the
+	// same corruption vector as a 200: the bytes belong somewhere else on
+	// disk. Verify before a single byte is written; like the 200 case, no
+	// amount of retrying fixes a server that lies about its own layout.
+	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, absStart) {
+		transport.SkipBody(resp.Body)
+		return transport.StatusError{
+			Err:       fmt.Errorf("server sent wrong range for offset %d (Content-Range %q)", absStart, cr),
+			Status:    http.StatusExpectationFailed,
+			Permanent: true,
+		}
 	}
 	// A 206 whose Content-Range doesn't start at the requested offset is the
 	// same corruption vector as a 200: the bytes belong somewhere else on
@@ -1265,7 +1355,7 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 // feeder sees live bytes-done *during* a long stream rather than only at chunk
 // boundaries. The gate is shared under rmMu across this task's workers, so the
 // sink fires ~10×/s per task regardless of how many connections are active
-//. sink may be nil (the Manager.Run test path
+// . sink may be nil (the Manager.Run test path
 // and RPC single-task probes pass nil); calling is skipped in that case.
 func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 	if delta < 0 {
@@ -1320,7 +1410,9 @@ func (t *Task) estimateETA() time.Duration {
 	if sp <= 0 {
 		return 0
 	}
-	eta := time.Duration((pr.TotalSize - done) * int64(time.Second) / sp)
+	// Divide FIRST: (remaining * 1e9) overflows int64 for remaining > ~9.2 GiB
+	// (a 20 GiB remainder used to wrap negative → ETA showed 0).
+	eta := time.Duration((pr.TotalSize-done)/sp) * time.Second
 	if eta < 0 {
 		return 0
 	}

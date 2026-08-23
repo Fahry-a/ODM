@@ -32,7 +32,7 @@ func TestLayoutFor_Tiers(t *testing.T) {
 		{120, 30, layoutFull}, // full layout
 		{100, 30, layoutFull},
 		{98, 30, layoutFull},
-		{97, 30, layoutFull}, // full layout floor (colSpeed grew to 12)
+		{97, 30, layoutFull},       // full layout floor (colSpeed grew to 12)
 		{80, 20, layoutNoSpeedETA}, // mid tier: speed/ETA dropped, bar shrinks
 		{66, 20, layoutNoSpeedETA}, // mid tier floor
 		{60, 10, layoutNameBarPct}, // bar at floor, no size/speed/ETA

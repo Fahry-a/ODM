@@ -52,8 +52,8 @@ type ExecOptions struct {
 	Checksum      string   // "algo:hex" or ""
 	ChecksumURL   string   // sidecar URL to fetch the digest from
 	Mirrors       []string // alternate URLs serving the same file
-	LimitRate     string // "5M"/"500K"/""=unlimited
-	TaskLimitRate string // "2M"/""=unlimited — per-task cap
+	LimitRate     string   // "5M"/"500K"/""=unlimited
+	TaskLimitRate string   // "2M"/""=unlimited — per-task cap
 	UserAgent     string
 	Headers       []string
 	Referer       string
@@ -211,23 +211,34 @@ func (m *Manager) track(id TaskID, t *Task) {
 }
 
 // dropTerminalTasks removes up to n registry entries whose state is terminal,
-// lowest id first. Terminal tasks can no longer be paused/removed, so dropping
-// them only affects tellStatus for very old tasks — the price of a bounded
-// registry. If fewer than n are terminal (e.g. most are still running) the map
-// stays slightly over the cap rather than dropping live work.
+// oldest (lowest numeric id) first. Terminal tasks can no longer be
+// paused/removed, so dropping them only affects tellStatus for very old tasks
+// — the price of a bounded registry. If fewer than n are terminal (e.g. most
+// are still running) the map stays slightly over the cap rather than dropping
+// live work.
 func dropTerminalTasks(m map[TaskID]*Task, n int) {
 	if n <= 0 {
 		return
 	}
-	ids := make([]TaskID, 0, len(m))
+	type entry struct {
+		id  TaskID
+		num int64
+	}
+	var ids []entry
 	for id, t := range m {
 		if s := t.State(); s == StateCompleted || s == StateError {
-			ids = append(ids, id)
+			// ids look like "odm-001"; parse the numeric suffix so odm-2
+			// sorts BEFORE odm-10 (a lexical compare drops the wrong ones).
+			var num int64
+			if _, err := fmt.Sscanf(string(id), "odm-%d", &num); err != nil {
+				num = 1 << 62 // unknown shape: prune last
+			}
+			ids = append(ids, entry{id, num})
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	sort.Slice(ids, func(i, j int) bool { return ids[i].num < ids[j].num })
 	for i := 0; i < n && i < len(ids); i++ {
-		delete(m, ids[i])
+		delete(m, ids[i].id)
 	}
 }
 

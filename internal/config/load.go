@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -151,12 +153,19 @@ func cookieHeader(path string) (string, error) {
 			continue
 		}
 		line = strings.TrimPrefix(line, "#HttpOnly_") // httponly marker prefix
-		fields := strings.Split(line, "\t")
-		if len(fields) < 7 {
+		fields := strings.SplitN(line, "\t", 7)
+		if len(fields) != 7 {
 			continue // malformed row: skip, don't fail the whole file
 		}
-		name, value := fields[5], fields[6]
-		if name == "" {
+		name := fields[5]
+		// Value is everything after the 6th tab — a cookie value may itself
+		// contain tabs; SplitN(…, 7) keeps it whole.
+		value := strings.TrimSpace(fields[6])
+		if name == "" || value == "" {
+			continue
+		}
+		// Expired cookies are dead weight (and leak stale session ids): skip.
+		if expiry, err := strconv.ParseInt(strings.FieldsFunc(fields[4], func(r rune) bool { return r == ' ' || r == '\t' })[0], 10, 64); err == nil && expiry > 0 && time.Now().Unix() >= expiry {
 			continue
 		}
 		pairs = append(pairs, name+"="+value)
@@ -235,9 +244,9 @@ func parseMetalink(path string, o *Options) ([]string, error) {
 	}
 	var doc struct {
 		Files []struct {
-			Name    string `xml:"name"`
-			Size    int64  `xml:"size"`
-			Hashes  []struct {
+			Name   string `xml:"name"`
+			Size   int64  `xml:"size"`
+			Hashes []struct {
 				Type string `xml:"type,attr"`
 				Val  string `xml:",chardata"`
 			} `xml:"hash"`
@@ -286,5 +295,9 @@ func parseMetalink(path string, o *Options) ([]string, error) {
 		o.Checksum = pick
 	}
 	o.Mirrors = append(o.Mirrors, urls[1:]...)
-	return urls, nil
+	// ONE task: the primary URL only. Returning every mirror as its own batch
+	// target used to spawn same-basename tasks writing the SAME destination
+	// concurrently (silent WriteAt overlap corruption), and the >1-URL batch
+	// rule then discarded o.Checksum — losing metalink verification entirely.
+	return urls[:1], nil
 }

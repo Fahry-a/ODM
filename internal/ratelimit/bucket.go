@@ -147,10 +147,15 @@ func (l *Limiter) SetRate(spec string) error {
 // Acquire waits until n bytes worth of tokens are available, honouring ctx
 // cancellation. n may be 0 (returns immediately) or negative (no-op).
 func (l *Limiter) Acquire(ctx context.Context, n int) error {
-	if l.Unlimited() || n <= 0 {
+	if n <= 0 {
 		return nil
 	}
+	// Load the pointer ONCE: a concurrent SetRate("off") stores nil between a
+	// separate Unlimited() check and this load would panic on WaitN.
 	lr := l.lr.Load()
+	if lr == nil {
+		return nil
+	}
 	if err := lr.WaitN(ctx, min(n, lr.Burst())); err != nil {
 		return fmt.Errorf("rate: %w", err)
 	}
@@ -199,7 +204,9 @@ type RateReader struct {
 // capped regardless of how buffers are sized per-connection.
 func (rr *RateReader) Read(p []byte) (int, error) {
 	n, err := rr.src.Read(p)
-	if n > 0 && !rr.l.Unlimited() {
+	if n > 0 {
+		// Acquire re-checks the limiter pointer under one load — no TOCTOU
+		// with a concurrent SetRate("off") storing nil.
 		if werr := rr.l.Acquire(rr.ctx, n); werr != nil {
 			return n, errors.Join(err, werr)
 		}

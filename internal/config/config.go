@@ -1,5 +1,5 @@
 // Package config holds ODM's option model: the set of all user tunables
-//, the `key = value` config-file parser,
+// , the `key = value` config-file parser,
 // and the merge that implements the source priority:
 //
 //	CLI args  >  ~/.config/odm/config.conf  >  /etc/odm/config.conf  >  defaults
@@ -82,14 +82,14 @@ type Options struct {
 	Proxy      string   // --proxy (http/https/socks5)
 
 	// TLS / integrity.
-	CheckCertificate bool   // --check-certificate
+	CheckCertificate bool     // --check-certificate
 	Checksum         string   // --checksum "algo:hash"
 	ChecksumURL      string   // --checksum-url: sidecar URL carrying the digest
 	Mirrors          []string // --mirror (repeatable): alternate URLs for the same file
 	SessionLog       string   // --session-log: JSONL event file for wrappers
-	LimitRate        string // --limit-rate "5M"/"500K"  ("" = unlimited)
-	TaskLimitRate    string // --limit-rate-per-task "2M" (per-task cap, additive to global)
-	ChunkSize        string // --chunk-size "4M"
+	LimitRate        string   // --limit-rate "5M"/"500K"  ("" = unlimited)
+	TaskLimitRate    string   // --limit-rate-per-task "2M" (per-task cap, additive to global)
+	ChunkSize        string   // --chunk-size "4M"
 
 	// Engine profile.
 	Profile          string // --profile: odm|aria2c|both|smart (default "odm")

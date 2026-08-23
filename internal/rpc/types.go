@@ -1,5 +1,5 @@
 // Package rpc implements ODM's JSON-RPC 2.0 + WebSocket control surface.
-//): JSON-RPC 2.0 over HTTP POST at /rpc, WebSocket event fan-out at /ws,
+// ): JSON-RPC 2.0 over HTTP POST at /rpc, WebSocket event fan-out at /ws,
 // and aria2-style `token:<secret>` authentication when --rpc-secret is set.
 //
 // The server delegates to a scheduler.Daemon (which owns the live Scheduler + a
