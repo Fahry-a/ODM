@@ -8,7 +8,7 @@ import (
 )
 
 // TestExampleConfigParsesAndValidates guards the shipped configs/odm.conf.example
-// (PRD §7): it must parse cleanly with the project's own parser and the
+//: it must parse cleanly with the project's own parser and the
 // resulting layered defaults must Validate. This catches a typo'd key, a bad
 // default value, or a stray example-only entry drifting out of sync with the
 // real key set between releases.
@@ -33,7 +33,7 @@ func TestExampleConfigParsesAndValidates(t *testing.T) {
 	if err := o.Validate(); err != nil {
 		t.Fatalf("example config produces invalid options: %v", err)
 	}
-	// Sanity: the documented §6.2 defaults the example advertises should land
+	// Sanity: the documented defaults the example advertises should land
 	// where the example says (these are the uncommented value lines).
 	if o.Connections != DefaultConnections || o.MaxConnection != DefaultMaxConn {
 		t.Fatalf("example defaults drifted: connections=%d max=%d (want %d/%d)",

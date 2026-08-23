@@ -52,7 +52,7 @@ func startServer(t *testing.T, secret string) (*httptest.Server, *Server, func()
 	d.Start(ctx)
 
 	srv := NewServerWithBroadcaster(d, secret, bc)
-	// §10.3 completion events: route each task's terminal snapshot onto the
+	// completion events: route each task's terminal snapshot onto the
 	// Broadcaster. Matches what runRPC does, so these tests exercise the real
 	// event path rather than a stub.
 	d.OnComplete(srv.OnTaskComplete)
@@ -325,7 +325,7 @@ func TestBroadcasterEvents(t *testing.T) {
 	bc.Broadcast(Event{Method: "onDownloadStart", Params: "x"})
 }
 
-// TestServer_WSDialEvent is the PRD §16 RPC-over-WebSocket acceptance test: a
+// TestServer_WSDialEvent is the spec RPC-over-WebSocket acceptance test: a
 // real gorilla/websocket client dials /ws, a separate HTTP POST fires odm.addUri,
 // and the subscriber must receive the pushed onDownloadStart frame carrying the
 // new task's goid. This exercises the full event path end-to-end: ws upgrade,
@@ -415,7 +415,7 @@ func TestServer_WSDialEvent(t *testing.T) {
 }
 
 // TestServer_WSDialEvent_WithSecret confirms the ?secret=<value> query-auth on
-// the /ws upgrade (§10.1): a missing secret is rejected, the right one upgrades.
+// the /ws upgrade: a missing secret is rejected, the right one upgrades.
 func TestServer_WSDialEvent_WithSecret(t *testing.T) {
 	hs, _, stop := startServer(t, "topsecret")
 	defer stop()
@@ -445,8 +445,8 @@ func TestServer_WSDialEvent_WithSecret(t *testing.T) {
 // ensure string helpers used in tests don't optimize away.
 var _ = strings.TrimSpace
 
-// TestServer_WSCompletionEvents is the PRD §16 RPC-over-WebSocket acceptance test
-// for the previously-missing §10.3 events: it drives a real download through the
+// TestServer_WSCompletionEvents is the spec RPC-over-WebSocket acceptance test
+// for the previously-missing events: it drives a real download through the
 // engine (a range-supporting httptest payload) over an RPC addUri, and asserts the
 // WebSocket subscriber receives onDownloadStart followed by onDownloadComplete —
 // proving the completion→Broadcaster wiring (handleComplete → Daemon.OnComplete →
@@ -537,7 +537,7 @@ func TestServer_WSCompletionEvents(t *testing.T) {
 	t.Fatalf("stopped task never reported completed via tellStatus")
 }
 
-// TestServer_WSErrorEvent asserts the §10.3 onDownloadError event fires for a
+// TestServer_WSErrorEvent asserts the onDownloadError event fires for a
 // task that fails (here: an unreachable URL the engine can complete). We point
 // the engine at a 500-returning payload server and expect onDownloadError over
 // /ws rather than onDownloadComplete.

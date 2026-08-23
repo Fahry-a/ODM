@@ -1,4 +1,4 @@
-// Package transport is the HTTP client layer of ODM. It owns the §5.2
+// Package transport is the HTTP client layer of ODM. It owns the
 // range-support probe (HEAD → ranged GET → single-stream fallback), the
 // redirect limit, custom headers, proxy, and TLS verify toggle. Download
 // workers (internal/download) build per-chunk ranged requests on top of the
@@ -21,7 +21,7 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// ProbeResult is what the §5.2 probe decides about a URL.
+// ProbeResult is what the probe decides about a URL.
 type ProbeResult struct {
 	FinalURL      string // URL after following redirects (up to maxRedirect)
 	SupportsRange bool   // server accepts ranged GET (206)
@@ -250,7 +250,7 @@ func (c *Client) initBaseHeaders() error {
 
 // NewGetRequest builds a plain GET request to rawURL with ODM's base headers
 // applied (User-Agent, Referer, custom -H headers). Exposed so the download
-// engine can fire the single-stream fallback (§11.2) reusing the same headers.
+// engine can fire the single-stream fallback reusing the same headers.
 func (c *Client) NewGetRequest(ctx context.Context, rawURL string) (*http.Request, error) {
 	return c.newRequest(ctx, http.MethodGet, rawURL)
 }
@@ -291,7 +291,7 @@ func contentDispositionFilename(v string) string {
 	return ""
 }
 
-// Probe runs the §5.2 three-step chain to determine size + range support for
+// Probe runs the three-step chain to determine size + range support for
 // rawURL. It never returns both SupportsRange=false *and* TotalSize known ≠ -1
 // in a way that contradicts: a server that reports size but refuses ranges sets
 // SingleStream=true and SupportsRange=false; a server that can't tell us the
@@ -461,7 +461,7 @@ func parseRangeTotal(cr string) int64 {
 // GetRange issues a ranged GET for [start, end] inclusive (end<0 means
 // end-of-file). Returns the open response; the caller owns Body. On a server
 // that ignores Range (responds 200), the caller should treat the whole body as
-// byte 0 onward (single-stream degeneration, §11.2).
+// byte 0 onward (single-stream degeneration,).
 func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64) (*http.Response, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, rawURL)
 	if err != nil {

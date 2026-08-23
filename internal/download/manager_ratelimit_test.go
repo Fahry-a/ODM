@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// TestLimitRate_StableAggregate is the PRD §16 rate-limiting acceptance test:
+// TestLimitRate_StableAggregate is the spec rate-limiting acceptance test:
 // --limit-rate is a GLOBAL token bucket shared across all workers of all tasks
-// (§11.4), so the aggregate throughput stays near the configured cap regardless
+//, so the aggregate throughput stays near the configured cap regardless
 // of how many connections are active. A naive per-connection split would make
 // -c 8 hit ~8× the cap; here both -c 1 and -c 8 must land close to the same cap.
 //
@@ -117,7 +117,7 @@ func TestLimitRate_StableAggregate(t *testing.T) {
 	// (b) The achieved rates for the two connection counts must be close — proving
 	// the cap is GLOBAL, not split per connection. Two genuinely different rates
 	// would mean the limiter is per-connection (8× faster at c=8) which is exactly
-	// the bug §11.4 forbids. We bound their spread generously (±half) so jitter
+	// the bug forbids. We bound their spread generously (±half) so jitter
 	// can't flip a real-but-marginal aggregate cap into a failure.
 	low, high := min(r1, r8), max(r1, r8)
 	if high > 2*low {

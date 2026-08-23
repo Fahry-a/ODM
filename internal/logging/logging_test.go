@@ -200,7 +200,7 @@ func TestLogger_CloseIdempotent(t *testing.T) {
 }
 
 // TestLogger_NilSafe: a nil *Logger must never panic — the download engine
-// sometimes passes nil to mean "engine runs silent" (PRD §6.2 quiet+no-log),
+// sometimes passes nil to mean "engine runs silent",
 // and a stray log call shouldn't crash it.
 func TestLogger_NilSafe(t *testing.T) {
 	var l *Logger

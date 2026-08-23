@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// ControlFile is the JSON payload of `<filename>.odm` (PRD §11.3). It records
+// ControlFile is the JSON payload of `<filename>.odm`. It records
 // enough state to resume: the source URL (to revalidate the server hasn't
 // shipped a different file via ETag/Content-Length drift — kept but not
 // enforced strictly in MVP), the total size, chunk size, and the set of chunk
@@ -101,7 +101,7 @@ func SaveControl(destPath string, cf *ControlFile) error {
 }
 
 // RemoveControl deletes the control file (called once a task verifies
-// successfully, §12 step 8). Missing-file is not an error.
+// successfully, step 8). Missing-file is not an error.
 func RemoveControl(destPath string) error {
 	if err := os.Remove(ControlPath(destPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err

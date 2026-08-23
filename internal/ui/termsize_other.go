@@ -3,7 +3,7 @@
 package ui
 
 // ioctlWinSize is the non-Linux fallback: the rewrite's ioctl path is Linux
-// only (the toolchain, CI and the dev machine all run Linux, PRD §6 notes the
+// only (the toolchain, CI and the dev machine all run Linux,notes the
 // sandbox workaround is Linux-centred), but this can stub keeps the package
 // buildable under any GOOS so a stray `GOOS=windows go build ./...` doesn't
 // fail on an undefined symbol. A non-Linux build simply can't probe the tty

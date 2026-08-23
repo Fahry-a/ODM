@@ -1,5 +1,5 @@
 // Package storage owns the on-disk side of a download task: pre-allocation +
-// concurrent WriteAt (§11.1) and the `.odm` control file used for resume (§11.3).
+// concurrent WriteAt and the `.odm` control file used for resume.
 //
 // Chunk writes never overlap (chunk boundaries are disjoint), so concurrent
 // os.File.WriteAt calls are safe without a mutex — the OS positions the write
@@ -22,7 +22,7 @@ type File struct {
 
 // OpenForWrite opens (creating as needed) the destination file at dir/name. If
 // size is known (>0), the file is pre-allocated to size so chunk writes can
-// land at any offset without the file growing mid-write (§11.1). size<0 keeps
+// land at any offset without the file growing mid-write. size<0 keeps
 // it as a plain grow-as-you-write file for sizeless streams.
 func OpenForWrite(dir, name string, size int64) (*File, error) {
 	if name == "" {

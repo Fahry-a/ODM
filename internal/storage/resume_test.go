@@ -71,7 +71,7 @@ func TestSaveLoadControl_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestLoadControl_MissingFile: the §11.3 contract distinguishes "no control
+// TestLoadControl_MissingFile: the contract distinguishes "no control
 // file" (fresh download / resume-from-scratch) from "control file corrupt".
 // The first must return sentinel NoControlFile so callers can branch cleanly.
 func TestLoadControl_MissingFile(t *testing.T) {

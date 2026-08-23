@@ -12,7 +12,7 @@ import (
 
 // TestOpenForWrite_Preallocates verifies that a known size pre-allocates the
 // file to exactly that length so chunk writes can land at any offset without
-// the file growing out from under them (§11.1).
+// the file growing out from under them.
 func TestOpenForWrite_Preallocates(t *testing.T) {
 	dir := t.TempDir()
 	const size = 1 << 16
@@ -32,7 +32,7 @@ func TestOpenForWrite_Preallocates(t *testing.T) {
 }
 
 // TestOpenForWrite_SizelessStream: size<0 must NOT pre-allocate — the file
-// grows as bytes are written (sizeless/streaming download fallback, §11.2).
+// grows as bytes are written (sizeless/streaming download fallback,).
 func TestOpenForWrite_SizelessStream(t *testing.T) {
 	dir := t.TempDir()
 	f, err := OpenForWrite(dir, "stream.dat", -1)
@@ -109,7 +109,7 @@ func TestFile_WriteAtReadAt_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestFile_ConcurrentWriteAt_NoOverlap stresses the §11.1 guarantee: many
+// TestFile_ConcurrentWriteAt_NoOverlap stresses the guarantee: many
 // workers writing non-overlapping chunks must produce exactly the union of
 // their bytes with no torn writes. The chunk-queue engine relies on this
 // being safe without a mutex.

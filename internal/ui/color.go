@@ -19,7 +19,7 @@ const (
 	colorMagenta Color = "\x1b[35m"
 )
 
-// stateColor maps a TaskState to its §8 colour.
+// stateColor maps a TaskState to its colour.
 func stateColor(s download.TaskState, useColor bool) Color {
 	if !useColor {
 		return ""

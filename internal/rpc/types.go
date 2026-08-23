@@ -1,5 +1,5 @@
-// Package rpc implements ODM's JSON-RPC 2.0 + WebSocket control surface (PRD
-// §10): JSON-RPC 2.0 over HTTP POST at /rpc, WebSocket event fan-out at /ws,
+// Package rpc implements ODM's JSON-RPC 2.0 + WebSocket control surface (spec
+//): JSON-RPC 2.0 over HTTP POST at /rpc, WebSocket event fan-out at /ws,
 // and aria2-style `token:<secret>` authentication when --rpc-secret is set.
 //
 // The server delegates to a scheduler.Daemon (which owns the live Scheduler + a
@@ -38,7 +38,7 @@ const (
 	codeAuthError      = 1 // app-level: bad/missing secret
 )
 
-// Event is a WebSocket notification pushed to subscribers (PRD §10.3).
+// Event is a WebSocket notification pushed to subscribers.
 type Event struct {
 	Method string `json:"method"`
 	Params any    `json:"params"`

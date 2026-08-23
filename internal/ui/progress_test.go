@@ -387,7 +387,7 @@ func TestConfirmSingle_Color(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug §3.4 — rune-safe filename truncation (no mid-byte cuts on UTF-8 names).
+// Bug — rune-safe filename truncation (no mid-byte cuts on UTF-8 names).
 // ---------------------------------------------------------------------------
 
 func TestTruncateName_RuneSafe(t *testing.T) {
@@ -635,7 +635,7 @@ func TestInterject_FrameSafeLog(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug §3.1 — vanished completed task is retained; §3.2 — no double count.
+// Bug — vanished completed task is retained; — no double count.
 //
 // A task that once appeared (Active) and then drops out of both live & queued
 // (the scheduler retired it to its stopped set) must stay on screen at its
@@ -705,7 +705,7 @@ func TestFrame_NoDoubleCountWhenCompletedStillInLive(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug §3.2 — set-based total even when a Completed task is carried in `live`.
+// Bug — set-based total even when a Completed task is carried in `live`.
 // ---------------------------------------------------------------------------
 
 func TestAggregate_CountsUniqueIDs(t *testing.T) {
@@ -721,7 +721,7 @@ func TestAggregate_CountsUniqueIDs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug §3.5 — indeterminate bar actually moves between frames.
+// Bug — indeterminate bar actually moves between frames.
 // ---------------------------------------------------------------------------
 
 func TestBarIndeterminate_AnimatesAcrossFrames(t *testing.T) {
@@ -809,7 +809,7 @@ func TestBarIndeterminate_EatSyncedFace(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug §3.6 — non-TTY throttle: redirected output is not spammed every tick.
+// Bug — non-TTY throttle: redirected output is not spammed every tick.
 // We drive a fake clock so the interval gate is deterministic.
 // ---------------------------------------------------------------------------
 
@@ -867,7 +867,7 @@ func TestNonTTYThrottle_DoesNotSpamEveryFrame(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Bug §3.7 — ConfirmAsk retries on a bad answer; EOF (no input) = silent cancel.
+// Bug — ConfirmAsk retries on a bad answer; EOF (no input) = silent cancel.
 // ---------------------------------------------------------------------------
 
 func TestConfirmAsk_RetriesOnBadInput(t *testing.T) {
@@ -909,7 +909,7 @@ func TestConfirmAsk_EOFIsSilentCancel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ConfirmBatch: keeps the PRD §9 layout (allocation line + numbered list).
+// ConfirmBatch: keeps the spec layout (allocation line + numbered list).
 // (A light smoke test — the old suite only covered single-file.)
 // ---------------------------------------------------------------------------
 

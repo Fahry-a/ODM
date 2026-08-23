@@ -8,7 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Broadcaster fans WebSocket events out to all connected subscribers (PRD §10.3).
+// Broadcaster fans WebSocket events out to all connected subscribers.
 // Each subscriber has its own goroutine reading from a buffered channel; a slow
 // client that overflows its buffer is dropped (we don't backpressure the engine
 // on account of a single GUI).

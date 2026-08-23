@@ -1,4 +1,4 @@
-// Package logging is ODM's tiny leveled logger (PRD §6.2 --log / --log-level).
+// Package logging is ODM's tiny leveled logger.
 // It is deliberately stdlib-shaped so we don't pull a logging framework:
 // levels filter output, an optional --log file captures everything (mirrored),
 // and the engine (Task/Manager) plus the CLI funnel here.

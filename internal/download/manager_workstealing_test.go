@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// TestWorkStealing_BeatsStaticEqualSplit is the PRD §16 work-stealing
-// acceptance test: with a work-stealing chunk queue (§11.1), the straggler
+// TestWorkStealing_BeatsStaticEqualSplit is the spec work-stealing
+// acceptance test: with a work-stealing chunk queue, the straggler
 // problem of a static equal-split is avoided — a slow region of the file is
 // split into many small chunks that N workers pull concurrently, instead of one
 // worker being forced to read the whole slow region serially.
@@ -27,7 +27,7 @@ import (
 //     delays once per slow chunk it overlaps. That worker is the straggler and
 //     pays the FULL serial penalty (slowCount * perChunkDelay); the other slices
 //     finish immediately. Wall-clock ≈ that straggler (this is the classic
-//     straggler problem of equal-split segmentation, PRD §11.1).
+//     straggler problem of equal-split segmentation).
 //   - Work-stealing chunk queue (N workers pulling from a shared queue): the
 //     slow region's chunks are fetched concurrently, up to N at a time, so the
 //     slow region finishes in ~ceil(slowCount/N) waves. Wall-clock drops by
@@ -167,7 +167,7 @@ func serveProportionalSlowRangeServer(t *testing.T, payload []byte, chunkSize, s
 // slice fetches its slice as a single ranged request and writes it at its base
 // offset. There is NO shared queue — a worker cannot help another — so the
 // worker owning the slow region is the straggler that gates the wall-clock
-// (exactly the problem §11.1 says the chunk queue avoids). Returns total
+// (exactly the problem says the chunk queue avoids). Returns total
 // elapsed time. Errors fail the test (the same payload/server already succeeded
 // for the chunk-queue run, so a slice failing is a bug).
 func runStaticEqualSplit(t *testing.T, url, dir, name string, payload []byte, parts int) time.Duration {

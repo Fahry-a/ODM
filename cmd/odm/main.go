@@ -1,4 +1,4 @@
-// Command odm is the Oryn Download Manager binary (PRD §1). It is the single
+// Command odm is the Oryn Download Manager binary. It is the single
 // entry point that wires the internal packages together: it parses CLI +
 // config (internal/config), probes URLs (internal/transport), computes the
 // Connection Balancer plan (internal/scheduler), drives the chunk-queue engine
@@ -68,7 +68,7 @@ func run(argv []string) error {
 			msg: err.Error() + " (run 'odm -h' for usage)"}
 	}
 
-	// Leveled logger (§6.2 --log / --log-level). Default level info; a quiet
+	// Leveled logger. Default level info; a quiet
 	// session with no --log file degrades to a silent engine LogFn so the
 	// pacman bar is the only output.
 	var logLevel = logging.LevelInfo
@@ -91,7 +91,7 @@ func run(argv []string) error {
 		engineLog = logger.TaskLogFn()
 	}
 
-	// --- RPC daemon path (PRD §10): no confirmation prompt (§9). -----------------
+	// --- RPC daemon path: no confirmation prompt. -----------------
 	if o.RPC {
 		return runRPC(o, engineLog, logger)
 	}
@@ -135,9 +135,9 @@ func run(argv []string) error {
 		return err
 	}
 
-	// §5.2 probe every URL up front so the Balancer can do allocation-time
-	// reallocation for files that don't support ranges (§5.5). The probe also
-	// learns Content-Length for the confirmation prompt (§9) and the progress
+	// probe every URL up front so the Balancer can do allocation-time
+	// reallocation for files that don't support ranges. The probe also
+	// learns Content-Length for the confirmation prompt and the progress
 	// bar's total.
 	ctx, cancel := signalCtx()
 	defer cancel()
@@ -147,7 +147,7 @@ func run(argv []string) error {
 	probes := make(map[string]*transport.ProbeResult, len(o.URLs))
 	// profiles holds the concrete engine per URL: the user's --profile for
 	// odm/aria2c/both, or the smart decision resolved after the Balancer pass
-	// (which fixes the per-file connection budget). It feeds the §9 batch prompt
+	// (which fixes the per-file connection budget). It feeds the batch prompt
 	// (which shows each file's engine) and is injected into each Task via
 	// SetProfile so Start doesn't re-probe h2 readiness. Populated below only
 	// for smart; explicit profiles need no per-file map (empty is fine).
@@ -241,7 +241,7 @@ func run(argv []string) error {
 		}
 	}
 
-	// §9 confirmation prompt — skipped when -y/--yes OR --quiet (PRD §9).
+	// confirmation prompt — skipped when -y/--yes OR --quiet.
 	if !o.Yes && !o.Quiet {
 		ok, err := confirmPlan(o, plan, sizes, profiles, profileReasons, mgr)
 		if err != nil {
@@ -253,7 +253,7 @@ func run(argv []string) error {
 	}
 
 	// Progress renderer: a buffered snapshot channel feeds the RunLoop at the
-	// ~100ms cadence the PRD calls out (§11.1 "throttled progress"). The
+	// ~100ms cadence the spec calls out. The
 	// scheduler's ProgressCB pushes into it.
 	r := ui.NewRenderer(os.Stdout, o.Quiet)
 	// While the renderer owns a TTY screen, engine logs must go through it:
@@ -334,7 +334,7 @@ func run(argv []string) error {
 	// Final frame so the terminal lands on the completed/error bars.
 	r.Frame(nil, nil)
 
-	// §13 exit-code mapping. A user-initiated ^C / SIGTERM is "cancelled" (4),
+	// exit-code mapping. A user-initiated ^C / SIGTERM is "cancelled" (4),
 	// not a network/partial failure: the scheduler returns context.Canceled and
 	// the in-flight tasks' partial bytes are preserved for --continue.
 	code := download.ExitCodeFrom(succeeded, failed, 0)
@@ -487,7 +487,7 @@ func parseChunkSize(s string) (int64, error) {
 	return n, nil
 }
 
-// confirmPlan renders the §9 prompt for the appropriate mode (single-file vs
+// confirmPlan renders the prompt for the appropriate mode (single-file vs
 // batch) and returns the user's Y/n answer.
 func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64, profiles map[string]string, reasons map[string]string, mgr *download.Manager) (bool, error) {
 	useColor := ui.IsTTY(os.Stdout)
@@ -532,7 +532,7 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
 }
 
-// printSummary writes the final outcome line (§12 step 9). cancelled=true means
+// printSummary writes the final outcome line. cancelled=true means
 // the run was interrupted (^C/SIGTERM) — in-flight tasks then count as failed
 // even though nothing actually errored, so the message says so and reminds the
 // user that --continue resumes where it left off.
@@ -601,14 +601,14 @@ func runRPC(o *config.Options, engineLog download.LogFn, logger *logging.Logger)
 	// Build the WebSocket Broadcaster up front so the scheduler's progress
 	// callback (created before the Daemon) and the Server share one fan-out —
 	// onDownloadProgress, onDownloadStart and onDownloadComplete all go to the
-	// same subscribers (PRD §10.3).
+	// same subscribers.
 	bc := rpc.NewBroadcaster()
 	progTh := rpc.NewProgressThrottler(bc)
 	sch := scheduler.NewEmptyScheduler(slots, mgr.NewTask, progTh.Forward)
 	daemon := scheduler.NewDaemon(sch, mgr)
 	srv := rpc.NewServerWithBroadcaster(daemon, o.RPCSecret, bc)
 
-	// §10.3 lifecycle events: map each task's terminal snapshot onto the right
+	// lifecycle events: map each task's terminal snapshot onto the right
 	// WebSocket event. Registered before Start so the live scheduler's
 	// handleComplete observes the hook when it fires.
 	daemon.OnComplete(func(v download.ProgressView) {
@@ -673,7 +673,7 @@ func secretWord(s string) string {
 	return "on"
 }
 
-// errExit carries a §13 exit code without touching os.Exit, so run() stays
+// errExit carries a exit code without touching os.Exit, so run() stays
 // test-friendly. The sentinel's Error() surfaces a message only when one was
 // set; a bare exit-code outcome prints nothing extra (the summary already did).
 type errExit struct {
@@ -689,7 +689,7 @@ func (e errExit) Error() string {
 }
 
 // printUsage renders the help text. It is deliberately hand-written rather than
-// derived from pflag's FlagUsages so the flag table matches the PRD §6.2 list
+// derived from pflag's FlagUsages so the flag table matches the spec list
 // exactly (with the documented aliases) — pflag's own formatting drops aliases
 // and reorders by category, which is less friendly for a download tool.
 func printUsage(w *os.File) {

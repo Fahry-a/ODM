@@ -1,4 +1,4 @@
-// queue.go is the dynamic scheduling layer (PRD §5.3, §5.4): it takes the
+// queue.go is the dynamic scheduling layer: it takes the
 // Balancer's static plan and turns it into a live scheduler that keeps up to
 // `len(plan.Parallel)` tasks running at any time, advancing queued tasks as
 // slots free up. This is the "rest queued, auto-start as slots free" behaviour.
@@ -25,7 +25,7 @@ type Scheduler struct {
 
 	// onComplete is fired once per task as it leaves the live set
 	// (handleComplete), carrying the task's final snapshot. The RPC Server wires
-	// this (PRD §10.3) to emit onDownloadComplete / onDownloadError. nil ⇒ off
+	// this to emit onDownloadComplete / onDownloadError. nil ⇒ off
 	// (the CLI one-shot path never sets it). Guarded by mu below.
 	onComplete func(download.ProgressView)
 
@@ -83,7 +83,7 @@ func NewScheduler(plan *Plan, maker TaskMaker, prog ProgressCB) *Scheduler {
 
 // OnComplete registers a callback fired exactly once per task as it leaves the
 // live set (handleComplete), carrying the task's final snapshot. The RPC Server
-// uses it to emit onDownloadComplete / onDownloadError (PRD §10.3). May only be
+// uses it to emit onDownloadComplete / onDownloadError. May only be
 // called before Run; it is a no-op to set on a scheduler already running. The
 // one-shot CLI path leaves it nil — completion is surfaced only via the summary.
 func (s *Scheduler) OnComplete(f func(download.ProgressView)) {
@@ -292,7 +292,7 @@ func (s *Scheduler) handleComplete(st scheduledTask) {
 	} else {
 		atomic.AddInt32(&s.failed, 1)
 	}
-	// §10.3 lifecycle events: fire post-tally so the snapshot reads the final
+	// lifecycle events: fire post-tally so the snapshot reads the final
 	// state (completed vs. error). cb is nil on the CLI one-shot path.
 	if cb != nil {
 		cb(st.task.Snapshot())

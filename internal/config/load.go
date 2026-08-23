@@ -43,7 +43,7 @@ func Setup(argv []string) (*Options, *pflag.FlagSet, error) {
 	return o, fs, nil
 }
 
-// Load layers the §6.3 config priority onto a freshly-defaulted *Options built
+// Load layers the config priority onto a freshly-defaulted *Options built
 // internally, given a FlagSet whose only need is fs.Changed("config"). It is the
 // standalone entry used by tests that don't want to run a full Parse. Production
 // CLI code uses Setup instead: Setup binds flag pointers to the live *Options so
@@ -59,7 +59,7 @@ func Load(fs *pflag.FlagSet, argsAfterFlags []string) (*Options, error) {
 	return o, nil
 }
 
-// LoadLayers applies the §6.3 file-stack (system → user → explicit --config),
+// LoadLayers applies the file-stack (system → user → explicit --config),
 // then resolves positional + -i URLs and validates — all onto the receiver.
 // Operating on the receiver is what lets Setup pass the flag-bound *Options
 // straight through: pflag wrote the real fields during Parse, so changed flags
@@ -113,7 +113,7 @@ func (o *Options) LoadLayers(fs *pflag.FlagSet, positional []string) error {
 	return o.Validate()
 }
 
-// resolveURLs implements §6.4 batch URL parsing:
+// resolveURLs implements batch URL parsing:
 //   - positional args present → each arg is one URL (canonical, comma-safe).
 //   - exactly one positional arg containing commas → legacy comma-delimited list.
 //   - -i file → appended (one URL per line, # comments + blanks skipped).
@@ -176,7 +176,7 @@ func resolveURLs(o *Options, positional []string) ([]string, error) {
 // an http:// or https:// scheme prefix. This is the heuristic separator for
 // the legacy comma-delimited single-arg batch form: "https://a/x,https://b/y"
 // splits, but "https://h?ids=1,2,3" (comma inside a single URL) does not, since
-// nothing after its comma looks like a new URL. See PRD §6.4 — this form is
+// nothing after its comma looks like a new URL. See spec — this form is
 // intentionally approximate which is why space-separated is recommended.
 func commaFollowedByScheme(s string) bool {
 	rest := s

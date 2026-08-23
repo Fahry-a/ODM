@@ -124,7 +124,7 @@ func statusGlyph(v download.ProgressView) (string, Color) {
 	return " ", ""
 }
 
-// RenderSummary formats the bottom summary line (PRD §8.1 example):
+// RenderSummary formats the bottom summary line:
 //
 //	Total: X/Y completed  <bytes>  <speed>  ETA <eta>  +<elapsed>  [bar]  ZZ%
 //

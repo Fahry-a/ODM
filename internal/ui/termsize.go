@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // termsize.go exposes the terminal size the live redraw needs to keep one
-// logical line == one physical line (PRD §8 bug §3.3): if a rendered line is
+// logical line == one physical line: if a rendered line is
 // wider than the terminal it wraps, the ANSI cursor-up count (stored per
 // frame) no longer matches the number of physical rows actually on screen and
 // subsequent redraws corrupt the display — doubly so for long filenames in a
@@ -14,7 +14,7 @@
 //
 // We deliberately do NOT import golang.org/x/term: it is not a known dependency
 // of this module and adding it would pull a vanity import that the project's
-// sandbox/CI egress often can't resolve (per the rewrite spec §6). The standard
+// sandbox/CI egress often can't resolve (per the rewrite spec). The standard
 // syscall(TIOCGWINSZ) ioctl is all the renderer needs, on a Linux build tag.
 
 package ui

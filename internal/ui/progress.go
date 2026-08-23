@@ -1,5 +1,5 @@
-// Package ui renders ODM's pacman/CachyOS (ILoveCandy) progress bar (PRD §8),
-// runs the live TTY redraw loop over a snapshot feed, and shows the §9
+// Package ui renders ODM's pacman/CachyOS (ILoveCandy) progress bar,
+// runs the live TTY redraw loop over a snapshot feed, and shows the
 // confirmation prompt. It is the only screen-printing layer of the engine —
 // the download + scheduler packages send ProgressView snapshots; ui owns every
 // byte that reaches stdout.
@@ -32,7 +32,7 @@ const (
 )
 
 // shouldColor reports whether ANSI colours should be emitted: only on a TTY and
-// when NO_COLOR isn't set (PRD §8).
+// when NO_COLOR isn't set.
 func shouldColor(w io.Writer) bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false
@@ -117,7 +117,7 @@ type Renderer struct {
 	lastLines int
 
 	// indeterminateTick advances the sizeless pacman bounce once per Frame so
-	// it visibly moves between ticks (bug §3.5). Reset for nothing — a missed
+	// it visibly moves between ticks (bug). Reset for nothing — a missed
 	// frame just delays the bounce, never corrupts state.
 	indeterminateTick int
 
@@ -132,7 +132,7 @@ type Renderer struct {
 	// non-blocking send: coalesced, never blocks the sender.
 	Wake chan struct{}
 
-	// Non-TTY throttle (PRD §8.2): when stdout is redirected we don't want a
+	// Non-TTY throttle: when stdout is redirected we don't want a
 	// line every 100ms. We print at most one summary snapshot per
 	// nonTTYInterval, and additionally whenever the aggregate state changes
 	// (a task completes/pauses, or the batch's aggregate percentage crosses an
@@ -165,7 +165,7 @@ func NewRenderer(w io.Writer, quiet bool) *Renderer {
 		cur: cursor{
 			cache: map[download.TaskID]download.ProgressView{},
 		},
-		// PRD §8.2: "every 10% or every fixed time interval". One line/2s is
+		// spec: "every 10% or every fixed time interval". One line/2s is
 		// readable in a redirected log without drowning it; the state-change
 		// path adds milestone lines on top.
 		nonTTYInterval: 2 * time.Second,
@@ -257,7 +257,7 @@ func (r *Renderer) Interject(line string) {
 //     treated as retired: we promote it to its terminal state — Completed
 //     (green) when bytesDone>=totalSize or the size was unknown, else we keep
 //     its last state. This is the "vanished completed line must stay on screen
-//     at 100%" fix (bug §3.1): the scheduler deletes a finished task from its
+//     at 100%" fix (bug): the scheduler deletes a finished task from its
 //     live map the instant it completes and never forwards the terminal
 //     snapshot, so without retention the bar blinks to zero and the summary
 //     reads Total: 0/0.
@@ -362,7 +362,7 @@ type viewStats struct {
 
 // aggregate computes the bottom summary from the ordered view, counting by
 // *unique id* (not len(live)+len(queued)+completed) so a completed task still
-// transit in `live` for a frame can't double-count (bug §3.2). Total = number
+// transit in `live` for a frame can't double-count (bug). Total = number
 // of distinct ids seen; Completed = those whose state is StateCompleted.
 func aggregate(view []download.ProgressView) viewStats {
 	ids := make(map[download.TaskID]struct{}, len(view))
@@ -410,7 +410,7 @@ func isActive(v download.ProgressView) bool {
 //
 // On a TTY every line is truncated to the terminal width minus 1 (rune-safe) so
 // one logical line never wraps to two physical rows — the cursor-up count we
-// replay next frame then always matches rows on screen (bug §3.3). Width is
+// replay next frame then always matches rows on screen (bug). Width is
 // re-read per frame so a resize mid-batch is picked up.
 func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	if r.quiet {
@@ -567,7 +567,7 @@ func truncateToWidth(s string, width int) string {
 }
 
 // emitNonTTY prints the non-TTY snapshot subject to the milestone+interval
-// throttle (PRD §8.2: "periodic log lines... every 10% or every fixed time
+// throttle (spec: "periodic log lines... every 10% or every fixed time
 // interval"). `final` forces a full flush regardless of elapsed time — that's
 // the post-Run Frame(nil,nil) call, so a redirected log always ends on the
 // true final totals and the per-file lines.
@@ -631,7 +631,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 }
 
 // RunLoop drives the renderer off a snapshot channel until ctx is cancelled.
-// interval is the redraw cadence (~100ms; PRD §11.1). On ctx cancel the loop
+// interval is the redraw cadence (~100ms; spec). On ctx cancel the loop
 // emits one final frame from whatever was last seen so the terminal lands on
 // the completed bars rather than a halfway snapshot.
 //

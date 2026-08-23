@@ -1,4 +1,4 @@
-// Package ratelimit implements the global token bucket from PRD §11.4.
+// Package ratelimit implements the global token bucket from spec
 //
 // --limit-rate is enforced by ONE limiter shared across every active worker of
 // every task, rather than splitting the rate evenly per connection. Workers
@@ -108,7 +108,7 @@ func (l *Limiter) Acquire(ctx context.Context, n int) error {
 // of bytes actually returned. It honours ctx for the wait; ctx==nil ⇒
 // background context. The returned reader is NOT safe for concurrent use on a
 // single reader (one stream → one reader), but the underlying Limiter is shared
-// across many concurrent readers — that's the whole point (§11.4).
+// across many concurrent readers — that's the whole point.
 func (l *Limiter) Reader(ctx context.Context, r io.Reader) *RateReader {
 	if ctx == nil {
 		ctx = context.Background()
@@ -133,7 +133,7 @@ func (l *Limiter) Reader(ctx context.Context, r io.Reader) *RateReader {
 // A RateReader is NOT safe for concurrent use: create one per stream and use it
 // from a single goroutine (the engine wraps each connection's own source). The
 // underlying Limiter is shared across many concurrent readers — that sharing is
-// what enforces the global ceiling (§11.4).
+// what enforces the global ceiling.
 type RateReader struct {
 	src io.Reader
 	l   *Limiter

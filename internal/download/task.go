@@ -24,7 +24,7 @@ import (
 )
 
 // TaskState enumerates the lifecycle states a task moves through. Mirrors the
-// PRD §8 color states (queued/dimming, downloading=yellow, retry/error=red,
+// UI color states (queued/dimming, downloading=yellow, retry/error=red,
 // complete=green) plus Paused from the RPC API.
 type TaskState int
 
@@ -98,9 +98,9 @@ type ProgressView struct {
 	SingleStream bool
 }
 
-// Task represents one file's download (PRD §3). A Task owns:
+// Task represents one file's download. A Task owns:
 //   - its probe result (size + range-support)
-//   - a chunk queue (§11.1)
+//   - a chunk queue
 //   - the pre-allocated destination file + control file
 //   - worker goroutines, one per allocated connection
 //   - a progress aggregator the UI/RPC poll
@@ -217,7 +217,7 @@ type TaskOptions struct {
 }
 
 // rateMeasure keeps a short rolling window of bytes vs time to produce a stable
-// instantaneous speed for the UI without flooding (§11.1 "throttled progress").
+// instantaneous speed for the UI without flooding.
 // We compute bytes/sec over each inter-sample gap and smooth with a light EMA
 // so the pacman bar doesn't jitter on tiny buf reads.
 type rateMeasure struct {
@@ -230,7 +230,7 @@ type rateMeasure struct {
 // on coarse (≥100ms) intervals so the bar stays smooth. Callers hold rmMu, so
 // tick is not concurrent with itself. Returns true when the ~100ms gate elapsed
 // and bps was actually recomputed — noteBytes uses this as the progress-feed
-// throttle so the UI sink fires on the same cadence (PRD §11.1 "throttled
+// throttle so the UI sink fires on the same cadence (spec: "throttled
 // progress... every ~100ms") instead of only at chunk completion. Because the
 // gate is shared under rmMu across all workers of a task, at most one worker
 // crosses the 100ms boundary per window → the sink fires ~10×/s per task, not
@@ -797,7 +797,7 @@ func formatSegSize(b int64) string {
 }
 
 // worker pulls chunks from the given engine's queue and downloads them with
-// retry on transient failures (§13). Each chunk write uses storage.WriteAt so
+// retry on transient failures. Each chunk write uses storage.WriteAt so
 // offset positioning is safe without locks. In the both profile each region
 // has its own engine; single-profile tasks pass the one shared engine.
 func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink func(ProgressView)) {
@@ -1038,7 +1038,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	return nil
 }
 
-// fetchWhole handles the sizeless or range-less single-stream case (§11.2):
+// fetchWhole handles the sizeless or range-less single-stream case:
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
 // h receives every byte written to disk (the whole-file chunk's SHA-256).
@@ -1114,7 +1114,7 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 // feeder sees live bytes-done *during* a long stream rather than only at chunk
 // boundaries. The gate is shared under rmMu across this task's workers, so the
 // sink fires ~10×/s per task regardless of how many connections are active
-// (PRD §11.1 "throttled progress"). sink may be nil (the Manager.Run test path
+//. sink may be nil (the Manager.Run test path
 // and RPC single-task probes pass nil); calling is skipped in that case.
 func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 	if delta < 0 {
@@ -1133,7 +1133,7 @@ func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 
 // emitFinal pushes one last snapshot carrying the terminal state (Completed
 // or Error) through the progressSink before Start returns. This is the root
-// cause fix for the §3.1 "Total: 0/0 / completed line vanishes" bug: the
+// cause fix for the "Total: 0/0 / completed line vanishes" bug: the
 // scheduler's handleComplete deletes a finished task from its live map the
 // instant Start returns and never forwards the terminal snapshot on its own,
 // so without this final emit the last snapshot the UI cached is still Active
@@ -1204,7 +1204,7 @@ func (t *Task) finish() error {
 	if t.disk != nil {
 		_ = t.disk.Sync()
 	}
-	// On success the control file is removed (§12 step 8).
+	// On success the control file is removed.
 	if TaskState(t.state.Load()) == StateCompleted {
 		_ = storage.RemoveControl(t.outPath)
 	} else {
@@ -1627,7 +1627,7 @@ func (t *Task) SetTaskRate(spec string) bool {
 	return true
 }
 
-// Pause / Unpause are RPC-facing hooks (§10. pause/unpause).
+// Pause / Unpause are RPC-facing hooks.
 //
 // The pause mechanism is a broadcast-close wake-up, NOT a one-shot signal:
 //   - Pause sets the `paused` flag; workers rendezvous in pauseGate (below),

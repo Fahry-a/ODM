@@ -14,7 +14,7 @@ type Chunk struct {
 	End   int64 // inclusive; End<0 ⇒ to EOF/unknown length
 }
 
-// ChunkQueue is the shared, per-task work list (§11.1). Workers pull the next
+// ChunkQueue is the shared, per-task work list. Workers pull the next
 // available chunk as soon as they finish their previous one, instead of each
 // owning a fixed byte-range — this is what avoids the straggler problem of
 // static equal-split segmentation: a slow worker simply processes fewer chunks.
@@ -38,9 +38,9 @@ type ChunkQueue struct {
 const defaultChunkSize = 4 * 1024 * 1024
 
 // NewChunkQueue builds the chunk list for a file of totalSize using chunkSize
-// bytes per chunk (§11.1). If totalSize<0 (sizeless stream) the queue has a
+// bytes per chunk. If totalSize<0 (sizeless stream) the queue has a
 // single "whole file" chunk (Start=0 End=-1, Index=0) — the single-stream
-// degeneration (§11.2).
+// degeneration.
 func NewChunkQueue(totalSize, chunkSize int64) *ChunkQueue {
 	q := &ChunkQueue{completed: map[int64]struct{}{}, failed: map[int]int{}}
 	if totalSize < 0 {

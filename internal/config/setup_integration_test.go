@@ -7,7 +7,7 @@ import (
 )
 
 // TestSetup_BatchURLParsing_Integration exercises the full CLI bootstrap
-// (config.Setup) end-to-end for the PRD §16 / §6.4 batch URL parsing cases. The
+// (config.Setup) end-to-end for the spec / batch URL parsing cases. The
 // existing resolveURLs/NormalizeArgs tests cover those in isolation; this one
 // drives the real wired-together path (NormalizeArgs → pflag Parse →
 // CaptureChanged → LoadLayers → resolveURLs → Validate) so the layered config
@@ -141,7 +141,7 @@ func TestSetup_LayeredConfigMergedWithURLs(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "my.conf")
-	// Config sets connections=3; CLI will pass -c 9, which must win (§6.3).
+	// Config sets connections=3; CLI will pass -c 9, which must win.
 	if err := os.WriteFile(cfg, []byte("connections = 3\nretry = 7\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

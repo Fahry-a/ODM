@@ -1,6 +1,6 @@
-// Package config holds ODM's option model: the set of all tunables from the PRD
-// (§6.2 CLI flags + §7 config-file keys), the `key = value` config-file parser,
-// and the merge that implements the §6.3 source priority:
+// Package config holds ODM's option model: the set of all tunables from the product spec
+//, the `key = value` config-file parser,
+// and the merge that implements the source priority:
 //
 //	CLI args  >  ~/.config/odm/config.conf  >  /etc/odm/config.conf  >  defaults
 //
@@ -24,7 +24,7 @@ import (
 	"odm/internal/version"
 )
 
-// Defaults mirrors the PRD §6.2 default column.
+// Defaults mirrors the documented default column.
 const (
 	DefaultConnections = 5
 	DefaultMaxConn     = 32
@@ -63,7 +63,7 @@ type Options struct {
 	Dir       string   // --dir/-d
 	InputFile string   // --input-file/-i (path to a URL list)
 
-	// Balancer inputs (§5.1).
+	// Balancer inputs.
 	Connections   int // -c
 	MaxConnection int // --max-connections  (ceiling; >32 warned)
 	SplitFile     int // --split-file/-sf  (0 = unset ⇒ Mode B)
@@ -87,7 +87,7 @@ type Options struct {
 	TaskLimitRate    string // --limit-rate-per-task "2M" (per-task cap, additive to global)
 	ChunkSize        string // --chunk-size "4M"
 
-	// Engine profile (§profile).
+	// Engine profile.
 	Profile          string // --profile: odm|aria2c|both|smart (default "odm")
 	Split            int    // --split: aria2c segment count
 	MinSplitSize     string // --min-split-size: aria2c guard (e.g. "20M")
@@ -103,7 +103,7 @@ type Options struct {
 	LogFile    string // --log
 	LogLevel   string // --log-level
 
-	// RPC (§10).
+	// RPC.
 	RPC          bool   // --rpc  (daemon mode)
 	RPCPort      int    // --rpc-listen-port
 	RPCListenAll bool   // --rpc-listen-all
@@ -155,7 +155,7 @@ func (o *Options) changedFlag(name string) {
 // IsSet reports whether the named flag was explicitly set on the CLI.
 func (o *Options) IsSet(name string) bool { return o.changed != nil && o.changed[name] }
 
-// --- Config-file parsing (§7) ------------------------------------------------
+// --- Config-file parsing ------------------------------------------------
 
 // ParseFile reads a `key = value` config file, returning the parsed keys. Lines
 // starting with `#` (after trimming) and blank lines are ignored. Unknown
@@ -215,7 +215,7 @@ func stripInlineComment(val string) string {
 
 // Apply merges parsed config-file keys onto o. Only known keys are applied; an
 // unknown key is skipped (forward-compat). A key the user explicitly set on the
-// CLI is NOT overwritten — Apply honours §6.3 (CLI > user config > system
+// CLI is NOT overwritten — Apply honours (CLI > user config > system
 // config > defaults) by skipping any key recorded in o.changed (populated by
 // CaptureChanged). This is what makes a defaulted CLI flag never wipe a value
 // the user put in their config, AND an explicitly-set CLI flag never get
@@ -238,7 +238,7 @@ func (o *Options) Apply(kv map[string]string) error {
 }
 
 // setFromKey applies a single key=value to an Options. Keys match the CLI
-// long-flag names (without `--`), per PRD §7.
+// long-flag names (without `--`), per spec
 func (o *Options) setFromKey(key, val string) error {
 	switch key {
 	case "connections":
@@ -315,7 +315,7 @@ func (o *Options) setFromKey(key, val string) error {
 
 // --- CLI flags (pflag binding) ----------------------------------------------
 
-// BindFlags wires every §6.2 flag to pointers on o. Call CaptureChanged after
+// BindFlags wires every flag to pointers on o. Call CaptureChanged after
 // parsing to record which flags were explicitly set; file layers skip those.
 //
 // Flags use the long names as their canonical id; short aliases (-c, -sf, -o,
@@ -391,7 +391,7 @@ func NormalizeArgs(args []string) []string {
 // --- Load orchestration & layer priority -----------------------------------
 
 // CaptureChanged records which flags of fs were explicitly set, so ApplyLayer
-// can honour §6.3 priority (CLI overrides config only when the flag was
+// can honour priority (CLI overrides config only when the flag was
 // provided; pflag writes into Options first, then file layers skip changed
 // keys). Call after fs.Parse().
 func (o *Options) CaptureChanged(fs *pflag.FlagSet) {
@@ -403,7 +403,7 @@ func (o *Options) CaptureChanged(fs *pflag.FlagSet) {
 	})
 }
 
-// Validate enforces §5.5's basic invariants before any network activity. The
+// Validate enforces's basic invariants before any network activity. The
 // Balancer does the deeper C/SF/N logic; here we only reject impossible states
 // early with a clear message (exit code 1).
 func (o *Options) Validate() error {
@@ -435,7 +435,7 @@ func (o *Options) Validate() error {
 			return fmt.Errorf("--checksum unsupported algorithm %q (md5/sha1/sha256)", parts[0])
 		}
 	}
-	// Engine profile: valid values + per-profile conflicts (§profile rules).
+	// Engine profile: valid values + per-profile conflicts.
 	switch o.Profile {
 	case "odm", "aria2c", "both", "smart":
 	default:

@@ -70,7 +70,7 @@ const (
 	layoutPct                          // pct only (super-narrow floor)
 )
 
-// renderTaskLine formats one per-file line per PRD §8.1, colouring it when
+// renderTaskLine formats one per-file line as specified, colouring it when
 // useColor is true. The full line layout:
 //
 //	<glyph> <file_name>   <size>   <speed>   <ETA>   [x<N> [<bar>]]   <pct>%

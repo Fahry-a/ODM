@@ -284,8 +284,8 @@ The acceptance checklist is covered by the test suite:
 - Total active connections never exceed `--max-connections` (default 32) unless the user raises it — enforced in `Compute`, a warning is printed in that case.
 - Chunk-queue work-stealing: an artificially-slowed worker beats a static equal-split baseline — `internal/download/manager_workstealing_test.go`.
 - `--limit-rate` stable aggregate near the cap regardless of connection count — `internal/ratelimit` + integration in `internal/download`.
-- Progress bar renders per the §8 format with the `[x<N>]` per-file indicator and a non-TTY fallback — `internal/ui/progress_test.go`.
-- RPC `addUri`/`tellStatus` reachable via `curl`, all five §10.3 events (`onDownloadStart`/`Progress`/`Complete`/`Error`/`Pause`) received over a real `/ws` dial — `internal/rpc/server_test.go` (`TestServer_WSCompletionEvents`, `TestServer_WSErrorEvent`, `TestServer_WSDialEvent*`).
+- Progress bar renders per the pacman format with the `[x<N>]` per-file indicator and a non-TTY fallback — `internal/ui/progress_test.go`.
+- RPC `addUri`/`tellStatus` reachable via `curl`, all five RPC events (`onDownloadStart`/`Progress`/`Complete`/`Error`/`Pause`) received over a real `/ws` dial — `internal/rpc/server_test.go` (`TestServer_WSCompletionEvents`, `TestServer_WSErrorEvent`, `TestServer_WSDialEvent*`).
 - Resume (`--continue`) continues an interrupted download without corruption — `internal/download/manager_test.go`.
 - Redirects followed up to `--max-redirect` — `internal/transport/transport_test.go`.
 - Batch URL parsing (space-separated, legacy comma, URLs with literal commas, `-i`) — `internal/config/config_test.go`.

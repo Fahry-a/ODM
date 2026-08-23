@@ -18,7 +18,7 @@ var nowFn = func() time.Time { return time.Now() }
 
 // bouncePosition maps a frame index to a back-and-forth slot in [0,width) so
 // the sizeless pacman travels left→right→left over the bar instead of sitting
-// still (bug §3.5). The motion is a triangle wave: slot rises 0→width-1 across
+// still (bug). The motion is a triangle wave: slot rises 0→width-1 across
 // the first `width` frames, then falls back width-2→1 over the next width-2
 // frames, so neither endpoint is visited twice; the period is
 // 2*(width-1) frames (and 1 for a single-cell bar, where the slot is pinned).

@@ -97,8 +97,8 @@ func TestModeB_CappedByMaxConnections(t *testing.T) {
 	}
 }
 
-func TestModeC_PRDExample(t *testing.T) {
-	// PRD §5.4 example: -c 16 -sf 5, 10 urls (all range-support).
+func TestModeC_SpecExample(t *testing.T) {
+	// spec example: -c 16 -sf 5, 10 urls (all range-support).
 	// parallel_files = floor(16/5)=3, used=15, remainder=1
 	// → file#1:6, file#2:5, file#3:5, total 16; 7 queued.
 	p, err := Compute(16, mkRange(10), 5, 32)
@@ -166,7 +166,7 @@ func TestModeC_QueuedInheritsSF(t *testing.T) {
 			t.Fatalf("queued[%d] want 3 (SF), got %d", i, a.Connections)
 		}
 	}
-	// A queued single-stream file caps at 1 (§11.2 single-stream fallback).
+	// A queued single-stream file caps at 1.
 	files := []FileInput{
 		{URL: "a", SupportsRange: true}, {URL: "b", SupportsRange: true},
 		{URL: "c", SupportsRange: false},
@@ -210,7 +210,7 @@ func TestValidation_SFIgnoredInSingleFile(t *testing.T) {
 }
 
 func TestAllocationTimeReallocation(t *testing.T) {
-	// §5.5: a non-range parallel file is capped to 1 and its freed budget is
+	//: a non-range parallel file is capped to 1 and its freed budget is
 	// redistributed to the other parallel files.
 	// -c 16 -sf 5, 10 urls, files #1..#3 are parallel (floor(16/5)=3).
 	//   initial after remainder: [6,5,5] (total 16).

@@ -8,8 +8,8 @@ import (
 	"odm/internal/download"
 )
 
-// TestEmptySchedulerStaysIdleWhenNoTasks documents the daemon requirement (PRD
-// §10): a freshly-started RPC scheduler with zero tasks must NOT report Run as
+// TestEmptySchedulerStaysIdleWhenNoTasks documents the daemon requirement (spec
+//): a freshly-started RPC scheduler with zero tasks must NOT report Run as
 // finished. An empty scheduler that exits instantly would pull the whole daemon
 // down before the first odm.addUri arrives — which is exactly the regression
 // that broke the CLI --rpc path. The permanent idle hold installed by

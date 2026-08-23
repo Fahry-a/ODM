@@ -30,7 +30,7 @@ type Manager struct {
 	h2client *transport.Client // HTTP/2-enabled (aria2c/both/smart profiles); nil unless needed
 	lim      *ratelimit.Limiter
 	opts     ExecOptions
-	logf     LogFn // per-engine Logger; nil ⇒ silent hot path (PRD §6.2 --log-level)
+	logf     LogFn // per-engine Logger; nil ⇒ silent hot path
 
 	nextID atomic.Int64
 	mu     atomic.Pointer[map[TaskID]*Task] // registry for RPC tellActive/tellWaiting
@@ -270,7 +270,7 @@ func verifyChecksum(path, algo, expectHex string) error {
 	return nil
 }
 
-// Exit codes from §13.
+// Exit codes from
 const (
 	ExitOK        = 0
 	ExitGeneral   = 1
@@ -279,7 +279,7 @@ const (
 	ExitCancelled = 4
 )
 
-// ExitCodeFrom counts succeeded/failed/cancelled to produce the right §13 code.
+// ExitCodeFrom counts succeeded/failed/cancelled to produce the right code.
 func ExitCodeFrom(succeeded, failed, cancelled int) int {
 	switch {
 	case cancelled > 0:
@@ -296,7 +296,7 @@ func ExitCodeFrom(succeeded, failed, cancelled int) int {
 }
 
 // ResolveDest resolves the path a task for `url` would write to. Used by the
-// confirmation prompt before the download actually starts (§9). Mirrors
+// confirmation prompt before the download actually starts. Mirrors
 // deriveFilename's query-strip so the prompted name matches what Start will
 // actually write.
 func (m *Manager) ResolveDest(url string) string {

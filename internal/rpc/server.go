@@ -14,7 +14,7 @@ import (
 	"odm/internal/version"
 )
 
-// Server is the JSON-RPC 2.0 + WebSocket RPC surface (PRD §10). It owns a
+// Server is the JSON-RPC 2.0 + WebSocket RPC surface. It owns a
 // scheduler.Daemon (which owns the live Scheduler + Manager) and a WebSocket
 // Broadcaster for event notifications.
 type Server struct {
@@ -34,7 +34,7 @@ func NewServerWithBroadcaster(daemon *scheduler.Daemon, secret string, bc *Broad
 	return &Server{daemon: daemon, bc: bc, secret: secret}
 }
 
-// OnTaskComplete maps a task's terminal snapshot onto the matching §10.3
+// OnTaskComplete maps a task's terminal snapshot onto the matching
 // WebSocket event and fans it out: onDownloadComplete for a finished task,
 // onDownloadError for a failed/cancelled one. Wired onto the Daemon's
 // OnComplete hook by runRPC so handleComplete triggers it as each task leaves
@@ -64,9 +64,9 @@ func (s *Server) Daemon() *scheduler.Daemon { return s.daemon }
 
 // --- auth ------------------------------------------------------------------
 
-// checkSecret enforces aria2-style `token:<secret>` first-param auth (PRD §10.1).
+// checkSecret enforces aria2-style `token:<secret>` first-param auth.
 // When s.secret is empty, auth is disabled (we still only bind 127.0.0.1 by
-// default per §14). Returns true on match/when-no-secret-configured.
+// default per). Returns true on match/when-no-secret-configured.
 func (s *Server) checkSecret(req *jsonRPCRequest) bool {
 	if s.secret == "" {
 		return true

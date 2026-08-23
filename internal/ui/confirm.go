@@ -9,11 +9,11 @@ import (
 	"odm/internal/scheduler"
 )
 
-// ConfirmAsk reads a Y/n answer from stdin (used by the §9 prompt).
+// ConfirmAsk reads a Y/n answer from stdin (used by the prompt).
 // in and out are injected so the prompt is testable.
 //
 // On a typo ("sure", stray spaces, etc.) it re-prompts instead of erroring and
-// aborting the whole batch (bug §3.7): an empty answer or y/yes confirms, n/no
+// aborting the whole batch (bug): an empty answer or y/yes confirms, n/no
 // declines. End-of-file (Ctrl-D) with no answer at all is treated as a silent
 // cancel — (false, nil) — so a non-interactive stdin ending the stream never
 // surfaces a Go-level EOF as a raw error string. A genuine read error other
@@ -42,7 +42,7 @@ func ConfirmAsk(in io.Reader, out io.Writer, prompt string) (bool, error) {
 	}
 }
 
-// ConfirmSingle renders the §9 single-file prompt and asks for confirmation.
+// ConfirmSingle renders the single-file prompt and asks for confirmation.
 // profile/reason show the resolved engine ("smart" mode resolves it per file,
 // mirroring the batch prompt's per-file tag); empty renders no Engine row.
 // When useColor is true, labels are yellow, the filename is cyan, size is
@@ -71,7 +71,7 @@ func ConfirmSingle(in io.Reader, out io.Writer, filename, dest string, size int6
 	return ConfirmAsk(in, out, "Continue? [Y/n] ")
 }
 
-// ConfirmBatch renders the §9 batch prompt. `rows` are the per-file summaries
+// ConfirmBatch renders the batch prompt. `rows` are the per-file summaries
 // (name, size). `connsPerFile` and `parallelFiles` describe the allocation.
 func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, parallelFiles, totalFiles int, useColor bool) (bool, error) {
 	var totalSize int64

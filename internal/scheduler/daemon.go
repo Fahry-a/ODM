@@ -10,7 +10,7 @@ import (
 // Daemon wraps a Scheduler for the RPC server: it runs the Scheduler in a
 // background goroutine and exposes live mutation (AddURL, Pause, Unpause,
 // Remove, list views) so the JSON-RPC methods in internal/rpc can steer
-// downloads at runtime (PRD §10). The one-shot CLI path drives the Scheduler
+// downloads at runtime. The one-shot CLI path drives the Scheduler
 // directly; only the RPC path needs the Daemon.
 type Daemon struct {
 	sch *Scheduler
@@ -235,7 +235,7 @@ func (d *Daemon) TellStopped() []download.ProgressView {
 }
 
 // OnComplete forwards to the underlying Scheduler's completion hook so the RPC
-// Server can subscribe to per-task completion snapshots (PRD §10.3
+// Server can subscribe to per-task completion snapshots (spec
 // onDownloadComplete / onDownloadError). Must be called before Start; setting
 // it later is a no-op on the live scheduler (handleComplete snapshots the hook
 // under its lock at fire time, but Start has already consumed the registration).

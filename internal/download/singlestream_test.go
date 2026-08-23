@@ -14,7 +14,7 @@ import (
 )
 
 // serveNoRangeServer reports a size (Content-Length) but ignores every Range
-// request and always serves 200 with the full body — the §11.2 single-stream
+// request and always serves 200 with the full body — the single-stream
 // fallback case. The probe classifies it SupportsRange=false, SingleStream=true,
 // TotalSize=<len(payload)>.
 func serveNoRangeServer(t *testing.T, payload []byte) *httptest.Server {

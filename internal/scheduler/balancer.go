@@ -2,7 +2,7 @@
 // runs the parallel-slot scheduler that drives them.
 //
 // The Balancer (this file) is a pure function implementing the Connection
-// Balancer spec from the PRD (§5). It takes the connection budget, the set of
+// Balancer spec from the product spec. It takes the connection budget, the set of
 // URLs (with whether each supports HTTP range requests), the optional split-file
 // value and the max-connections ceiling, and returns the per-file connection
 // allocation plus the set of files that run in parallel vs. get queued. It
@@ -13,11 +13,11 @@ import (
 	"fmt"
 )
 
-// DefaultMaxConnections is the PRD default for --max-connections (§5.1).
+// DefaultMaxConnections is the documented default for --max-connections.
 const DefaultMaxConnections = 32
 
 // FileInput describes one URL to be scheduled. SupportsRange is the result of
-// the §5.2 range-support probe and drives allocation-time reallocation (§5.5):
+// the range-support probe and drives allocation-time reallocation:
 // a file that cannot be ranged gets exactly one connection, and the freed
 // budget is redistributed to the remaining files in the same scheduling pass.
 type FileInput struct {
@@ -42,11 +42,11 @@ type Plan struct {
 	Warning  string       // non-fatal warning text (e.g. C above ceiling), "" if none
 }
 
-// Compute is the pure Connection Balancer. See PRD §5.
+// Compute is the pure Connection Balancer. See the design notes.
 //
 // Inputs:
 //   - C  total connection budget (≥1 required)
-//   - files the URLs, each flagged SupportsRange from the §5.2 probe
+//   - files the URLs, each flagged SupportsRange from the probe
 //   - SF split-file per file (only meaningful when len(files) > 1); 0 = unset
 //   - maxConnections ceiling (defaults to DefaultMaxConnections when 0)
 //
@@ -56,7 +56,7 @@ type Plan struct {
 //   - N>1, SF set     → Mode C: SF connections/file, parallel_files derived
 //
 // Mode C also distributes the remainder one connection at a time to the first
-// parallel files, and allocation-time reallocation (§5.5) redistributes budget
+// parallel files, and allocation-time reallocation redistributes budget
 // freed by non-range files — applied per scheduling pass in list order.
 func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error) {
 	if maxConnections <= 0 {
@@ -73,13 +73,13 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 	plan := &Plan{}
 
 	// Warning when the user explicitly raised the budget above the ceiling.
-	// Still proceed — the user opted in (§5.1).
+	// Still proceed — the user opted in.
 	if C > maxConnections {
 		plan.Warning = fmt.Sprintf(
 			"connections above %d may get throttled/blocked by some servers", maxConnections)
 	}
 
-	// SF validation (§5.5): only meaningful in batch mode.
+	// SF validation: only meaningful in batch mode.
 	if N == 1 && SF > 0 {
 		// Mode A already claims the entire budget; -sf is ignored.
 		// We surface this as a non-fatal warning rather than failing.
@@ -106,9 +106,9 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 	return plan, nil
 }
 
-// modeA — Single File (§5.2): entire budget to the one file, capped by the
+// modeA — Single File: entire budget to the one file, capped by the
 // ceiling. Range support is decided by the probe; if not supported the file
-// still gets 1 (single-stream fallback, §11.2), and that decision is reflected
+// still gets 1 (single-stream fallback,), and that decision is reflected
 // here so callers/renders stay consistent.
 func modeA(C int, files []FileInput, max int) []Allocation {
 	f := files[0]
@@ -122,7 +122,7 @@ func modeA(C int, files []FileInput, max int) []Allocation {
 	}}
 }
 
-// modeB — Batch without -sf (§5.3): each file gets 1 connection; C controls how
+// modeB — Batch without -sf: each file gets 1 connection; C controls how
 // many files run in parallel. parallel_files = min(C, N, max). Files beyond that
 // go into the queue.
 func modeB(C int, files []FileInput, max int) (parallel, queued []Allocation) {
@@ -142,9 +142,9 @@ func modeB(C int, files []FileInput, max int) (parallel, queued []Allocation) {
 	return parallel, queued
 }
 
-// modeC — Batch with -sf (§5.4): each file gets SF connections, parallel_files
+// modeC — Batch with -sf: each file gets SF connections, parallel_files
 // derived as floor(C/SF), remainder distributed one each to the first files.
-// Then allocation-time reallocation (§5.5): any non-range file among the
+// Then allocation-time reallocation: any non-range file among the
 // parallel set is capped to 1, and the freed budget is redistributed one at a
 // time to the other parallel files (mirroring the remainder distribution).
 func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []Allocation) {
@@ -157,10 +157,10 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 	}
 	used := parallelFiles * SF
 
-	// Distribute the remainder (§5.4) one connection at a time, round-robin,
+	// Distribute the remainder one connection at a time, round-robin,
 	// starting from the first parallel file. Round-robin (rather than a single
 	// pass) keeps the budget fully used when remainder > parallel_files, and
-	// "first files get more" matches the PRD's one-at-a-time-from-the-front
+	// "first files get more" matches the one-at-a-time-from-the-front
 	// intent. At this stage no reallocation has happened, so all parallel
 	// files are eligible.
 	nonRange := make([]bool, parallelFiles)
@@ -169,8 +169,8 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 	}
 	distribute(conns, C-used, nonRange)
 
-	// Allocation-time reallocation for non-range files (§5.5). A non-range
-	// parallel file is capped to exactly 1 (single-stream fallback, §11.2);
+	// Allocation-time reallocation for non-range files. A non-range
+	// parallel file is capped to exactly 1 (single-stream fallback,);
 	// the budget it frees is redistributed one at a time, round-robin, to the
 	// *other* parallel files (the same shape as the remainder distribution),
 	// so the C budget is used to the fullest without giving extras back to a
@@ -195,10 +195,10 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 			a.Connections = conns[i]
 			parallel = append(parallel, a)
 		} else {
-			// Queued files inherit SF when they're admitted (Mode C per §5.4 and
+			// Queued files inherit SF when they're admitted (Mode C per and
 			// the Scheduler's contract "each queued task inherits the same
 			// per-file connection budget (Mode C: SF)"). A queued single-stream
-			// file still caps at 1 (single-stream fallback, §11.2).
+			// file still caps at 1 (single-stream fallback,).
 			a.Connections = SF
 			if !files[i].SupportsRange {
 				a.Connections = 1
@@ -211,8 +211,8 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 
 // distribute adds `budget` connections to `conns`, one at a time, round-robin
 // over eligible slots (those whose `skip` entry is false), starting from slot
-// 0 on each call. It mirrors the §5.4 remainder rule ("one at a time to the
-// first currently-running parallel files") and is reused by the §5.5
+// 0 on each call. It mirrors the remainder rule ("one at a time to the
+// first currently-running parallel files") and is reused by the
 // allocation-time reallocation. Slots marked skip are never topped up — this is
 // how non-range (single-stream) files are kept at their cap. `skip` may be nil
 // (all eligible). If no slot is eligible the budget is simply left unused.
