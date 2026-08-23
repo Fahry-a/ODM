@@ -146,10 +146,10 @@ gh release create vX.Y.Z --prerelease build/odm_X.Y.Z_* --title "vX.Y.Z" --notes
 
 Tag format: `v<semver>`. Pre-releases use `--prerelease`.
 
-## Push-to-main (user request)
+## Release protocol ("rilis" / "release protocol")
 
-When the user asks to "push to main" / "release" / "push ke github" (or similar),
-do the full release in one flow — do NOT stop after committing:
+When the user asks to release / run the release protocol / "push ke main untuk rilis"
+(or similar), do the full release in one flow — do NOT stop after committing:
 
 1. **Bump the version** — semver, judged from the changes since the last `v*` tag:
    - new features (even small ones, e.g. chunk requeue, resume integrity checks) → **minor** bump (`1.1.0` → `1.2.0`)
@@ -199,6 +199,16 @@ Do NOT bump `pkgver` in PKGBUILD for a republish:
 Summary: **new version → bump `version.go` + `pkgver` + CHANGELOG yourself;
 republish → edit PKGBUILD only and let the workflow bump `pkgrel`.**
 
+## Audits
+
+A full-project audit (2026-08-24, pre-v1.6.1) closed 5 critical / 4 major /
+5 minor findings — silent aria-segment loss, dead 429 adaptive back-off,
+limiter TOCTOU panic, Metalink4 multi-target corruption, RPC nil-ctx panic,
+plus the minor set. All carry regression tests; see CHANGELOG 1.6.1 for the
+one-line summary of each. When touching the engine paths again (task.go
+worker/chunk/retry logic, ratelimit concurrency, metalink parsing), re-check
+those invariants first.
+
 ## Roadmap (not yet implemented)
 
 These are deferred — do NOT treat them as bugs:
@@ -206,8 +216,6 @@ These are deferred — do NOT treat them as bugs:
 - **Mid-flight dynamic reallocation of in-progress chunks** — rebalancing chunks
   already being downloaded (beyond the implemented connection-count adjustment
   via `AdjustConns`). Requires live goroutine renegotiation.
-- **Multi-mirror download** — splitting chunks across duplicate URLs for the
-  same file. Out of scope for the connection-aggregation value proposition.
 - **BitTorrent / magnet links** — explicitly non-goal for MVP.
 - **HTTP/2 / HTTP/3 stream multiplexing** — deliberately excluded; the whole
   point of ODM is multi-connection aggregation over HTTP/1.1. Future implementation
