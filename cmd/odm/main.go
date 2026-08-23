@@ -848,13 +848,16 @@ Connection budget (the Balancer auto-splits -c across files):
 Inputs / output:
   -o, --output NAME   output filename (single-file only)
   -d, --dir PATH       destination directory                  (default cwd)
-  -i, --input-file FILE  read URL list from FILE
+  -i, --input-file FILE  read URL list from FILE (.meta4/.metalink supported)
 
 Behavior:
   -y, --yes           skip the confirmation prompt
       --dry-run       probe URLs + show the plan, download nothing
   -q, --quiet         no progress bar (cron/scripts); also skips the prompt
   -x, --continue      resume an incomplete file via the .odm control file (default on)
+      --auto-rename   existing destination → name.<N>.ext (mutually exclusive with --skip-existing)
+      --skip-existing  skip files already present with a matching size
+      --session-log FILE  append JSONL progress/summary events (for wrappers/GUIs)
   -s, --chunk-size SIZE   work-stealing chunk size, e.g. 4M   (default 4M)
 
 Engine profiles (--profile aria2c|both|smart):
@@ -875,6 +878,8 @@ HTTP / network:
   -p, --proxy URL        http/https/socks5 proxy
       --check-cert BOOL  verify TLS                       (default true)
       --checksum algo:hash  verify md5/sha1/sha256
+      --checksum-url URL  fetch the checksum from a sidecar URL (sha256sum-style file)
+      --mirror URL       alternate URL serving the SAME file; chunks rotate (repeatable)
   -l, --limit-rate RATE   global speed limit, e.g. 5M/500K
       --limit-rate-per-task RATE  per-task speed cap (stacked on global), e.g. 2M
 

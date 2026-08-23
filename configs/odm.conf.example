@@ -30,13 +30,25 @@ check-certificate    = true       # verify TLS
 
 # --- Integrity / rate ------------------------------------------------------
 # checksum              = sha256:<hex>   # verify md5/sha1/sha256
+# checksum-url          = https://host/file.sha256   # fetch the digest from a sidecar URL
+# mirror                = https://mirror.example/same-file.iso  # repeatable; same file, chunks rotate
 # limit-rate            =              # global speed limit, e.g. 5M or 500K
 # limit-rate-per-task   =              # per-task speed cap (stacked on global), e.g. 2M
 # chunk-size            = 4M           # work-stealing chunk size
 
+# --- Engine profile ---------------------------------------------------------
+# profile             = odm        # odm | aria2c | both | smart
+# split               = 5          # aria2c: segments per file (--split)
+# min-split-size      = 20M        # aria2c: don't split ranges < 2x this
+# max-connection-per-server = 1    # aria2c (-x): per-server cap in h1 fallback
+
 # --- Behaviour -------------------------------------------------------------
 continue             = true       # resume via the .odm control file (-x)
 quiet                = false      # disable the progress bar (cron/scripts)
+# dry-run             = true       # probe + show the plan, download nothing
+# auto-rename         = true       # existing destination → name.<N>.ext (exclusive with skip-existing)
+# skip-existing       =            # skip files already present with a matching size
+# session-log         = /tmp/odm-session.jsonl   # JSONL progress/summary events for wrappers
 
 # --- RPC -------------------------------------------------------------
 rpc                  = false      # run as the RPC server (daemon)

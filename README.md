@@ -168,8 +168,12 @@ Key flags (`odm --help` for the full list):
 -d, --dir PATH             destination directory             (default cwd)
 -i, --input-file FILE     read URL list from FILE
 -y, --yes                  skip the confirmation prompt
+    --dry-run              probe + show the plan, download nothing
 -q, --quiet                no progress bar (cron/scripts); also skips prompt
 -x, --continue             resume incomplete file via .odm control file (default on)
+    --auto-rename          existing destination → name.<N>.ext
+    --skip-existing         skip files present with a matching size
+    --session-log FILE     JSONL progress/summary events (wrappers/GUIs)
 -s, --chunk-size SIZE      work-stealing chunk size          (default 4M)
 -n, --max-redirect N       redirect hops to follow            (default 5)
 -r, --retry N              retries per segment                 (default 3)
@@ -177,10 +181,13 @@ Key flags (`odm --help` for the full list):
 -t, --timeout SEC          dial+headers timeout              (default 30)
 -u, --user-agent UA        custom User-Agent                 (default odm/<ver>)
 -H, --header K:V           add a custom header (repeatable)
+    --load-cookies FILE    load Netscape cookies.txt as a Cookie header
     --referer URL          set the Referer header
 -p, --proxy URL            http/https/socks5 proxy
     --check-certificate    verify TLS                        (default true)
     --checksum algo:hash   verify md5/sha1/sha256
+    --checksum-url URL     fetch the checksum from a sidecar URL
+    --mirror URL           alternate URL for the same file (repeatable)
 -l, --limit-rate RATE      global speed limit, e.g. 5M/500K
     --limit-rate-per-task RATE  per-task speed cap (stacked on global), e.g. 2M
 -L, --log FILE             mirror logs to FILE
@@ -198,11 +205,43 @@ An optional **per-task cap** (`--limit-rate-per-task`) can be stacked on top: ea
 
 `--limit-rate` and `--limit-rate-per-task` both support human-readable suffixes: `5M`, `500K`, `2.5G`, `off` to disable.
 
+When a server starts throttling you (`HTTP 429`), ODM reacts on its own: the global rate halves (floor 64 KiB/s) so every connection eases off together, and the first successful chunk afterwards restores your configured cap.
+
 ---
 
-## Resume
+## Mirrors & verification
 
-With `-x`/`--continue` (on by default), each download writes a `<file>.odm` control file recording which chunks are already done. On re-run with the same destination present, only the un-finished chunks are re-fetched — no corruption, no restart. The control file is deleted on a clean completion.
+**`--mirror URL`** (repeatable) registers alternate sources for the *same* file. Each chunk request rotates across the primary URL and every mirror, so a slow or throttling source simply serves fewer chunks while the rest keep full speed. Per-chunk `Content-Range` validation applies to each source independently — a misbehaving mirror fails its own chunks instead of corrupting the file. Mirrors are assumed byte-identical.
+
+```bash
+odm -c 16 https://primary.example/big.iso --mirror https://mirror1.example/big.iso --mirror https://mirror2.example/big.iso
+```
+
+**Verification** comes in three forms: explicit (`--checksum sha256:<hex>`), fetched from a sidecar (`--checksum-url https://host/file.sha256` accepts sha256sum/md5sum-style files or a bare hash), or embedded in a Metalink4 document. A checksum mismatch fails the task rather than keeping silently-corrupt output.
+
+**Metalink4**: `-i file.meta4` reads an RFC 5854 document — the mirror URLs become download targets (first = primary, rest feed `--mirror`) and the strongest listed hash becomes the checksum automatically:
+
+```bash
+odm -c 16 -i release.meta4
+```
+
+---
+
+## Resume & collisions
+
+With `-x`/`--continue` (on by default), each download writes a `<file>.odm` control file recording which chunks are already done. On re-run with the same destination present, only the un-finished chunks are re-fetched — no corruption, no restart. The control file is deleted on a clean completion. Resumed downloads also send the stored ETag as `If-Range`: if the remote file changed since the interruption, ODM detects it and restarts cleanly instead of stitching old bytes to new ones.
+
+For an existing destination without a control file, two collision policies exist (mutually exclusive):
+
+- `--auto-rename` — save as `name.<N>.ext` (lowest free counter); the existing file is never touched.
+- `--skip-existing` — skip when a file of the same size is already there; a size mismatch warns and re-downloads.
+
+---
+
+## Automation hooks
+
+- **`--dry-run`** — probe every URL, show the balancer's plan (mode, per-file connections, queue marks, total size), exit 0 without downloading.
+- **`--session-log FILE`** — append JSONL events (`progress` per task snapshot, closing `summary`) so wrappers/GUIs get a machine-readable feed without parsing terminal output; pairs naturally with the RPC server for full control.
 
 ---
 
@@ -289,6 +328,13 @@ The acceptance checklist is covered by the test suite:
 - Resume (`--continue`) continues an interrupted download without corruption — `internal/download/manager_test.go`.
 - Redirects followed up to `--max-redirect` — `internal/transport/transport_test.go`.
 - Batch URL parsing (space-separated, URLs with literal commas, `-i`) — `internal/config/config_test.go`.
+- Dead links fail fast: a non-retryable 4xx chunk errors after one attempt instead of burning the retry budget — `internal/download/permanent_test.go`.
+- Resume drift detection via `If-Range` — a changed remote restarts cleanly instead of stitching old bytes to new — `internal/download/permanent_test.go`.
+- Mirror rotation spreads chunks across every source; assembled bytes match any single source — `internal/download/mirror_test.go`.
+- Collision policies (`--auto-rename`/`--skip-existing`) never touch a pre-existing file and re-download on size mismatch — `internal/download/collision_test.go`.
+- Cookies ride the header pipeline into every request and never leak into the `.odm` control file — `internal/download/cookie_test.go`, `internal/config/config_test.go`.
+- Metalink4 input parses URLs + strongest hash into the plan — `internal/config/config_test.go`.
+- Adaptive slowdown halves the global rate on 429 and restores the configured cap afterwards — `internal/ratelimit/bucket_test.go`.
 
 Run them all:
 
