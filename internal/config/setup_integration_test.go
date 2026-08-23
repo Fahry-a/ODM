@@ -41,10 +41,10 @@ func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 			want: []string{"https://files.test.xyz/a.tar.gz", "https://files.test.xyz/b.tar.gz", "https://files.test.xyz/c.tar.gz"},
 		},
 		{
-			name: "legacy comma-delimited single arg",
+			name: "single comma-containing arg stays ONE URL (legacy split removed)",
 			argv: []string{"-c", "16", "--config", missingConfig,
 				"https://files.test.xyz/a.tar.gz,https://files.test.xyz/b.tar.gz,https://files.test.xyz/c.tar.gz"},
-			want: []string{"https://files.test.xyz/a.tar.gz", "https://files.test.xyz/b.tar.gz", "https://files.test.xyz/c.tar.gz"},
+			want: []string{"https://files.test.xyz/a.tar.gz,https://files.test.xyz/b.tar.gz,https://files.test.xyz/c.tar.gz"},
 		},
 		{
 			name: "URLs with literal commas via space-separated form (comma-safe)",

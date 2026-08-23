@@ -186,7 +186,7 @@ Key flags (`odm --help` for the full list):
 -L, --log FILE             mirror logs to FILE
 ```
 
-> **Comma note:** the legacy `"url1,url2,..."` single-argument form is still supported, but a comma *inside* a URL (e.g. `?ids=1,2,3`) is ambiguous, so **space-separated positional args** are the recommended form. URLs with a literal comma must use either space-separated form or `-i <file>`.
+> **Comma note:** each positional argument is one URL — commas inside a URL (e.g. `?ids=1,2,3`) are literal content. For long lists use `-i <file>` (one URL per line).
 
 ---
 
@@ -288,7 +288,7 @@ The acceptance checklist is covered by the test suite:
 - RPC `addUri`/`tellStatus` reachable via `curl`, all five RPC events (`onDownloadStart`/`Progress`/`Complete`/`Error`/`Pause`) received over a real `/ws` dial — `internal/rpc/server_test.go` (`TestServer_WSCompletionEvents`, `TestServer_WSErrorEvent`, `TestServer_WSDialEvent*`).
 - Resume (`--continue`) continues an interrupted download without corruption — `internal/download/manager_test.go`.
 - Redirects followed up to `--max-redirect` — `internal/transport/transport_test.go`.
-- Batch URL parsing (space-separated, legacy comma, URLs with literal commas, `-i`) — `internal/config/config_test.go`.
+- Batch URL parsing (space-separated, URLs with literal commas, `-i`) — `internal/config/config_test.go`.
 
 Run them all:
 

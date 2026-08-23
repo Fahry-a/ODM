@@ -114,37 +114,20 @@ func (o *Options) LoadLayers(fs *pflag.FlagSet, positional []string) error {
 }
 
 // resolveURLs implements batch URL parsing:
-//   - positional args present → each arg is one URL (canonical, comma-safe).
-//   - exactly one positional arg containing commas → legacy comma-delimited list.
+//   - positional args present → each arg is one URL (comma-safe).
 //   - -i file → appended (one URL per line, # comments + blanks skipped).
 //   - none → error (caller decides: --rpc allows empty).
 func resolveURLs(o *Options, positional []string) ([]string, error) {
 	var out []string
 
-	switch {
-	case len(positional) > 1:
-		// Canonical space-separated form: each arg is one URL.
+	if len(positional) > 0 {
+		// Each positional arg is exactly one URL; commas inside an arg are
+		// literal query/fragment content and never separators.
 		out = make([]string, 0, len(positional))
 		for _, a := range positional {
 			if a != "" {
 				out = append(out, a)
 			}
-		}
-	case len(positional) == 1:
-		// Legacy comma-delimited form ONLY when the single arg contains a
-		// comma that is *followed by* another scheme prefix — that is the one
-		// reliable signal that the comma separates two URLs rather than living
-		// inside one URL's query/fragment. A bare "https://h?ids=1,2" has no
-		// scheme after the comma, so it stays a single URL (comma-safe).
-		if commaFollowedByScheme(positional[0]) {
-			// Legacy comma-delimited single-arg form.
-			for p := range strings.SplitSeq(positional[0], ",") {
-				if p = strings.TrimSpace(p); p != "" {
-					out = append(out, p)
-				}
-			}
-		} else {
-			out = []string{positional[0]}
 		}
 	}
 
@@ -170,25 +153,4 @@ func resolveURLs(o *Options, positional []string) ([]string, error) {
 	}
 
 	return out, nil
-}
-
-// commaFollowedByScheme reports whether s contains a comma that is followed by
-// an http:// or https:// scheme prefix. This is the heuristic separator for
-// the legacy comma-delimited single-arg batch form: "https://a/x,https://b/y"
-// splits, but "https://h?ids=1,2,3" (comma inside a single URL) does not, since
-// nothing after its comma looks like a new URL. See spec — this form is
-// intentionally approximate which is why space-separated is recommended.
-func commaFollowedByScheme(s string) bool {
-	rest := s
-	for {
-		i := strings.IndexByte(rest, ',')
-		if i < 0 {
-			return false
-		}
-		after := strings.TrimSpace(rest[i+1:])
-		if strings.HasPrefix(after, "http://") || strings.HasPrefix(after, "https://") {
-			return true
-		}
-		rest = rest[i+1:]
-	}
 }

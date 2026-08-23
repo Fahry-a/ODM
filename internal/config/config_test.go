@@ -189,12 +189,14 @@ func TestResolveURLs_SpaceSeparated(t *testing.T) {
 
 func TestResolveURLs_LegacyComma(t *testing.T) {
 	o := DefaultPtr()
+	// The legacy comma-delimited single-arg form is gone: one arg = one URL,
+	// commas inside it are literal.
 	urls, err := resolveURLs(o, []string{"https://a/x,https://b/y,https://c/z"})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if len(urls) != 3 {
-		t.Fatalf("want 3 urls from legacy comma form, got %d (%+v)", len(urls), urls)
+	if len(urls) != 1 || urls[0] != "https://a/x,https://b/y,https://c/z" {
+		t.Fatalf("comma arg must stay a single URL, got %d (%+v)", len(urls), urls)
 	}
 }
 
