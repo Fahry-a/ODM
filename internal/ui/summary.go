@@ -185,26 +185,23 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 	allDone := total > 0 && completed >= total
 
 	// Full right block (right-aligned on a TTY): <bytes>  <speed>  ETA <eta>
-	// +<elapsed>  [bar]  <pct>. Aggregate bytes mirror the per-file lines'
+	// +<elapsed>  [bar]  <pct> — the SAME segment order as the per-file lines
+	// (size → speed → ETA), so the eye never has to swap columns between the
+	// task rows and the summary. Aggregate bytes mirror the per-file lines'
 	// done/total so the summary answers "how far along is the whole batch"
 	// without mental math. Colours: speed yellow (live), ETA/elapsed grey
 	// (secondary), bar its pacman colours, percent green (done).
-	var right string
-	if !allDone {
-		right = sp + "  ETA " + etaStr
+	var segs []string
+	if totalSize > 0 && bytesStr != "" && !allDone {
+		segs = append(segs, bytesStr)
 	}
-	if totalSize > 0 && bytesStr != "" {
-		if right != "" {
-			right += "  "
-		}
-		right += bytesStr
+	if !allDone {
+		segs = append(segs, sp+"  ETA "+etaStr)
 	}
 	if elStr != "" {
-		if right != "" {
-			right += "  "
-		}
-		right += elStr
+		segs = append(segs, elStr)
 	}
+	right := strings.Join(segs, "  ")
 	if right != "" {
 		right += "  "
 	}

@@ -174,9 +174,9 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	// bar bracket. Total width is unchanged, so the bar column still matches
 	// the active rows exactly: "+ name ........ 3.3M/3.3M [----] 100%".
 	glueSizeToBar := func(pad int) string {
-		return fmt.Sprintf("%s%s%s%s[%s]  %s",
+		return fmt.Sprintf("%s%s%s%s  [%s]  %s",
 			glyphCell, nameCell,
-			strings.Repeat(" ", pad),
+			strings.Repeat(" ", max(pad-2, 0)),
 			fitWidth(size, colSize), bar, pctCol)
 	}
 	switch layout {
