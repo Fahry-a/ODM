@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -112,10 +113,13 @@ type Task struct {
 	lim     *ratelimit.Limiter                // global rate limiter
 	taskLim atomic.Pointer[ratelimit.Limiter] // per-task rate limiter; nil = unlimited
 
-	// resolved after Probe. Held as an atomic pointer because the RPC daemon
-	// admits a task the moment NewTask returns — a client can poll tellStatus
-	// via the WS server while Start is still probing, so readers (Snapshot,
-	// filename, persistControl, verify*) must not race the writer.
+	// resumeETag is the control file's ETag when a --continue resume passed
+	// validation. Sent as If-Range on every ranged GET: if the resource changed
+	// since the interrupted run, the server answers 200 (not 206) and the chunk
+	// path treats that as the drift signal it already handles (transient retry
+	// → permanent failure of THIS layout) instead of stitching old chunks to
+	// new bytes. "" = no If-Range (fresh downloads).
+	resumeETag string
 	probe   atomic.Pointer[transport.ProbeResult]
 	disk    *storage.File
 	queue   workQueue
@@ -602,6 +606,9 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 					t.logf("warn", "control file layout doesn't match this download, re-downloading from scratch")
 					alreadyDone = 0
 				} else {
+					// Pin the control file's ETag for If-Range on every ranged
+					// GET this run (empty when the server never sent one).
+					t.resumeETag = cf.ETag
 					t.bytesDone.Store(alreadyDone)
 					// Carry the recorded hashes into this run so checkpoints keep
 					// persisting them (otherwise the next resume would silently
@@ -859,6 +866,14 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 				t.persistControl()
 				return
 			}
+			// A permanent failure (dead link: non-retryable 4xx) won't heal —
+			// fail the task instead of requeueing.
+			if isPermanent(err) {
+				t.errors.Add(1)
+				t.setState(StateError)
+				t.logf("error", "chunk %d (off %d) failed permanently: %v", c.Index, c.Start, err)
+				return
+			}
 			// Requeue the chunk so another worker gives it a fresh chance
 			// instead of failing the whole task on one transient worker
 			// failure. The chunk is dropped only after opts.Retry worker-level
@@ -905,16 +920,36 @@ func (t *Task) retireIfAboveTarget() bool {
 	}
 }
 
+// isPermanent reports whether err is a retry-proof failure (a
+// transport.PermanentError anywhere in its Unwrap chain).
+func isPermanent(err error) bool {
+	var pe transport.PermanentError
+	return errors.As(err, &pe)
+}
+
+// statusErr classifies an HTTP status from a ranged/plain GET: permanent for
+// client errors except the two retryable ones (transport.IsPermanent),
+// transient otherwise.
+func statusErr(msg string, status int) error {
+	return transport.PermanentWrap(fmt.Errorf("%s: status %d", msg, status), status)
+}
+
 // downloadChunk fetches one chunk's byte-range (retrying up to opts.Retry times
-// with RetryWait backoff) and writes it to disk at the chunk's offset. `eng`
-// supplies the region base (both profile) and transport client.
+// with exponential RetryWait backoff) and writes it to disk at the chunk's
+// offset. `eng` supplies the region base (both profile) and transport client.
 func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView)) error {
 	var lastErr error
 	for attempt := range t.opts.Retry + 1 {
 		if attempt > 0 {
 			t.setState(StateRetrying)
 			t.retries.Add(1)
-			wait := time.Duration(attempt) * t.opts.RetryWait
+			// Exponential backoff, capped so late attempts don't wait minutes:
+			// RetryWait << attempt, max 30s. RetryWait 0 (tests, unset) keeps
+			// zero wait — only a positive base is capped upward.
+			wait := t.opts.RetryWait << min(attempt, 30)
+			if t.opts.RetryWait > 0 && (wait > 30*time.Second || wait <= 0) {
+				wait = 30 * time.Second
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -933,6 +968,11 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// A permanent failure won't heal; skip the remaining attempts AND the
+		// worker-level requeue passes (the worker checks isPermanent too).
+		if isPermanent(err) {
+			return err
 		}
 		lastErr = err
 		t.logf("warn", "chunk %d attempt %d: %v", c.Index, attempt, err)
@@ -990,19 +1030,25 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	if absEnd < 0 {
 		absEnd = -1
 	}
-	resp, err := eng.Client().GetRange(chunkCtx, pr.FinalURL, absStart, absEnd)
+	resp, err := eng.Client().GetRange(chunkCtx, pr.FinalURL, absStart, absEnd, t.resumeETag)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	// A 200 here means the server ignored the Range header for THIS request —
-	// writing the full body at the chunk's offset would corrupt the file
-	// (chunk 3's slot would hold bytes from position 0). GetRange accepts both
-	// 200 and 206 so the single-stream degeneration path can reuse it; the
-	// multi-connection path must not. Retry as a transient error.
+	// A 200 here means the server answered outside this run's byte layout:
+	// either it ignored Range entirely (writing the full body at the chunk's
+	// offset would corrupt the file — chunk 3's slot would hold bytes from
+	// position 0), or an If-Range resume detected that the resource changed
+	// since the interrupted run. Both are drift: retrying won't fix a changed
+	// resource, so a permanent error fails the task fast (the control file is
+	// dropped by Start's error path and a fresh re-download starts clean).
 	if resp.StatusCode != http.StatusPartialContent {
 		transport.SkipBody(resp.Body)
-		return fmt.Errorf("server ignored range request at offset %d (status %d)", absStart, resp.StatusCode)
+		op := fmt.Sprintf("server ignored range request at offset %d", absStart)
+		if t.resumeETag != "" {
+			op = fmt.Sprintf("resume target changed since last run (If-Range mismatch) at offset %d", absStart)
+		}
+		return statusErr(op, resp.StatusCode)
 	}
 	// A 206 whose Content-Range doesn't start at the requested offset is the
 	// same corruption vector as a 200: the bytes belong somewhere else on
@@ -1030,9 +1076,13 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	if err != nil {
 		return err
 	}
-	// Validate we got the expected chunk size when it's bounded.
+	// Validate we got the expected chunk size when it's bounded. A mismatch
+	// after a 206-with-verified-Content-Range means the server is lying about
+	// its own layout (the lying-206 case) — no amount of retrying fixes that,
+	// so classify it permanent like the other drift signals.
 	if c.End >= 0 && pr.TotalSize > 0 && off != (c.End-c.Start+1) {
-		return fmt.Errorf("chunk %d short read: got %d want %d", c.Index, off, c.End-c.Start+1)
+		err := fmt.Errorf("chunk %d short read: got %d want %d", c.Index, off, c.End-c.Start+1)
+		return transport.PermanentWrap(err, http.StatusExpectationFailed)
 	}
 	_ = n
 	return nil
@@ -1063,7 +1113,7 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 	// non-range-capable and sizeless URL) must do the same.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		transport.SkipBody(resp.Body)
-		return fmt.Errorf("GET %s: status %d", pr.FinalURL, resp.StatusCode)
+		return statusErr(fmt.Sprintf("GET %s", pr.FinalURL), resp.StatusCode)
 	}
 	body := resp.Body
 	if !t.lim.Unlimited() {
@@ -1370,7 +1420,7 @@ func (t *Task) verifyResumedChunks(ctx context.Context) error {
 		if t.engines != nil && s.Start >= t.splitAt {
 			cli = t.engines[1].Client()
 		}
-		resp, err := cli.GetRange(chkCtx, pr.FinalURL, s.Start, end)
+		resp, err := cli.GetRange(chkCtx, pr.FinalURL, s.Start, end, "")
 		if err != nil {
 			cancel()
 			return fmt.Errorf("resume check at %d: %w", s.Start, err)

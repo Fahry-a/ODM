@@ -459,10 +459,13 @@ func parseRangeTotal(cr string) int64 {
 }
 
 // GetRange issues a ranged GET for [start, end] inclusive (end<0 means
-// end-of-file). Returns the open response; the caller owns Body. On a server
-// that ignores Range (responds 200), the caller should treat the whole body as
-// byte 0 onward (single-stream degeneration,).
-func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64) (*http.Response, error) {
+// end-of-file). etag is sent as If-Range when non-empty: a resource that
+// changed since that ETag answers 200 instead of 206 — the drift signal for
+// resuming interrupted downloads. Pass "" to skip If-Range. Returns the open
+// response; the caller owns Body. On a server that ignores Range (responds
+// 200), the caller should treat the whole body as byte 0 onward
+// (single-stream degeneration,).
+func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64, etag string) (*http.Response, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, rawURL)
 	if err != nil {
 		return nil, err
@@ -472,13 +475,45 @@ func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64) 
 	} else {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 	}
+	if etag != "" {
+		req.Header.Set("If-Range", etag)
+	}
 	r, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if r.StatusCode != http.StatusPartialContent && r.StatusCode != http.StatusOK {
 		SkipBody(r.Body)
-		return nil, fmt.Errorf("GetRange: status %d for %s", r.StatusCode, rawURL)
+		return nil, PermanentWrap(fmt.Errorf("GetRange: status %d for %s", r.StatusCode, rawURL), r.StatusCode)
 	}
 	return r, nil
+}
+
+// PermanentError wraps an error that retrying cannot fix: a 4xx status other
+// than 408 (request timeout) or 429 (rate limited). A dead link stays dead no
+// matter how many times we ask; burning the full retry budget on it only
+// stalls the batch. Exported so the download engine can detect it with
+// errors.As no matter which package raised it.
+type PermanentError struct {
+	Err    error
+	Status int
+}
+
+func (e PermanentError) Error() string { return e.Err.Error() }
+func (e PermanentError) Unwrap() error { return e.Err }
+
+// IsPermanent classifies an HTTP status: client errors are permanent except
+// 408 and 429 (both retryable by nature).
+func IsPermanent(status int) bool {
+	return status >= 400 && status < 500 &&
+		status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
+}
+
+// PermanentWrap marks err permanent when status is a non-retryable 4xx;
+// otherwise it passes through unchanged.
+func PermanentWrap(err error, status int) error {
+	if IsPermanent(status) {
+		return PermanentError{Err: err, Status: status}
+	}
+	return err
 }

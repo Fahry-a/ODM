@@ -133,7 +133,7 @@ func TestGetRange_PartialContent(t *testing.T) {
 	srv := serveRange(t, payload, false)
 	defer srv.Close()
 	c, _ := NewClient(ClientConfig{MaxRedirect: 5})
-	resp, err := c.GetRange(context.Background(), srv.URL, 4, 7)
+	resp, err := c.GetRange(context.Background(), srv.URL, 4, 7, "")
 	if err != nil {
 		t.Fatalf("GetRange: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestSocks5ProxyDownload(t *testing.T) {
 	// locally and send an IP address to the proxy.
 	originURL, _ := url.Parse(origin.URL)
 	target := "http://localhost:" + originURL.Port() + "/"
-	resp, err := c.GetRange(context.Background(), target, 0, -1)
+	resp, err := c.GetRange(context.Background(), target, 0, -1, "")
 	if err != nil {
 		t.Fatalf("GetRange through socks5: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestSocks5hProxySideDNS(t *testing.T) {
 
 	originURL, _ := url.Parse(origin.URL)
 	target := "http://" + fakeHost + ":" + originURL.Port() + "/"
-	resp, err := c.GetRange(context.Background(), target, 0, int64(len(payload)-1))
+	resp, err := c.GetRange(context.Background(), target, 0, int64(len(payload)-1), "")
 	if err != nil {
 		t.Fatalf("GetRange through socks5h: %v", err)
 	}
