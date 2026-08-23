@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-08-24
+
+### Fixed
+Results of a full-project audit (5 critical, 4 major, 5 minor — all fixed
+with regression tests):
+
+- **aria2c/both: an exhausted segment no longer silently vanishes** — the
+  static queue's requeue was a no-op that reported success, so a segment
+  failing through its whole retry budget was skipped and the task reported
+  *completed* with an un-downloaded hole (control file deleted, resume
+  impossible). The task now fails honestly and `--continue` salvages the
+  segments that did land. (`internal/download`)
+- **Adaptive 429 back-off actually fires** — the status wrapper never carried
+  429 (it was classified retryable), so the halving condition could never
+  match. Statuses are now always inspectable, and the restore is cooldown-
+  based (30s) instead of the first successful chunk undoing it.
+  (`internal/transport`, `internal/ratelimit`)
+- **Limiter race on `SetRate("off")`** — a double pointer load let a runtime
+  limit change store nil between them, panicking every worker with a nil
+  deref. Single load + local check. (`internal/ratelimit`)
+- **Metalink4 multi-mirror corruption** — N mirrors spawned N tasks writing
+  the same destination concurrently, and the embedded checksum was dropped
+  by the batch rule. One task now: primary URL + mirrors, checksum intact.
+  (`internal/config`, `cmd/odm`)
+- **RPC `changeOption connections` panic** — adjusting a not-yet-started task
+  spawned workers on a nil context; refused until Start runs, and Start keeps
+  a pre-raised target. Unknown gids now error instead of answering OK.
+  (`internal/download`, `internal/rpc`)
+- **If-Range is no longer sent to mirrors** (their ETags differ from the
+  primary's → false drift detection); ignored-range responses are explicitly
+  permanent instead of retried despite the fail-fast contract.
+  (`internal/download`)
+- **session-log races** — concurrent workers interleaved writes through one
+  encoder; serialized under a mutex. Failed chunk attempts roll back their
+  progress delta so BytesDone can't exceed TotalSize. (`cmd/odm`,
+  `internal/download`)
+- **UI display**: aria2c showed `[x16]` while only `--split` workers ran;
+  ETA overflowed to 0 for remainders over ~9 GiB; skipped tasks vanished
+  from the final frame. All fixed. (`internal/download`, `internal/ui`)
+- Smaller: terminal-task pruning sorts numerically; cookie values containing
+  tabs stay whole; expired cookies are skipped; probe filename refinement no
+  longer races Snapshot readers. (`internal/download`, `internal/config`)
+
 ## [1.6.0] - 2026-08-23
 
 ### Added
@@ -707,7 +750,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/Fahry-a/ODM/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/Fahry-a/ODM/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/Fahry-a/ODM/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/Fahry-a/ODM/compare/v1.4.2...v1.5.0
