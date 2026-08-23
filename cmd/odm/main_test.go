@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"odm/internal/config"
+	"odm/internal/scheduler"
 )
 
 // TestBatchChecksumWarning pins the batch-mode --checksum drop: a single hash
@@ -65,5 +68,52 @@ func TestDedupeURLs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPrintDryRun pins the --dry-run report: mode letter, per-file connection
+// counts, queue marking, unknown sizes, and the warning passthrough.
+func TestPrintDryRun(t *testing.T) {
+	plan := &scheduler.Plan{
+		Parallel: []scheduler.Allocation{
+			{URL: "https://h/a.bin", Connections: 8, SupportsRange: true},
+			{URL: "https://h/b.bin", Connections: 5, SupportsRange: true},
+		},
+		Queued: []scheduler.Allocation{
+			{URL: "https://h/c.bin", Connections: 5, SupportsRange: true},
+		},
+		Warning: "connections above 32 may get throttled",
+	}
+	sizes := map[string]int64{
+		"https://h/a.bin": 1024 * 1024 * 1024,
+		"https://h/b.bin": 500 << 20,
+		"https://h/c.bin": -1, // probe failed
+	}
+	o := config.DefaultPtr()
+	o.SplitFile = 5
+
+	var buf bytes.Buffer
+	printDryRun(&buf, o, plan, sizes)
+	out := buf.String()
+	for _, want := range []string{
+		"dry-run:",
+		"mode C", "2 parallel", "1 queued",
+		"x8", "x5",
+		"[queued]",
+		"unknown", // c.bin's size is unknown
+		"throttled",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+
+	// Mode A for a single URL.
+	buf.Reset()
+	planA := &scheduler.Plan{Parallel: []scheduler.Allocation{{URL: "https://h/one", Connections: 4}}}
+	o2 := config.DefaultPtr()
+	printDryRun(&buf, o2, planA, map[string]int64{"https://h/one": 10})
+	if !strings.Contains(buf.String(), "mode A") {
+		t.Errorf("single URL is always mode A:\n%s", buf.String())
 	}
 }

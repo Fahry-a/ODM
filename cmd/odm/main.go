@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -239,6 +240,14 @@ func run(argv []string) error {
 				}
 			}
 		}
+	}
+
+	// --dry-run: the probe + allocation above WAS the work. Report the plan
+	// and exit before any byte moves or prompt appears — it's a read-only
+	// report, there is nothing to confirm.
+	if o.DryRun {
+		printDryRun(os.Stdout, o, plan, sizes)
+		return nil
 	}
 
 	// confirmation prompt — skipped when -y/--yes OR --quiet.
@@ -487,6 +496,61 @@ func parseChunkSize(s string) (int64, error) {
 	return n, nil
 }
 
+// printDryRun writes the --dry-run report: what WOULD be downloaded, per file,
+// plus the balancer's allocation — everything the probe pass learned, without
+// touching the disk or starting a transfer.
+func printDryRun(w io.Writer, o *config.Options, plan *scheduler.Plan, sizes map[string]int64) {
+	fmt.Fprintln(w, "dry-run: probe + allocation only, nothing downloaded")
+	all := append(append([]scheduler.Allocation{}, plan.Parallel...), plan.Queued...)
+	var total int64
+	known := 0
+	for _, a := range all {
+		if s := sizes[a.URL]; s > 0 {
+			total += s
+			known++
+		}
+	}
+	if known == len(all) && len(all) > 0 {
+		fmt.Fprintf(w, "would download %d file(s), total %s\n", len(all), ui.FormatFileSize(total))
+	} else {
+		fmt.Fprintf(w, "would download %d file(s), total unknown (%d/%d sized)\n", len(all), known, len(all))
+	}
+	mode := "B"
+	switch {
+	case len(all) == 1:
+		mode = "A"
+	case o.SplitFile > 0:
+		mode = "C"
+	}
+	fmt.Fprintf(w, "balancer mode %s: %d parallel", mode, len(plan.Parallel))
+	if len(plan.Queued) > 0 {
+		fmt.Fprintf(w, ", %d queued", len(plan.Queued))
+	}
+	fmt.Fprintln(w)
+	for i, a := range all {
+		size := "?"
+		if s := sizes[a.URL]; s >= 0 {
+			size = ui.FormatFileSize(s)
+		}
+		queue := ""
+		if i >= len(plan.Parallel) {
+			queue = " [queued]"
+		}
+		fmt.Fprintf(w, "  [%d] x%d  %-10s %s%s\n", i+1, a.Connections, size, shortURL(a.URL), queue)
+	}
+	if plan.Warning != "" {
+		fmt.Fprintf(w, "note: %s\n", plan.Warning)
+	}
+}
+
+// shortURL trims a URL to its basename for compact listings.
+func shortURL(u string) string {
+	if i := strings.LastIndexByte(u, '/'); i >= 0 {
+		return u[i+1:]
+	}
+	return u
+}
+
 // confirmPlan renders the prompt for the appropriate mode (single-file vs
 // batch) and returns the user's Y/n answer.
 func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64, profiles map[string]string, reasons map[string]string, mgr *download.Manager) (bool, error) {
@@ -713,6 +777,7 @@ Inputs / output:
 
 Behavior:
   -y, --yes           skip the confirmation prompt
+      --dry-run       probe URLs + show the plan, download nothing
   -q, --quiet         no progress bar (cron/scripts); also skips the prompt
   -x, --continue      resume an incomplete file via the .odm control file (default on)
   -s, --chunk-size SIZE   work-stealing chunk size, e.g. 4M   (default 4M)

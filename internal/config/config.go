@@ -97,6 +97,7 @@ type Options struct {
 	// Behaviour.
 	Yes      bool // --yes/-y
 	Quiet    bool // --quiet/-q
+	DryRun   bool // --dry-run: probe + plan only, no download
 	Continue bool // --continue/-x  (resume via .odm control file)
 
 	// Paths / logging.
@@ -278,6 +279,8 @@ func (o *Options) setFromKey(key, val string) error {
 		return setBool(val, &o.Continue, key)
 	case "quiet":
 		return setBool(val, &o.Quiet, key)
+	case "dry-run":
+		return setBool(val, &o.DryRun, key)
 	case "checksum":
 		o.Checksum = val
 	case "limit-rate":
@@ -336,6 +339,7 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.StringVarP(&o.InputFile, "input-file", "i", o.InputFile, "Read URL list from a file (one URL per line)")
 
 	fs.BoolVarP(&o.Yes, "yes", "y", o.Yes, "Skip the confirmation prompt")
+	fs.BoolVar(&o.DryRun, "dry-run", o.DryRun, "Probe URLs and show the download plan without downloading")
 	fs.BoolVarP(&o.Quiet, "quiet", "q", o.Quiet, "Disable the progress bar (for cron/scripts)")
 	fs.BoolVarP(&o.Continue, "continue", "x", o.Continue, "Resume an incomplete file (uses the .odm control file)")
 
