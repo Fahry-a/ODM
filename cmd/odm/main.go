@@ -253,7 +253,7 @@ func run(argv []string) error {
 	}
 
 	// Progress renderer: a buffered snapshot channel feeds the RunLoop at the
-	// ~100ms cadence the spec calls out. The
+	// ~100ms cadence. The
 	// scheduler's ProgressCB pushes into it.
 	r := ui.NewRenderer(os.Stdout, o.Quiet)
 	// While the renderer owns a TTY screen, engine logs must go through it:
@@ -689,7 +689,7 @@ func (e errExit) Error() string {
 }
 
 // printUsage renders the help text. It is deliberately hand-written rather than
-// derived from pflag's FlagUsages so the flag table matches the spec list
+// derived from pflag's FlagUsages so the flag table stays in sync with Setup
 // exactly (with the documented aliases) — pflag's own formatting drops aliases
 // and reorders by category, which is less friendly for a download tool.
 func printUsage(w *os.File) {

@@ -1,13 +1,13 @@
 # /etc/odm/config.conf
 # Global default configuration for ODM (Oryn Download Manager).
 #
-# Key names match the CLI long-flags (§6.2) without the leading `--`.
+# Key names match the CLI long-flags without the leading `--`.
 # Format: key = value, one option per line, `#` starts a comment.
-# CLI flags override these; see §6.3: CLI > ~/.config/odm/config.conf > this
+# Precedence: CLI flags > ~/.config/odm/config.conf > this
 # file > hardcoded defaults. Copy to /etc/odm/config.conf (root:root, 0644) to
 # install as the system config, or to ~/.config/odm/config.conf per-user.
 
-# --- Balancer (§5) ----------------------------------------------------------
+# --- Balancer ----------------------------------------------------------
 connections        = 5          # total parallel-connection budget (-c)
 max-connections    = 32         # ceiling; exceeding warns, doesn't error
 split-file         =            # connections per file in batch mode (unset = 1 each)
@@ -37,7 +37,7 @@ check-certificate    = true       # verify TLS
 continue             = true       # resume via the .odm control file (-x)
 quiet                = false      # disable the progress bar (cron/scripts)
 
-# --- RPC (§10) -------------------------------------------------------------
+# --- RPC -------------------------------------------------------------
 rpc                  = false      # run as the RPC server (daemon)
 rpc-listen-port      = 6900
 rpc-listen-all       = false      # bind 0.0.0.0 (default 127.0.0.1)

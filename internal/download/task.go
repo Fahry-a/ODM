@@ -234,7 +234,7 @@ type rateMeasure struct {
 // on coarse (≥100ms) intervals so the bar stays smooth. Callers hold rmMu, so
 // tick is not concurrent with itself. Returns true when the ~100ms gate elapsed
 // and bps was actually recomputed — noteBytes uses this as the progress-feed
-// throttle so the UI sink fires on the same cadence (spec: "throttled
+// throttle so the UI sink fires on the same cadence ("throttled
 // progress... every ~100ms") instead of only at chunk completion. Because the
 // gate is shared under rmMu across all workers of a task, at most one worker
 // crosses the 100ms boundary per window → the sink fires ~10×/s per task, not

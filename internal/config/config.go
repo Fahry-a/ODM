@@ -1,4 +1,4 @@
-// Package config holds ODM's option model: the set of all tunables from the product spec
+// Package config holds ODM's option model: the set of all user tunables
 //, the `key = value` config-file parser,
 // and the merge that implements the source priority:
 //
@@ -238,7 +238,7 @@ func (o *Options) Apply(kv map[string]string) error {
 }
 
 // setFromKey applies a single key=value to an Options. Keys match the CLI
-// long-flag names (without `--`), per spec
+// long-flag names (without `--`)
 func (o *Options) setFromKey(key, val string) error {
 	switch key {
 	case "connections":

@@ -38,7 +38,7 @@ const pacFaceAlt = "C"
 // trimmed, and the line is padded with a trailing space when needed so the bar
 // never grows wider than `width` (which would shove the percent column).
 //
-// At 100% the whole bar is dashes/blank (spec: "nothing left for pacman to
+// At 100% the whole bar is dashes/blank ("nothing left for pacman to
 // eat"). The extras over the previous build:
 //   - the indeterminate (total<=0) bar animates: pos is the bounce position
 //     [0..width) the Renderer advances per frame (see tickIndeterminate). When

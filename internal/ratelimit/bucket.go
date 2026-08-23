@@ -1,4 +1,4 @@
-// Package ratelimit implements the global token bucket from spec
+// Package ratelimit implements the global token bucket limiter
 //
 // --limit-rate is enforced by ONE limiter shared across every active worker of
 // every task, rather than splitting the rate evenly per connection. Workers

@@ -165,7 +165,7 @@ func NewRenderer(w io.Writer, quiet bool) *Renderer {
 		cur: cursor{
 			cache: map[download.TaskID]download.ProgressView{},
 		},
-		// spec: "every 10% or every fixed time interval". One line/2s is
+		// "every 10% or every fixed time interval". One line/2s is
 		// readable in a redirected log without drowning it; the state-change
 		// path adds milestone lines on top.
 		nonTTYInterval: 2 * time.Second,
@@ -567,8 +567,8 @@ func truncateToWidth(s string, width int) string {
 }
 
 // emitNonTTY prints the non-TTY snapshot subject to the milestone+interval
-// throttle (spec: "periodic log lines... every 10% or every fixed time
-// interval"). `final` forces a full flush regardless of elapsed time — that's
+// throttle ("periodic log lines... every 10% or every fixed time interval").
+// `final` forces a full flush regardless of elapsed time — that's
 // the post-Run Frame(nil,nil) call, so a redirected log always ends on the
 // true final totals and the per-file lines.
 //
@@ -631,7 +631,7 @@ func (r *Renderer) emitNonTTY(view []download.ProgressView, st viewStats, final 
 }
 
 // RunLoop drives the renderer off a snapshot channel until ctx is cancelled.
-// interval is the redraw cadence (~100ms; spec). On ctx cancel the loop
+// interval is the redraw cadence (~100ms). On ctx cancel the loop
 // emits one final frame from whatever was last seen so the terminal lands on
 // the completed bars rather than a halfway snapshot.
 //

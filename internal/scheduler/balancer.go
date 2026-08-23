@@ -2,7 +2,7 @@
 // runs the parallel-slot scheduler that drives them.
 //
 // The Balancer (this file) is a pure function implementing the Connection
-// Balancer spec from the product spec. It takes the connection budget, the set of
+// Balancer: a pure function over the connection budget, the set of
 // URLs (with whether each supports HTTP range requests), the optional split-file
 // value and the max-connections ceiling, and returns the per-file connection
 // allocation plus the set of files that run in parallel vs. get queued. It

@@ -235,7 +235,7 @@ func (d *Daemon) TellStopped() []download.ProgressView {
 }
 
 // OnComplete forwards to the underlying Scheduler's completion hook so the RPC
-// Server can subscribe to per-task completion snapshots (spec
+// Server can subscribe to per-task completion snapshots
 // onDownloadComplete / onDownloadError). Must be called before Start; setting
 // it later is a no-op on the live scheduler (handleComplete snapshots the hook
 // under its lock at fire time, but Start has already consumed the registration).

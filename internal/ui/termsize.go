@@ -14,7 +14,7 @@
 //
 // We deliberately do NOT import golang.org/x/term: it is not a known dependency
 // of this module and adding it would pull a vanity import that the project's
-// sandbox/CI egress often can't resolve (per the rewrite spec). The standard
+// sandbox/CI egress often can't resolve (per the rewrite decision). The standard
 // syscall(TIOCGWINSZ) ioctl is all the renderer needs, on a Linux build tag.
 
 package ui

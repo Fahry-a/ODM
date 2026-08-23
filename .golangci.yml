@@ -4,7 +4,7 @@
 #
 # Context: CI previously ran only `go vet`. This file formalizes a broader but
 # still-conservative lint baseline. Doc comments use British spelling
-# (colour/centred/honour) intentionally — matching PRD §8's "grey" color name —
+# (colour/centred/honour) intentionally — matching the UI's "grey" color name —
 # so misspell is NOT enabled (it would flag the British forms under US locale
 # or the American forms under UK locale; the codebase is deliberately mixed).
 #
@@ -16,7 +16,7 @@
 #
 # staticcheck ST1012 (error vars must be ErrFoo) is disabled: the sentinel
 # `NoControlFile` (internal/storage/resume.go) is intentionally human-readable
-# per the PRD §11.3 contract.
+# per the project convention for user-facing sentinels.
 
 version: "2"
 
