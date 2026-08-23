@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-23
+
+### Added
+- **`--load-cookies FILE`** — load a Netscape cookies.txt (incl. `#HttpOnly_`
+  rows) and send it as a Cookie header; rides the existing `-H` pipeline.
+  Cookies never reach the `.odm` control file or logs. (`internal/config`,
+  `internal/transport`)
+- **`--dry-run`** — probe every URL, show the balancer's plan (mode, per-file
+  connections, queue marks, total size) and exit without downloading or
+  prompting. (`cmd/odm`)
+- **`--auto-rename` / `--skip-existing`** — collision policies for an existing
+  destination: save as `name.<N>.ext`, or skip on size match. Gated on the
+  absence of a resumable control file, so `--continue` always wins.
+  (`internal/download`)
+- **`--mirror URL`** (repeatable) — alternate sources for the same file; chunk
+  requests rotate round-robin across all sources, per-chunk Content-Range
+  validation guards each mirror independently. (`internal/download`)
+- **Adaptive slowdown on HTTP 429** — the global limiter halves its rate
+  (floor 64 KiB/s) when a server throttles us and restores the configured cap
+  after the first successful chunk. Unlimited limiters don't react.
+  (`internal/ratelimit`)
+- **`--checksum-url URL`** — fetch the digest from a sidecar file
+  (sha256sum/md5sum-style, bare hash, or algo:hash) before downloading.
+  (`internal/download`)
+- **Metalink4 input** — `-i file.meta4` parses mirror URLs + strongest hash;
+  first URL is primary, rest become mirrors, verification is automatic.
+  (`internal/config`)
+- **`--session-log FILE`** — JSONL progress + summary events for wrappers and
+  GUIs; append-only, best-effort writes. (`cmd/odm`)
+
+### Changed
+- **Engine hardening** — non-retryable 4xx (everything but 408/429) fail a
+  chunk after ONE attempt instead of burning the full retry budget × requeue
+  passes; resume sends the stored ETag as `If-Range` so server-side drift
+  restarts cleanly instead of stitching bytes; retry backoff is exponential
+  (capped 30s). (`internal/download`, `internal/transport`)
+- **Release artifacts are tar.gz** — `odm_<ver>_<os>_<arch>.tar.gz` containing
+  the binary plus LICENSE, replacing raw binaries. PKGBUILD updated to source
+  the tarballs. (`.github/scripts`, `packaging/PKGBUILD`)
+- Legacy comma-delimited single-argument batch form removed — one positional
+  argument is exactly one URL. (`internal/config`)
+
+### Fixed
+- Speeds just under 1024 KiB ("1015.3 KiB/s") clipped their `/s` suffix —
+  speed column widened to 12 cells. (`internal/ui`)
+- Completed task lines keep the fixed grid so bars stay column-aligned with
+  active rows; all-done summary right-aligned like live ones; aggregate
+  bytes on the Total line. Single-file prompt shows the resolved engine
+  under smart. (`internal/ui`)
+
 ## [1.5.1] - 2026-08-23
 
 ### Fixed
@@ -657,7 +707,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/Fahry-a/ODM/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/Fahry-a/ODM/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/Fahry-a/ODM/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/Fahry-a/ODM/compare/v1.4.1...v1.4.2
