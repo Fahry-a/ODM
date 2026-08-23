@@ -96,3 +96,45 @@ func TestReader_Throttles(t *testing.T) {
 		t.Fatalf("reader copy: %v", err)
 	}
 }
+
+func TestAdaptiveBackOff(t *testing.T) {
+	l, err := New("1M")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !l.BackOffSignal() {
+		t.Fatal("first BackOffSignal should report a change")
+	}
+	if got := l.bytes.Load(); got != 512*1024 {
+		t.Fatalf("after one halving rate = %d, want %d", got, 512*1024)
+	}
+	cfg := l.configured.Load()
+	if cfg != 1024*1024 {
+		t.Fatalf("configured drifted: %d", cfg)
+	}
+	l.ResetRate()
+	if got := l.bytes.Load(); got != 1024*1024 {
+		t.Fatalf("ResetRate -> %d, want %d", got, 1024*1024)
+	}
+	// Repeated halving floors at minAdaptiveBps and stops signalling.
+	for i := 0; i < 20; i++ {
+		l.BackOffSignal()
+	}
+	if got := l.bytes.Load(); got != minAdaptiveBps {
+		t.Fatalf("rate floor = %d, want %d", got, minAdaptiveBps)
+	}
+
+	// Unlimited limiter never signals (nothing sane to halve).
+	un, _ := New("")
+	if un.BackOffSignal() {
+		t.Fatal("unlimited limiter must not signal back-off")
+	}
+
+	// An explicit SetRate redefines the restore point.
+	l.SetRate("2M")
+	l.BackOffSignal()
+	l.ResetRate()
+	if got := l.bytes.Load(); got != 2*1024*1024 {
+		t.Fatalf("restore after SetRate -> %d, want %d", got, 2<<20)
+	}
+}

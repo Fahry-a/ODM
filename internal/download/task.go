@@ -1015,10 +1015,20 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		err := t.fetchAndWrite(ctx, eng, c, sink, h)
 		if err == nil {
 			t.storeChunkHash(eng.AbsStart(c.Start), hex.EncodeToString(h.Sum(nil)))
+			t.lim.ResetRate()
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// A 429 means the server is throttling THIS client's aggregate rate:
+		// halve the shared limiter so every worker eases off, not just this
+		// chunk's retries. A successful chunk later restores the configured rate.
+		var pe transport.PermanentError
+		if errors.As(err, &pe) && pe.Status == http.StatusTooManyRequests {
+			if t.lim.BackOffSignal() {
+				t.logf("warn", "server asked to slow down (429) — global rate halved")
+			}
 		}
 		// A permanent failure won't heal; skip the remaining attempts AND the
 		// worker-level requeue passes (the worker checks isPermanent too).

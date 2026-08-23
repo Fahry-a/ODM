@@ -30,7 +30,11 @@ import (
 // loaded pointer means "unlimited": Acquire/Reader are cheap no-ops.
 type Limiter struct {
 	lr    atomic.Pointer[rate.Limiter]
-	bytes atomic.Int64 // configured rate (bytes/sec), 0 = unlimited
+	bytes atomic.Int64 // active rate (bytes/sec), 0 = unlimited
+
+	// configured holds the user's --limit-rate so adaptive BackOff/ResetRate
+	// cycles can restore it. 0 = user never set a cap.
+	configured atomic.Int64
 }
 
 // New builds a Limiter from a --limit-rate string ("5M", "500K", "0"/""/off =
@@ -52,12 +56,61 @@ func New(spec string) (*Limiter, error) {
 	// ergonomics; the long-run average stays at bps).
 	l := &Limiter{}
 	l.bytes.Store(bps)
+	l.configured.Store(bps)
 	l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
 	return l, nil
 }
 
 // Unlimited reports whether the limiter is disabled.
 func (l *Limiter) Unlimited() bool { return l == nil || l.lr.Load() == nil }
+
+// minAdaptiveBps floors the adaptive slowdown so a hostile server can't drive
+// the effective rate to zero (which would look like a hang).
+const minAdaptiveBps = 64 * 1024
+
+// BackOffSignal is BackOff with a "did anything change" report, so callers can
+// log only real transitions. False = unlimited limiter or already at floor.
+func (l *Limiter) BackOffSignal() bool {
+	if l == nil {
+		return false
+	}
+	cur := l.bytes.Load()
+	if cur <= 0 {
+		return false
+	}
+	half := cur / 2
+	if half < minAdaptiveBps {
+		half = minAdaptiveBps
+	}
+	if half == cur {
+		return false
+	}
+	l.setBytes(half)
+	return true
+}
+
+// ResetRate restores the configured rate after an adaptive back-off.
+// No-op when no cap was configured or the rate was never reduced.
+func (l *Limiter) ResetRate() {
+	if l == nil {
+		return
+	}
+	if cfg := l.configured.Load(); cfg > 0 && l.bytes.Load() != cfg {
+		l.setBytes(cfg)
+	}
+}
+
+// setBytes swaps the active rate, creating the limiter if it was unlimited.
+func (l *Limiter) setBytes(bps int64) {
+	l.bytes.Store(bps)
+	cur := l.lr.Load()
+	if cur == nil {
+		l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
+	} else {
+		cur.SetLimit(rate.Limit(bps))
+		cur.SetBurst(int(bps))
+	}
+}
 
 // SetRate updates the global rate limit at runtime. spec is the same format as
 // New ("5M", "500K", "off"/""=unlimited). Safe for concurrent use — the limiter
@@ -80,9 +133,9 @@ func (l *Limiter) SetRate(spec string) error {
 		return nil
 	}
 	l.bytes.Store(bps)
+	l.configured.Store(bps) // an explicit SetRate redefines the restore point
 	cur := l.lr.Load()
 	if cur == nil {
-		// was unlimited; create a fresh limiter
 		l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
 	} else {
 		cur.SetLimit(rate.Limit(bps))
