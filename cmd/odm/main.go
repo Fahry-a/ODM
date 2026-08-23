@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -274,6 +275,15 @@ func run(argv []string) error {
 	}
 	snap := make(chan []download.ProgressView, 16)
 	qSnap := make(chan []download.ProgressView, 16)
+	var slog *sessionLog
+	if o.SessionLog != "" {
+		f, err := os.OpenFile(o.SessionLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("session-log %q: %w", o.SessionLog, err)
+		}
+		slog = &sessionLog{f: f}
+		defer f.Close()
+	}
 	progCB := func(live, queued []download.ProgressView) {
 		// Non-blocking sends so a stalled UI never blocks the engine.
 		select {
@@ -283,6 +293,10 @@ func run(argv []string) error {
 		select {
 		case qSnap <- queued:
 		default:
+		}
+		if slog != nil {
+			slog.views(live)
+			slog.views(queued)
 		}
 	}
 
@@ -352,6 +366,7 @@ func run(argv []string) error {
 		code = download.ExitCancelled
 	}
 	printSummary(succeeded, failed, len(o.URLs), cancelled)
+	slog.summary("summary", succeeded, failed, len(o.URLs))
 	if runErr != nil && runErr != context.Canceled {
 		return errExit{code: code, msg: runErr.Error()}
 	}
@@ -609,6 +624,50 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 		connsPerFile = plan.Parallel[0].Connections // Mode A/B: 1 or the budget
 	}
 	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
+}
+
+// sessionLog appends one JSON object per line to --session-log: a machine-
+// readable mirror of the run for wrappers/GUIs. Views are emitted from the
+// progress callback (throttled by the engine's own ~100ms gate); a final
+// summary event closes the run. Writes are best-effort — a log failure must
+// never fail the download, so errors are swallowed.
+type sessionLog struct {
+	f   *os.File
+	enc *json.Encoder
+}
+
+func (s *sessionLog) encode(v map[string]any) {
+	if s.enc == nil {
+		s.enc = json.NewEncoder(s.f)
+	}
+	_ = s.enc.Encode(v)
+}
+
+func (s *sessionLog) views(vs []download.ProgressView) {
+	if s == nil {
+		return
+	}
+	for _, v := range vs {
+		s.encode(map[string]any{
+			"event":   "progress",
+			"id":      v.ID,
+			"url":     v.URL,
+			"file":    v.Filename,
+			"state":   v.State.String(),
+			"bytes":   v.BytesDone,
+			"total":   v.TotalSize,
+			"speed":   v.Speed,
+			"errors":  v.Errors,
+			"retries": v.Retries,
+		})
+	}
+}
+
+func (s *sessionLog) summary(event string, succeeded, failed, total int) {
+	if s == nil {
+		return
+	}
+	s.encode(map[string]any{"event": event, "succeeded": succeeded, "failed": failed, "total": total})
 }
 
 // printSummary writes the final outcome line. cancelled=true means

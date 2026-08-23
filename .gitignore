@@ -54,3 +54,7 @@ packaging/.SRCINFO
 
 graphify-out/*
 !graphify-out/graph.json
+# stray manual test downloads
+500MB-CZIPtestfile.org.zip*
+3dicons-png-dynamic-*.zip*
+odm-bin-*
