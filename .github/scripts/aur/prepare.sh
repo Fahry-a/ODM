@@ -20,6 +20,14 @@ PKGNAME=$(grep -oP '^pkgname=\K.*' packaging/PKGBUILD)
 
 if [ "$MODE" = "release" ]; then
   TAG="$INPUT_TAG"
+  # Prereleases (vX.Y.Z-suffix) are valid releases but never go to AUR —
+  # skip quietly instead of failing the pipeline red after the GitHub Release
+  # already succeeded.
+  if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-.+$ ]]; then
+    echo "Prerelease tag $TAG — not published to AUR; skipping"
+    echo "skip=true" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
   if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
     exit 1

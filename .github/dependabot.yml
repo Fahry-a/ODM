@@ -15,3 +15,8 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    groups:
+      # One PR per week instead of one per action bump.
+      actions:
+        patterns:
+          - "*"

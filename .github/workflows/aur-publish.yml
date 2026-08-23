@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # full history + all tags (tag check, commit-to-main rebase)
 
@@ -75,7 +75,7 @@ jobs:
         # bundled assets (version), pkgrel reset/bump (pkgrel_mode auto), and
         # pruning stale odm-bin-<ver>.* assets (rm_patterns). Sources resolve
         # against GITHUB_WORKSPACE (repo root).
-        uses: Fahry-a/aur-sync-action@v1
+        uses: Fahry-a/aur-sync-action@4957ce53c31cfa8e3cc04980ea4329aaeb1f79cc # v1 (v1.2.3)
         with:
           package_name: odm-bin
           ssh_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

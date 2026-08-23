@@ -22,7 +22,11 @@ cp assets/odm.conf.example "packaging/odm-bin.conf-${VERSION}.example"
 cp assets/odm.service "packaging/odm-bin-${VERSION}.service"
 cp assets/LICENSE "packaging/odm-bin-${VERSION}.LICENSE"
 
-docker run --rm -v "$PWD/packaging:/pkg" -w /pkg archlinux:base-devel bash -c "
+# Digest-pinned so the container can't drift under us; refresh deliberately
+# (re-resolve and update) when base-devel moves.
+docker run --rm -v "$PWD/packaging:/pkg" -w /pkg \
+  archlinux:base-devel@sha256:714acd1eef9ae997d95691b1c5220ada0076185b77857c1813f02de0fa83cf7b \
+  bash -c "
   useradd -m builder
   chown -R builder:builder /pkg
   su builder -c 'makepkg --verifysource --nodeps'

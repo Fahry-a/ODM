@@ -30,16 +30,21 @@ NAMES=$(echo "$AUTHORS" | sed 's/ <\(.*\)>$/|\1/' | awk -F'|' '
 [ -n "$NAMES" ] || { echo "No human contributors — skipping"; exit 0; }
 
 # GitHub usernames are @mention-able; fall back to the commit name.
-LINKS=""
+# Only names shaped like a GitHub username go to the API — the raw git author
+# Only names shaped like a GitHub username go to the API — the raw git author
 while IFS= read -r name; do
   [ -z "$name" ] && continue
-  user=$(gh api "users/${name}" --jq '.login' 2>/dev/null || echo "")
-  if [ -n "$user" ]; then
-    LINKS="$LINKS @$user"
-  else
-    LINKS="$LINKS $name"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$ ]]; then
+    echo "- $name"
+    continue
   fi
-done <<< "$NAMES"
+  user=$(gh api "users/${name}" --jq '.login' 2>/dev/null || true)
+  if [ -n "$user" ]; then
+    echo "- @$user"
+  else
+    echo "- $name"
+  fi
+done <<< "$NAMES" > /tmp/contributor-lines.md
 
 {
   echo ""
@@ -47,10 +52,9 @@ done <<< "$NAMES"
   echo ""
   echo "## Contributors"
   echo ""
-  for c in $LINKS; do
-    echo "- $c"
-  done
+  cat /tmp/contributor-lines.md
 } >> /tmp/release-notes.md
+rm -f /tmp/contributor-lines.md
 
 echo "Appended contributors for $TAG:"
 tail -10 /tmp/release-notes.md

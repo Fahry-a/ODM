@@ -20,6 +20,12 @@ permissions:
   contents: write
   actions: write # needed to dispatch aur-publish.yml (gh workflow run)
 
+# One run per tag: a re-dispatch for the same tag must queue behind the
+# original, not race it (duplicate releases / AUR publishes).
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build & Release
@@ -28,12 +34,12 @@ jobs:
     steps:
       # fetch-depth: 0 so `git log` between tags works for the per-release
       # contributors list (and the changelog extraction below).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -73,7 +79,7 @@ jobs:
         run: bash .github/scripts/gen-checksums.sh "${{ steps.tag.outputs.version }}"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: v${{ steps.tag.outputs.version }}
           name: v${{ steps.tag.outputs.version }}

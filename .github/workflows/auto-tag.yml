@@ -31,12 +31,18 @@ permissions:
   contents: write
   actions: write # needed to dispatch release.yml (gh workflow run)
 
+# Two pushes racing on main could both pass tag-check and both create a tag.
+# Queue them; never cancel (a cancelled run would leave the version untagged).
+concurrency:
+  group: auto-tag
+  cancel-in-progress: false
+
 jobs:
   auto-tag:
     name: Tag released version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # need every tag to compute "latest"
 
