@@ -463,6 +463,7 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		ChunkSize:        chunk,
 		Timeout:          time.Duration(o.Timeout) * time.Second,
 		Checksum:         o.Checksum,
+		ChecksumURL:      o.ChecksumURL,
 		LimitRate:        o.LimitRate,
 		TaskLimitRate:    o.TaskLimitRate,
 		UserAgent:        o.UserAgent,

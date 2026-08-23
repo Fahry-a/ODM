@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,5 +156,39 @@ func TestUniqueName(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "f.2.bin"), []byte("x"), 0o644)
 	if got := uniqueName(dir, "f.bin"); got != "f.3.bin" {
 		t.Fatalf("third free slot -> %s, want f.3.bin", got)
+	}
+}
+
+// TestParseChecksumSidecar pins the sidecar digest parser: bare hashes by
+// length, algo-prefixed forms, sha256sum output with filename, and rejects.
+func TestParseChecksumSidecar(t *testing.T) {
+	h64 := strings.Repeat("a", 64)
+	h40 := strings.Repeat("b", 40)
+	h32 := strings.Repeat("c", 32)
+	cases := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{h64, "sha256:" + h64, false},
+		{"SHA256:" + h64 + "  file.zip\n", "sha256:" + h64, false},
+		{h40, "sha1:" + h40, false},
+		{h32, "md5:" + h32, false},
+		{"sha256:" + h64, "sha256:" + h64, false},
+		{"", "", true},
+		{"zzz", "", true},
+		{"crc32:" + h32, "", true},
+	}
+	for _, tc := range cases {
+		got, err := parseChecksumSidecar(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("parse(%q) should fail", tc.in)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("parse(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
 	}
 }

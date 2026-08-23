@@ -221,6 +221,8 @@ type TaskOptions struct {
 	MaxConnPerServer int    // aria2c: -x (per-server connection cap, default 1)
 
 	Collision string // what to do when the destination exists: ""|"overwrite" | "rename" (--auto-rename) | "skip" (--skip-existing)
+
+	ChecksumURL string // --checksum-url: fetch "algo:digest" from this sidecar URL before downloading
 }
 
 // uniqueName returns dir/name rewritten to base.N.ext with the lowest N≥1
@@ -464,6 +466,21 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			return fmt.Errorf("probe: %w", perr)
 		}
 		t.probe.Store(pr)
+	}
+	// --checksum-url: pull the digest from the sidecar before any byte of the
+	// payload moves. The sidecar is a small text file ("algo:hash" or a bare
+	// hash, as emitted by sha256sum et al); parsing accepts both. A fetch or
+	// parse failure fails the task — silently skipping verification would
+	// defeat the point of asking for it.
+	if t.opts.ChecksumURL != "" && t.opts.Checksum == "" {
+		spec, err := t.fetchChecksumSpec(ctx)
+		if err != nil {
+			t.setState(StateError)
+			t.emitFinal(progressSink)
+			return fmt.Errorf("checksum-url: %w", err)
+		}
+		t.opts.Checksum = spec
+		t.logf("info", "checksum from %s: %s", t.opts.ChecksumURL, spec)
 	}
 	// Smart profile: decide the concrete engine now that the probe answered
 	// range support + size, and check h2 readiness through the h2 client.
@@ -1293,6 +1310,60 @@ func (t *Task) totalOrDone() int64 {
 		return pr.TotalSize
 	}
 	return t.bytesDone.Load()
+}
+
+// fetchChecksumSpec downloads the sidecar at opts.ChecksumURL and parses it
+// into an "algo:hex" spec. Accepted forms: "algo:<hash>", "<64-hex>" (sha256),
+// "<40-hex>" (sha1), "<32-hex>" (md5), optionally followed by whitespace and
+// the filename (sha256sum output format).
+func (t *Task) fetchChecksumSpec(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := t.client.NewGetRequest(ctx, t.opts.ChecksumURL)
+	if err != nil {
+		return "", err
+	}
+	resp, err := t.client.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer transport.SkipBody(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GET %s: status %d", t.opts.ChecksumURL, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return "", err
+	}
+	return parseChecksumSidecar(string(body))
+}
+
+func parseChecksumSidecar(s string) (string, error) {
+	fields := strings.Fields(strings.TrimSpace(s))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty checksum file")
+	}
+	tok := fields[0]
+	algo, hexStr, ok := strings.Cut(tok, ":")
+	if !ok {
+		switch len(tok) {
+		case 64:
+			algo, hexStr = "sha256", tok
+		case 40:
+			algo, hexStr = "sha1", tok
+		case 32:
+			algo, hexStr = "md5", tok
+		default:
+			return "", fmt.Errorf("unrecognised digest form %q", tok)
+		}
+	}
+	algo = strings.ToLower(algo)
+	switch algo {
+	case "md5", "sha1", "sha256":
+	default:
+		return "", fmt.Errorf("unsupported algorithm %q", algo)
+	}
+	return algo + ":" + strings.ToLower(hexStr), nil
 }
 
 // verifyChecksum runs the --checksum verification against the real output file

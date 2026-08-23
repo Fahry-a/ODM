@@ -84,6 +84,7 @@ type Options struct {
 	// TLS / integrity.
 	CheckCertificate bool   // --check-certificate
 	Checksum         string // --checksum "algo:hash"
+	ChecksumURL      string // --checksum-url: sidecar URL carrying the digest
 	LimitRate        string // --limit-rate "5M"/"500K"  ("" = unlimited)
 	TaskLimitRate    string // --limit-rate-per-task "2M" (per-task cap, additive to global)
 	ChunkSize        string // --chunk-size "4M"
@@ -289,6 +290,8 @@ func (o *Options) setFromKey(key, val string) error {
 		return setBool(val, &o.SkipExisting, key)
 	case "checksum":
 		o.Checksum = val
+	case "checksum-url":
+		o.ChecksumURL = val
 	case "limit-rate":
 		o.LimitRate = val
 	case "limit-rate-per-task":
@@ -362,6 +365,7 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 	fs.StringVarP(&o.Proxy, "proxy", "p", o.Proxy, "Proxy (http/https/socks5)")
 	fs.BoolVar(&o.CheckCertificate, "check-certificate", o.CheckCertificate, "Verify TLS certificates")
 	fs.StringVar(&o.Checksum, "checksum", o.Checksum, "Verify checksum, format algo:hash (md5/sha1/sha256)")
+	fs.StringVar(&o.ChecksumURL, "checksum-url", o.ChecksumURL, "Fetch the checksum from this sidecar URL (sha256sum/md5sum-style file)")
 	fs.StringVarP(&o.LimitRate, "limit-rate", "l", o.LimitRate, "Global speed limit, e.g. 5M, 500K")
 	fs.StringVar(&o.TaskLimitRate, "limit-rate-per-task", o.TaskLimitRate, "Per-task speed cap, additive to global, e.g. 2M")
 	fs.StringVarP(&o.ChunkSize, "chunk-size", "s", o.ChunkSize, "Chunk size for the work-stealing queue, e.g. 4M")
