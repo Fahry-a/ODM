@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-23
+
 ### Fixed
 - **Finished downloads stop showing a phantom ETA "?"** — a completed task's
   ETA cell is blank (nothing remains to estimate) and the batch summary drops
@@ -632,7 +634,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Fahry-a/ODM/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/Fahry-a/ODM/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/Fahry-a/ODM/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/Fahry-a/ODM/compare/v1.3.1...v1.4.0

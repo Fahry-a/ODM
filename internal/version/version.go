@@ -5,4 +5,4 @@ package version
 
 // Version is the ODM release string; baked into --version, the default
 // User-Agent, and the RPC odm.getVersion response.
-const Version = "odm/1.4.2"
+const Version = "odm/1.5.0"
