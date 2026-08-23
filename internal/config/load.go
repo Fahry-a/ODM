@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
@@ -187,7 +188,11 @@ func resolveURLs(o *Options, positional []string) ([]string, error) {
 		}
 	}
 
-	// -i input file: one URL per line.
+	// -i input file: one URL per line, or a Metalink4 (.meta4/.metalink)
+	// document carrying mirror URLs + a verification hash per file.
+	if o.InputFile != "" && isMetalinkName(o.InputFile) {
+		return parseMetalink(o.InputFile, o)
+	}
 	if o.InputFile != "" {
 		f, err := os.Open(o.InputFile)
 		if err != nil {
@@ -209,4 +214,77 @@ func resolveURLs(o *Options, positional []string) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// isMetalinkName reports whether path looks like a Metalink4 document.
+func isMetalinkName(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), ".meta4") ||
+		strings.HasSuffix(strings.ToLower(path), ".metalink")
+}
+
+// parseMetalink reads a Metalink4 XML file (RFC 5854) and registers its first
+// <file> entry: every mirror URL becomes a download target (primary first),
+// and the entry's <hash> — when present — is stored as the --checksum spec so
+// verification happens automatically. Later entries are ignored for now: ODM's
+// batch model is flat URLs, and multi-file metalinks map awkwardly onto the
+// one-checksum-per-run rule.
+func parseMetalink(path string, o *Options) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("metalink %q: %w", path, err)
+	}
+	var doc struct {
+		Files []struct {
+			Name    string `xml:"name"`
+			Size    int64  `xml:"size"`
+			Hashes  []struct {
+				Type string `xml:"type,attr"`
+				Val  string `xml:",chardata"`
+			} `xml:"hash"`
+			URLs []struct {
+				Location string `xml:"location,attr"`
+				Priority string `xml:"priority,attr"`
+				Val      string `xml:",chardata"`
+			} `xml:"url"`
+		} `xml:"file"`
+	}
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("metalink %q: %w", path, err)
+	}
+	if len(doc.Files) == 0 {
+		return nil, fmt.Errorf("metalink %q: no <file> entries", path)
+	}
+	f0 := doc.Files[0]
+	var urls []string
+	for _, u := range f0.URLs {
+		u.Val = strings.TrimSpace(u.Val)
+		if u.Val != "" {
+			urls = append(urls, u.Val)
+		}
+	}
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("metalink %q: file %q has no URLs", path, f0.Name)
+	}
+	// First URL = primary download source; the rest feed --mirror.
+	pick := ""
+	for _, h := range f0.Hashes {
+		t := strings.ToLower(strings.TrimSpace(h.Type))
+		switch t {
+		case "sha256":
+			pick = t + ":" + strings.ToLower(strings.TrimSpace(h.Val))
+		case "sha1":
+			if pick == "" || strings.HasPrefix(pick, "md5:") {
+				pick = t + ":" + strings.ToLower(strings.TrimSpace(h.Val))
+			}
+		case "md5":
+			if pick == "" {
+				pick = t + ":" + strings.ToLower(strings.TrimSpace(h.Val))
+			}
+		}
+	}
+	if pick != "" {
+		o.Checksum = pick
+	}
+	o.Mirrors = append(o.Mirrors, urls[1:]...)
+	return urls, nil
 }

@@ -346,3 +346,45 @@ func TestLoadCookies_InjectedIntoHeaders(t *testing.T) {
 		t.Fatalf("cookie not injected into headers: %+v", o.Headers)
 	}
 }
+
+// TestParseMetalink pins the Metalink4 -i path: URLs in document order, the
+// rest becoming mirrors, and the strongest hash feeding --checksum.
+func TestParseMetalink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.meta4")
+	xmlDoc := `<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="example.iso">
+    <size>4096</size>
+    <hash type="md5">0123456789abcdef0123456789abcdef</hash>
+    <hash type="sha256">` + strings.Repeat("e", 64) + `</hash>
+    <url location="de" priority="1">https://mirror1.example/x.iso</url>
+    <url location="us" priority="2">https://mirror2.example/x.iso</url>
+  </file>
+</metalink>`
+	if err := os.WriteFile(path, []byte(xmlDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o3 := DefaultPtr()
+	got, err := parseMetalink(path, o3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "https://mirror1.example/x.iso" || got[1] != "https://mirror2.example/x.iso" {
+		t.Fatalf("urls = %v", got)
+	}
+	if len(o3.Mirrors) != 1 || o3.Mirrors[0] != "https://mirror2.example/x.iso" {
+		t.Fatalf("mirrors = %v (first URL must be primary, not a mirror)", o3.Mirrors)
+	}
+	if o3.Checksum != "sha256:"+strings.Repeat("e", 64) {
+		t.Fatalf("checksum = %q (sha256 preferred over md5)", o3.Checksum)
+	}
+
+	// Bad XML → clean error.
+	bad := filepath.Join(dir, "bad.meta4")
+	os.WriteFile(bad, []byte("not xml"), 0o644)
+	o4 := DefaultPtr()
+	if _, err := parseMetalink(bad, o4); err == nil {
+		t.Fatal("expected error for invalid metalink")
+	}
+}
