@@ -14,15 +14,6 @@ import (
 	"odm/internal/transport"
 )
 
-// serveStatus answers every ranged GET with the given status (a dead-link
-// simulator: 403/404 never heal).
-func serveStatus(t *testing.T, status int) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-	}))
-}
-
 // newQuickTask builds a 1-connection task against srvURL with a fast retry
 // budget so tests don't wait on backoff.
 func newQuickTask(t *testing.T, srvURL, dir string) *Task {
@@ -46,14 +37,14 @@ func newQuickTask(t *testing.T, srvURL, dir string) *Task {
 // are permanent except 408/429; server errors and success stay transient.
 func TestPermanentError_Classification(t *testing.T) {
 	for status, want := range map[int]bool{
-		http.StatusForbidden:            true,
-		http.StatusNotFound:             true,
-		http.StatusGone:                 true,
-		http.StatusUnauthorized:         true,
-		http.StatusRequestTimeout:       false, // 408: retryable
-		http.StatusTooManyRequests:      false, // 429: retryable
+		http.StatusForbidden:           true,
+		http.StatusNotFound:            true,
+		http.StatusGone:                true,
+		http.StatusUnauthorized:        true,
+		http.StatusRequestTimeout:      false, // 408: retryable
+		http.StatusTooManyRequests:     false, // 429: retryable
 		http.StatusInternalServerError: false,
-		http.StatusBadGateway:           false,
+		http.StatusBadGateway:          false,
 	} {
 		err := transport.PermanentWrap(errors.New("x"), status)
 		if got := isPermanent(err); got != want {
@@ -172,7 +163,7 @@ func TestBackoff_ExponentialCap(t *testing.T) {
 	}
 	// Cap branch: a large base clamps to 30s.
 	wait := 10 * time.Second << min(5, 30)
-	if t2 := wait; !(t2 > 30*time.Second) {
-		t.Fatalf("expected >cap value before clamp, got %v", t2)
+	if wait <= 30*time.Second {
+		t.Fatalf("expected >cap value before clamp, got %v", wait)
 	}
 }

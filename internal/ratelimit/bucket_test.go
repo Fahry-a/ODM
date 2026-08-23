@@ -131,7 +131,9 @@ func TestAdaptiveBackOff(t *testing.T) {
 	}
 
 	// An explicit SetRate redefines the restore point.
-	l.SetRate("2M")
+	if err := l.SetRate("2M"); err != nil {
+		t.Fatal(err)
+	}
 	l.BackOffSignal()
 	l.ResetRate()
 	if got := l.bytes.Load(); got != 2*1024*1024 {

@@ -322,7 +322,9 @@ func TestCookieHeader(t *testing.T) {
 
 	// Empty file → "no cookies found".
 	empty := filepath.Join(dir, "empty.txt")
-	os.WriteFile(empty, []byte("# only comments\n\n"), 0o600)
+	if err := os.WriteFile(empty, []byte("# only comments\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := cookieHeader(empty); err == nil || !strings.Contains(err.Error(), "no cookies") {
 		t.Errorf("want 'no cookies found', got %v", err)
 	}
@@ -333,7 +335,9 @@ func TestCookieHeader(t *testing.T) {
 func TestLoadCookies_InjectedIntoHeaders(t *testing.T) {
 	dir := t.TempDir()
 	cpath := filepath.Join(dir, "c.txt")
-	os.WriteFile(cpath, []byte(".example.com\tTRUE\t/\tTRUE\t1900000000\tsid\tS1\n"), 0o600)
+	if err := os.WriteFile(cpath, []byte(".example.com\tTRUE\t/\tTRUE\t1900000000\tsid\tS1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	o := DefaultPtr()
 	o.LoadCookie = cpath
@@ -382,7 +386,9 @@ func TestParseMetalink(t *testing.T) {
 
 	// Bad XML → clean error.
 	bad := filepath.Join(dir, "bad.meta4")
-	os.WriteFile(bad, []byte("not xml"), 0o644)
+	if err := os.WriteFile(bad, []byte("not xml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	o4 := DefaultPtr()
 	if _, err := parseMetalink(bad, o4); err == nil {
 		t.Fatal("expected error for invalid metalink")

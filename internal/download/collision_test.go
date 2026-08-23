@@ -138,7 +138,11 @@ func TestCollision_SkipExisting(t *testing.T) {
 // so "f.tar.gz" → "f.tar.1.gz" and "f.bin" → "f.1.bin".
 func TestUniqueName(t *testing.T) {
 	dir := t.TempDir()
-	mk := func(name string) { os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644) }
+	mk := func(name string) {
+		if werr := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); werr != nil {
+			t.Fatal(werr)
+		}
+	}
 
 	mk("f.tar.gz")
 	if got := uniqueName(dir, "f.tar.gz"); got != "f.tar.1.gz" {
@@ -151,9 +155,12 @@ func TestUniqueName(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		mk(string(rune('a'+i-1)) + ".bin") // placeholder to keep dir non-empty
 	}
-	os.Remove(filepath.Join(dir, "f.bin"))
-	os.WriteFile(filepath.Join(dir, "f.1.bin"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(dir, "f.2.bin"), []byte("x"), 0o644)
+	if rerr := os.Remove(filepath.Join(dir, "f.bin")); rerr != nil && !os.IsNotExist(rerr) {
+		t.Fatal(rerr)
+	}
+	for _, n := range []string{"f.1.bin", "f.2.bin"} {
+		mk(n)
+	}
 	if got := uniqueName(dir, "f.bin"); got != "f.3.bin" {
 		t.Fatalf("third free slot -> %s, want f.3.bin", got)
 	}
