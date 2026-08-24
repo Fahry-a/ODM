@@ -152,6 +152,12 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		profile = "odm"
 	}
 	t := NewTask(id, url, TaskOptions{
+		// M5 contract: the Task's PRIMARY client is always the h1-only one.
+		// The odm engine (fixed-chunk work-stealing — region1 of both,
+		// degraded paths, single-stream) needs N parallel TCP connections; an
+		// h2-enabled client there would collapse them into one stream and
+		// silently waste the budget. Only static-split (aria2c-model) engines
+		// ride h2Client, selected by queue kind at layout time.
 		OutputName:       m.opts.OutFile,
 		Dir:              m.opts.Dir,
 		Retry:            m.opts.Retry,
@@ -169,9 +175,10 @@ func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
 		MinSplitSize:     m.opts.MinSplitSize,
 		MaxConnPerServer: m.opts.MaxConnPerServer,
 		Collision:        m.opts.Collision,
-	}, m.ClientFor(profile), m.lim, m.logf)
+	}, m.client, m.lim, m.logf)
 	// Region 2 of the both profile speaks HTTP/2 — attach the Manager's h2
-	// client so Start can give it to the second engine.
+	// client so Start can give it to the second engine. The PRIMARY client
+	// stays h1-only (see NewTask's TaskOptions comment above).
 	if m.h2client != nil {
 		t.SetH2Client(m.h2client)
 	}

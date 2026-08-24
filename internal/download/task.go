@@ -677,13 +677,11 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		}
 		mid := t.splitAt
 		n2, _ := AriaSplit(qs-mid, int64(t.opts.Split), t.opts.MinSplitSize)
-		eng2Client := t.client
-		if t.h2Client != nil {
-			eng2Client = t.h2Client
-		}
 		t.engines = []*Engine{
+			// region1 = odm work-stealing → h1 (t.client is ALWAYS the h1
+			// client now); region2 = static split → h2 when available.
 			{q: NewChunkQueue(mid, t.opts.ChunkSize), client: t.client, base: 0},
-			{q: NewStaticQueue(qs-mid, n2), client: eng2Client, base: mid},
+			{q: NewStaticQueue(qs-mid, n2), client: t.engineClient(true), base: mid},
 		}
 		t.ariaSplit = n2
 		t.logf("info", "both profile: region1 [0,%d) odm (%d conns, h1), region2 [%d,%d) aria2c (%d segments, h2)",
@@ -778,16 +776,13 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			t.bytesDone.Store(0)
 			t.clearChunkHashes()
 			if t.engines != nil {
-				// Rebuild both engines with the same layout math.
+				// Rebuild both engines with the same layout math (region1 h1,
+				// region2 h2-when-available — same routing as fresh Start).
 				mid := t.splitAt
 				n2, _ := AriaSplit(qs-mid, int64(t.opts.Split), t.opts.MinSplitSize)
-				eng2Client := t.client
-				if t.h2Client != nil {
-					eng2Client = t.h2Client
-				}
 				t.engines = []*Engine{
 					{q: NewChunkQueue(mid, t.opts.ChunkSize), client: t.client, base: 0},
-					{q: NewStaticQueue(qs-mid, n2), client: eng2Client, base: mid},
+					{q: NewStaticQueue(qs-mid, n2), client: t.engineClient(true), base: mid},
 				}
 				q = t.engines[0].q
 			} else if isAria && qs > 0 {
@@ -926,9 +921,29 @@ func (t *Task) currentEngine() *Engine {
 		return t.engines[0]
 	}
 	if t.single == nil {
-		t.single = &Engine{q: t.queue, client: t.client, base: 0}
+		t.single = &Engine{q: t.queue, client: t.engineClient(isStaticQueue(t.queue)), base: 0}
 	}
 	return t.single
+}
+
+// engineClient picks the transport client by ENGINE kind, not profile string:
+// a static split (aria2c model) multiplexes its segments over h2 when an h2
+// client exists; fixed-chunk work-stealing (odm model — including a both task
+// degraded to one region, whose opts.Profile still reads "both") needs the
+// h1-only client so its N workers stay N separate TCP connections. static=true
+// for every NewStaticQueue-backed engine.
+func (t *Task) engineClient(static bool) *transport.Client {
+	if static && t.h2Client != nil {
+		return t.h2Client
+	}
+	return t.client
+}
+
+// isStaticQueue reports whether q is a StaticQueue (aria2c-model static split)
+// — the engine-kind signal engineClient routes on.
+func isStaticQueue(q workQueue) bool {
+	_, ok := q.(*StaticQueue)
+	return ok
 }
 
 // formatSegSize renders a segment byte count compactly for log lines
