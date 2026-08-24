@@ -119,6 +119,10 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// JSON-RPC allows a batch (array) request; we support both single and batch.
+	// Shutdown detection must be gated on auth: dispatch is where checkSecret
+	// runs, so the flag is set only for requests dispatch actually EXECUTED —
+	// an unauthenticated odm.shutdown gets an auth-error response and leaves the
+	// daemon running (it used to shut it down anyway: DoS on --rpc-listen-all).
 	trimmed := strings.TrimSpace(string(body))
 	if strings.HasPrefix(trimmed, "[") {
 		var batch []jsonRPCRequest
@@ -129,7 +133,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		shutdown := false
 		resp := make([]jsonRPCResponse, 0, len(batch))
 		for _, q := range batch {
-			if q.Method == "odm.shutdown" {
+			if q.Method == "odm.shutdown" && s.checkSecret(&q) {
 				shutdown = true
 			}
 			resp = append(resp, s.dispatch(q))
@@ -145,7 +149,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, s.dispatch(req))
-	s.stopAfterWrite(w, req.Method == "odm.shutdown")
+	s.stopAfterWrite(w, req.Method == "odm.shutdown" && s.checkSecret(&req))
 }
 
 // stopAfterWrite runs the daemon shutdown only after the JSON-RPC response has
@@ -425,6 +429,13 @@ func (s *Server) methodChangeOption(req *jsonRPCRequest, resp *jsonRPCResponse) 
 			nc, err := intParam([]any{v}, 0)
 			if err != nil {
 				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be an integer"}
+				return *resp
+			}
+			// 0 or negative would retire EVERY worker via the graceful drain
+			// while chunks remain queued → the task reports completed with most
+			// bytes missing and its control file deleted. Reject at the boundary.
+			if nc < 1 {
+				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be at least 1"}
 				return *resp
 			}
 			if !s.daemon.ChangeConns(download.TaskID(gid), nc) {

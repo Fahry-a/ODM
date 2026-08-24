@@ -487,6 +487,13 @@ func (o *Options) Validate() error {
 	if o.Split < 0 || o.MaxConnPerServer < 1 {
 		return errors.New("--split and --max-connection-per-server must be ≥ 1")
 	}
+	// A negative retry makes downloadChunk's `range Retry+1` run zero
+	// iterations — every chunk "succeeds" instantly without downloading a byte
+	// (silent fake success). Reject at the boundary; config files are parsed
+	// permissively, so retry=-1 lands here rather than in the engine.
+	if o.Retry < 0 || o.RetryWait < 0 {
+		return errors.New("--retry and --retry-wait must be ≥ 0")
+	}
 	if o.Profile == "odm" && (o.IsSet("split") || o.IsSet("min-split-size") || o.IsSet("max-connection-per-server")) {
 		return errors.New("--split / --min-split-size / --max-connection-per-server are only valid with --profile aria2c|both|smart")
 	}

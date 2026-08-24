@@ -312,6 +312,50 @@ func TestServer_ShutdownRespondsThenStops(t *testing.T) {
 	t.Fatalf("daemon did not stop after odm.shutdown")
 }
 
+// TestServer_ShutdownRequiresSecret pins the auth gate on odm.shutdown: with a
+// secret configured, an unauthenticated shutdown request gets an auth error
+// AND leaves the daemon running (it used to shut the daemon down anyway —
+// dispatch rejected it, but handleRPC detected the method from the raw request
+// and stopped the scheduler regardless).
+func TestServer_ShutdownRequiresSecret(t *testing.T) {
+	hs, srv, stop := startServer(t, "topsecret")
+	defer stop()
+	r := jsonRPC(t, hs.URL+"/rpc", "odm.shutdown", nil, 1)
+	if r.Error == nil {
+		t.Fatalf("unauthenticated odm.shutdown must be rejected, got result %v", r.Result)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if srv.Daemon().Dead() {
+			t.Fatal("daemon stopped despite unauthenticated odm.shutdown")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestServer_ChangeOptionConnectionsRejectsZero pins the boundary guard on
+// changeOption {"connections": N}: N < 1 would retire every worker via the
+// graceful drain while chunks remain queued, so the task would report
+// completed with most bytes missing (and its control file deleted).
+func TestServer_ChangeOptionConnectionsRejectsZero(t *testing.T) {
+	hs, _, stop := startServer(t, "")
+	defer stop()
+	url := hs.URL + "/rpc"
+
+	add := jsonRPC(t, url, "odm.addUri", []any{"http://example.invalid/file.bin", 2}, 1)
+	if add.Error != nil {
+		t.Fatalf("addUri: %v", add.Error)
+	}
+	gid := add.Result.(string)
+
+	for _, nc := range []int{0, -3} {
+		r := jsonRPC(t, url, "odm.changeOption", []any{gid, map[string]any{"connections": float64(nc)}}, 2)
+		if r.Error == nil {
+			t.Fatalf("connections=%d must be rejected, got result %v", nc, r.Result)
+		}
+	}
+}
+
 func TestBroadcasterEvents(t *testing.T) {
 	_, srv, stop := startServer(t, "")
 	defer stop()

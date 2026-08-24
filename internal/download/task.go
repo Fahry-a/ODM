@@ -320,6 +320,16 @@ func NewTask(id TaskID, url string, opts TaskOptions, client *transport.Client, 
 	if logf == nil {
 		logf = func(level string, format string, args ...any) {}
 	}
+	// Clamp defensively: Retry < 0 makes downloadChunk's `range Retry+1` run
+	// zero iterations (chunks "succeed" without downloading); a negative wait
+	// shifts the backoff negative too. Config.Validate rejects these upstream —
+	// this guards direct engine users.
+	if opts.Retry < 0 {
+		opts.Retry = 0
+	}
+	if opts.RetryWait < 0 {
+		opts.RetryWait = 0
+	}
 	taskLim, _ := ratelimit.New(opts.TaskLimitRate)
 	t := &Task{
 		id:          id,
@@ -414,6 +424,12 @@ func (t *Task) SetProfile(p string) {
 // Returns true if the adjustment was applied, false if the task has already
 // finished (no workers can be spawned).
 func (t *Task) AdjustConns(target int, ctx context.Context, sink func(ProgressView)) bool {
+	// Clamp to ≥1 defensively (the RPC boundary already rejects <1): target 0
+	// would drain every worker while chunks remain, and Start reports the
+	// half-empty file as completed. One live worker is always safe.
+	if target < 1 {
+		target = 1
+	}
 	if ctx == nil {
 		ctx = t.baseCtx
 	}
@@ -545,7 +561,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 
 	// 2. Resolve paths + attempt resume.
 	dir := t.opts.Dir
-	outName := pr.Filename
+	outName := flattenFilename(pr.Filename)
 	if outName == "" {
 		outName = "download.bin"
 	}
@@ -2006,8 +2022,40 @@ func (q *ChunkQueue) CompletedOffsets() []int64 {
 	return out
 }
 
+// flattenFilename clamps a server-controlled filename (Content-Disposition or
+// URL basename) to a single path component: no separators, no dot segments, no
+// escape from Dir via filepath.Join. An explicit -o override is NOT passed
+// through here — the user chose that name themselves.
+//
+//   - separators '/' and '\\' are replaced so "a/b" and "a\\b" stay inside Dir
+//     (Windows-style separators matter when the same name lands on a Windows
+//     share/FS later);
+//   - "." and ".." collapse to nothing, so Join(dir, "..") can never escape;
+//   - empty results fall back to download.bin.
+func flattenFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r == '/' || r == os.PathSeparator || r == '\\' {
+			return '_'
+		}
+		return r
+	}, name)
+	if name == "" || name == "." || name == ".." {
+		return "download.bin"
+	}
+	// A trailing "..foo" is a valid filename; only exact dot segments are
+	// dangerous. After separator flattening no path element boundary remains,
+	// so Base() is belt-and-braces for exotic FS edge cases.
+	if base := filepath.Base(name); base != name && base != "." && base != ".." {
+		name = base
+	}
+	return name
+}
+
 // deriveFilename picks an output name from the URL path, or falls back to the
-// --output override / "download.bin".
+// --output override / "download.bin". Both sources are server-controlled
+// (Content-Disposition feeds pr.Filename; the URL path feeds the basename), so
+// the result is flattened to a single path component before it can reach
+// filepath.Join — see flattenFilename.
 func deriveFilename(finalURL, override string) string {
 	if override != "" {
 		return override
@@ -2019,7 +2067,7 @@ func deriveFilename(finalURL, override string) string {
 	if i := strings.LastIndexByte(u, '/'); i >= 0 {
 		name := u[i+1:]
 		if name != "" {
-			return name
+			return flattenFilename(name)
 		}
 	}
 	return "download.bin"

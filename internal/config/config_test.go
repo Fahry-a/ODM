@@ -134,6 +134,10 @@ func TestValidate(t *testing.T) {
 	}{
 		{"defaults", func(o *Options) *Options { return o }, true},
 		{"c=0", func(o *Options) *Options { o.Connections = 0; return o }, false},
+		// retry=-1 would make downloadChunk's `range Retry+1` run zero
+		// iterations: chunks "succeed" without downloading a byte.
+		{"retry=-1", func(o *Options) *Options { o.Retry = -1; return o }, false},
+		{"retry-wait=-1", func(o *Options) *Options { o.RetryWait = -1; return o }, false},
 		{"sf>c", func(o *Options) *Options { o.Connections = 4; o.SplitFile = 9; return o }, false},
 		{"bad port", func(o *Options) *Options { o.RPCPort = 0; return o }, false},
 		{"bad loglevel", func(o *Options) *Options { o.LogLevel = "verbose"; return o }, false},

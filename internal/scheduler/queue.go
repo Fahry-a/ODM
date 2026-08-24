@@ -185,8 +185,23 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 			s.emit()
 			continue
 		case <-doneCh:
-			// Everything (live + queued) finished without cancellation.
-			return int(s.succeeded), int(s.failed), nil
+			// Everything (live + queued) finished without cancellation. doneCh
+			// closes when the WaitGroup empties — but a completion report can
+			// still be sitting in s.compl's buffer: launch posts to compl
+			// AFTER wg.Done, so with two tasks finishing back-to-back the
+			// select above can pick doneCh while the last report waits in the
+			// buffer. Draining it first keeps handleComplete's tally, exit
+			// codes and RPC completion events complete; the non-blocking
+			// receive ends as soon as the buffer is empty.
+			for {
+				select {
+				case st := <-s.compl:
+					s.handleComplete(st)
+					s.emit()
+				default:
+					return int(s.succeeded), int(s.failed), nil
+				}
+			}
 		}
 
 		// ctx was cancelled. Drain completion reports until no task is left
