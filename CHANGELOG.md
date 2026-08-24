@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.6.2] - 2026-08-24
+## [1.7.0] - 2026-08-25
+
+### Fixed
+
+- **`both` profile: region1 now really runs on HTTP/1.1** — the h2-enabled
+  client was handed to the whole task, so region1's work-stealing engine
+  collapsed onto one multiplexed TCP stream and silently wasted half the
+  connection budget. Client routing is now by engine kind: static-split
+  (aria2c-model) engines ride h2 when available; fixed-chunk work-stealing
+  engines always keep N separate h1 connections — including degraded
+  single-region layouts whose profile string still reads `both`.
+  (`internal/download`)
+- **UI data race between engine logs and the redraw loop** — log lines
+  interjected during a live frame could read torn renderer state
+  (`cur.live`/`startedAt`) written unlocked by the frame loop; under the Go
+  memory model this is a real race even if it never visibly corrupted a
+  frame. All last-seen state is now written only under the renderer lock.
+  (`internal/ui`)
+- **aria2c display cap race** — `Start` published the raw connection budget
+  before capping it to the segment count, so UI/RPC pollers could briefly
+  see e.g. `[x16]` for a 4-segment file; the cap is computed first and
+  stored once. Also de-flaked `TestAria_ConnsDisplayCappedToSplit`, which
+  sampled that window ~50% of the time locally. (`internal/download`)
+
+### Changed
+
+- **Development workflow is now TDD** (red → green → refactor), documented
+  in AGENTS.md.
+- Housekeeping: removed dead code (`ExecOptions.MaxConn`,
+  `PermanentError` alias, a duplicated Content-Range verification block),
+  resume failures now warn once per task instead of being swallowed, and
+  `task.go` split its resume/checkpoint half into `resume_impl.go`
+  (movement only).
 
 ### Fixed
 Results of audit round 2 (1 critical, 4 high — all fixed with regression
