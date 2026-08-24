@@ -656,7 +656,11 @@ func (r *Renderer) RunLoop(ctx context.Context, interval time.Duration,
 	snapshots <-chan []download.ProgressView, qSnapshots <-chan []download.ProgressView,
 	done chan<- struct{},
 ) {
+	// startedAt is read by composeLines under r.mu (Interject's redraw path),
+	// so write it under r.mu too.
+	r.mu.Lock()
 	r.startedAt = nowFn()
+	r.mu.Unlock()
 	r.Begin()
 	// Defers run LIFO: End() must execute BEFORE close(done) — main waits on
 	// done and then immediately draws the final frame, so the cursor restore
