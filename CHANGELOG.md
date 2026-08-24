@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-08-24
+
+### Fixed
+Results of audit round 2 (1 critical, 4 high — all fixed with regression
+tests):
+
+- **Path traversal via server-controlled filename** — a Content-Disposition
+  or URL basename containing `../` (or separators) reached `filepath.Join`
+  raw, so a hostile server (or an RPC client on `--rpc-listen-all`) could
+  write the download body anywhere the process can — including dotfiles in
+  the user's home. Filenames are flattened to a single path component before
+  joining; explicit `-o` overrides are untouched. (`internal/download`)
+- **RPC `odm.shutdown` bypassed auth** — shutdown detection ran on the raw
+  request while auth was checked inside dispatch, so an unauthenticated POST
+  got an auth-error response *and* still killed the daemon, cancelling all
+  in-flight downloads. Detection is now gated on the same secret check.
+  (`internal/rpc`)
+- **RPC `changeOption connections ≤ 0` caused silent data loss** — target 0
+  retired every worker via the graceful drain while chunks remained queued;
+  Start reported the half-downloaded file as *completed* and deleted its
+  control file, making resume impossible. Values < 1 are rejected at the RPC
+  boundary and clamped in `AdjustConns`. (`internal/rpc`, `internal/download`)
+- **Negative `--retry` faked success** — a config file with `retry=-1` made
+  the per-chunk attempt loop run zero iterations: chunks "succeeded" without
+  a single byte downloaded and control files were deleted. Rejected by
+  config validation; clamped defensively in `NewTask`.
+  (`internal/config`, `internal/download`)
+- **Last-completion tally race in the scheduler** — completion reports post
+  to the scheduler channel after the WaitGroup release, so when the final
+  tasks finished back-to-back, Run could return on its done path with one
+  report still buffered — wrong summary line, wrong exit code, missing RPC
+  completion event. The done path now drains the buffer first.
+  (`internal/scheduler`)
+
 ## [1.6.1] - 2026-08-24
 
 ### Fixed
