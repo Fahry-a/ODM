@@ -503,10 +503,6 @@ type StatusError struct {
 func (e StatusError) Error() string { return e.Err.Error() }
 func (e StatusError) Unwrap() error { return e.Err }
 
-// PermanentError is kept as an alias name for clarity at call sites that only
-// care about permanent failures; it IS a StatusError.
-type PermanentError = StatusError
-
 // IsPermanent classifies an HTTP status: client errors are permanent except
 // 408 and 429 (both retryable by nature).
 func IsPermanent(status int) bool {

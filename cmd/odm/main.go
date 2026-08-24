@@ -471,7 +471,6 @@ func buildExecOptions(o *config.Options) (download.ExecOptions, error) {
 		Dir:              dir,
 		OutFile:          o.OutFile,
 		Connections:      o.Connections,
-		MaxConn:          o.MaxConnection,
 		SplitFile:        o.SplitFile,
 		Retry:            o.Retry,
 		RetryWait:        time.Duration(o.RetryWait) * time.Second,

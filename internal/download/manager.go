@@ -42,7 +42,6 @@ type ExecOptions struct {
 	Dir           string
 	OutFile       string // single-file override (-o)
 	Connections   int
-	MaxConn       int
 	SplitFile     int
 	Retry         int
 	RetryWait     time.Duration

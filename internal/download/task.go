@@ -204,6 +204,10 @@ type Task struct {
 	// configured rate after a quiet period, not on the first healthy chunk.
 	lastThrottle atomic.Int64 // unix nanos; 0 = never throttled
 
+	// persistWarned gates the one-shot log warning when SaveControl fails
+	// (checkpoints fire per-chunk-count/time — one warn per task, not per try).
+	persistWarned atomic.Bool
+
 	adjustMu   sync.Mutex // guards adjustDone + workerWg.Add race
 	adjustDone bool       // true after workerWg.Wait() returns
 }
@@ -810,7 +814,6 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	}
 
 	// 3. Launch workers.
-	t.conns.Store(int32(conns))
 	// Don't clobber a connTarget an RPC changeOption already raised before
 	// Start ran: keep the larger of (param, current target).
 	if cur := t.connTarget.Load(); int(cur) > conns {
@@ -844,9 +847,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		// The displayed/live connection count must reflect the CAP, not the raw
 		// budget: with 4 segments and -c 16 the UI used to show [x16] while only
 		// 4 workers existed.
-		t.conns.Store(int32(workerCount))
-		t.connTarget.Store(int32(workerCount))
+		conns = workerCount
 	}
+	t.conns.Store(int32(conns))
+	t.connTarget.Store(int32(conns))
 	if t.engines != nil {
 		// both profile: spawn per-region workers with the region's conns.
 		for ei, eng := range t.engines {
@@ -1257,13 +1261,6 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 			Permanent: true,
 		}
 	}
-	// A 206 whose Content-Range doesn't start at the requested offset is the
-	// same corruption vector as a 200: the bytes belong somewhere else on
-	// disk. Verify before a single byte is written.
-	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, absStart) {
-		transport.SkipBody(resp.Body)
-		return fmt.Errorf("server sent wrong range for offset %d (Content-Range %q)", absStart, cr)
-	}
 
 	body := resp.Body
 	if !t.lim.Unlimited() {
@@ -1620,7 +1617,13 @@ func (t *Task) persistControl() {
 		SplitAt:          t.splitAt,
 		Region2ChunkSize: t.region2ChunkSize(),
 	}
-	_ = storage.SaveControl(t.outPath, cf)
+	if err := storage.SaveControl(t.outPath, cf); err != nil && !t.persistWarned.Swap(true) {
+		// Best-effort by contract (a log failure must never fail the download),
+		// but a full disk or permission error silently destroys resume state —
+		// warn once per task so the user isn't surprised when --continue
+		// doesn't pick up where it left off.
+		t.logf("warn", "could not persist resume state %s: %v", storage.ControlPath(t.outPath), err)
+	}
 }
 
 // verifyResumedChunks samples a handful of the chunks the control file claims

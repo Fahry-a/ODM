@@ -417,6 +417,7 @@ func (s *Scheduler) emit() {
 	s.prog(s.LiveViews(), s.QueuedViews())
 }
 
-// SucceededCount/FailedCount expose live tallies (used by getGlobalStat RPC).
+// SucceededCount/FailedCount expose live tallies (used by daemon shutdown
+// tests; getGlobalStat reads the Tell* view lengths instead).
 func (s *Scheduler) SucceededCount() int { return int(atomic.LoadInt32(&s.succeeded)) }
 func (s *Scheduler) FailedCount() int    { return int(atomic.LoadInt32(&s.failed)) }
