@@ -61,8 +61,11 @@ func IsTTY(w io.Writer) bool {
 // ProgressCB) is retained at its terminal state instead of dropping to zero.
 type cursor struct {
 	cache map[download.TaskID]download.ProgressView
-	live  []download.ProgressView
-	queue []download.ProgressView
+	// lastLive/lastQueue mirror the most recent Frame arguments. They are
+	// ONLY read/written under Renderer.mu (RunLoop re-renders them on tick/
+	// wake; Interject's locked path reads the derived live/queue views).
+	lastLive  []download.ProgressView
+	lastQueue []download.ProgressView
 }
 
 // orderCache returns the cached snapshots in a stable order: live first (in the
@@ -72,7 +75,7 @@ type cursor struct {
 func (c *cursor) ordered() []download.ProgressView {
 	out := make([]download.ProgressView, 0, len(c.cache))
 	seen := make(map[download.TaskID]struct{}, len(c.cache))
-	for _, v := range c.live {
+	for _, v := range c.lastLive {
 		out = append(out, v)
 		seen[v.ID] = struct{}{}
 	}
@@ -287,8 +290,8 @@ func (r *Renderer) updateCache(live, queued []download.ProgressView) []download.
 		}
 		// Drop the last-seen slices too: ordered() prefers them over the
 		// cache, so a stale active entry there would shadow the promoted one.
-		r.cur.live = nil
-		r.cur.queue = nil
+		r.cur.lastLive = nil
+		r.cur.lastQueue = nil
 		return r.cur.ordered()
 	}
 
@@ -344,8 +347,8 @@ func (r *Renderer) updateCache(live, queued []download.ProgressView) []download.
 		}
 	}
 
-	r.cur.live = live
-	r.cur.queue = queued
+	r.cur.lastLive = live
+	r.cur.lastQueue = queued
 	return r.cur.ordered()
 }
 
@@ -419,6 +422,14 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Record the last-seen snapshots HERE, under r.mu — RunLoop used to assign
+	// r.cur.live/r.cur.queue before calling Frame, racing Interject's locked
+	// read of the same fields (a log line landing between assignment and
+	// render read torn state). Callers now pass their fresh slices directly;
+	// cur.live/queue are written only under the lock.
+	r.cur.lastLive = live
+	r.cur.lastQueue = queued
 
 	view := r.updateCache(live, queued)
 	st := aggregate(view)
@@ -666,19 +677,17 @@ func (r *Renderer) RunLoop(ctx context.Context, interval time.Duration,
 			// the retained cache as the single final screen.
 			return
 		case s := <-snapshots:
-			r.cur.live = s
-			r.Frame(r.cur.live, r.cur.queue)
+			r.Frame(s, r.cur.lastQueue)
 		case s := <-qSnapshots:
-			r.cur.queue = s
-			r.Frame(r.cur.live, r.cur.queue)
+			r.Frame(r.cur.lastLive, s)
 		case <-t.C:
 			// Re-render last-seen slices; updateCache reconciles the cache and
 			// advances the indeterminate animation even when nothing new came.
-			r.Frame(r.cur.live, r.cur.queue)
+			r.Frame(r.cur.lastLive, r.cur.lastQueue)
 		case <-r.Wake:
 			// Terminal resize (SIGWINCH) or any external nudge: re-render
 			// immediately so the new size takes effect on this frame.
-			r.Frame(r.cur.live, r.cur.queue)
+			r.Frame(r.cur.lastLive, r.cur.lastQueue)
 		}
 	}
 }
