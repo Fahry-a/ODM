@@ -16,6 +16,31 @@ CI (`.github/workflows/ci.yml`) runs: `go mod download` → `go build` → `go v
 
 Linter: golangci-lint v2 with `.golangci.yml` config. `golangci-lint run --timeout=5m` must report 0 issues. ST1012 (error vars must be ErrFoo) is disabled — `NoControlFile` is intentionally readable. `errcheck` excludes `defer x.Close()` and `fmt.Fprint*` (best-effort CLI output). No Makefile — use `go` directly.
 
+## Workflow: TDD (mandatory)
+
+Every fix and feature goes **red → green → refactor**, in that order:
+
+1. **Red** — write the test FIRST, pinning the desired contract (bug fix: the
+   test reproduces the reported defect). Run it and confirm it fails for the
+   RIGHT reason — an assertion naming the defect, not a compile/setup error.
+2. **Green** — the smallest implementation change that flips the test.
+3. **Refactor** — tidy up while staying green.
+
+Practices:
+
+- **Prove the red honestly**: stash the impl (`git stash push -- <impl
+  files>`), rerun the test, it MUST fail, then `git stash pop`. A test that
+  passes both ways pins nothing.
+- **Concurrency fixes**: repeat-run under `-race` (`-count=5`+) to exercise
+  the window; keep the repro loop fast (≤ ~1s per iteration).
+- **Boundary validation is tested at the boundary** (`config.Validate`, RPC
+  dispatch, `Task.Start` entry points) — not against internals, so the test
+  survives refactors.
+- One behavior per red-green cycle; the tree stays commit-ready at green.
+
+The existing commit gates (golangci-lint, `go test -race -count=1 ./...`)
+still apply on top of every cycle.
+
 ## Architecture
 
 Single binary `cmd/odm/main.go` wires together internal packages. Two execution modes: **CLI one-shot** (default) and **RPC daemon** (`--rpc`).
@@ -217,10 +242,9 @@ These are deferred — do NOT treat them as bugs:
   already being downloaded (beyond the implemented connection-count adjustment
   via `AdjustConns`). Requires live goroutine renegotiation.
 - **BitTorrent / magnet links** — explicitly non-goal for MVP.
-- **HTTP/2 / HTTP/3 stream multiplexing** — deliberately excluded; the whole
-  point of ODM is multi-connection aggregation over HTTP/1.1. Future implementation
-  if demand arises; would require a new Balancer mode that ignores connection
-  budget for HTTP/2-capable servers.
+- **HTTP/3 stream multiplexing** — deliberately excluded. HTTP/2 IS
+  implemented (the h2-enabled transport client backs the aria2c/both/smart
+  profiles since v1.5.x); only HTTP/3 remains out of scope.
 - **`changeOption` beyond rate/connections** — implemented since 1.1.0:
   `max-download-limit`, `max-download-limit-per-task`, and `connections`
   (mid-flight). Other RPC spec mutations remain deferred.
