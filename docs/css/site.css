@@ -126,7 +126,6 @@ a:hover { color: var(--color-accent); }
 
 /* ---- heavy rules: the Manifesto divider ----------------------------------- */
 .rule-bold { border: 0; border-top: var(--rule-bold) solid var(--color-ink); margin: 0; }
-.rule-amber { border: 0; border-top: var(--rule-bold) solid var(--color-accent); margin: 0; }
 
 /* ---- the install plate: the page's one bleed-colour block ------------------ */
 .plate {
