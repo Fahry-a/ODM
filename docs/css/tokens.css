@@ -1,46 +1,42 @@
-/* Hallmark · macrostructure: Narrative Workflow · genre: editorial · theme: Grid
- * tone: technical-editorial · anchor hue: ultramarine oklch(45% 0.19 264)
- * audience: Linux/CLI users (Arch-first) · use: copy one install command, then a 3-line quickstart
- * pre-emit critique: P5 H4 E4 S5 R4 V5
+/* Hallmark · theme: Terminal · genre: atmospheric-cluster (CLI register)
+ * axes: dark paper (L 14%) · mono display · phosphor accent
+ * single-font page on purpose — a terminal aesthetic is mono-everywhere
  */
 :root {
-  --color-paper:    oklch(99% 0.003 255);
-  --color-paper-2:  oklch(97.2% 0.004 255);
-  --color-paper-3:  oklch(94.5% 0.005 255);
-  --color-rule:     oklch(88% 0.006 255);
-  --color-neutral:  oklch(53% 0.010 255);
-  --color-muted:    oklch(40% 0.012 258);
-  --color-ink:      oklch(16% 0.010 255);
-  --color-accent:      oklch(45% 0.19 264);   /* signal ink: ultramarine */
-  --color-accent-ink:  var(--color-paper);
-  --color-focus:       oklch(45% 0.19 264);
+  --color-paper:    oklch(14% 0.008 165);
+  --color-paper-2:  oklch(17.5% 0.010 165);
+  --color-paper-3:  oklch(21% 0.012 165);
+  --color-rule:     oklch(29% 0.015 165);
+  --color-neutral:  oklch(66% 0.020 165);
+  --color-muted:    oklch(74% 0.018 165);
+  --color-ink:      oklch(93% 0.014 165);
 
-  --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;
-  --font-body:    "Archivo", ui-sans-serif, system-ui, sans-serif;
-  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --color-accent:     oklch(82% 0.21 145);   /* signal phosphor */
+  --color-accent-ink: oklch(16% 0.045 148);
+  --color-focus:      oklch(84% 0.19 145);
 
-  --space-2xs: 0.5rem;
-  --space-xs:  0.75rem;
-  --space-sm:  1rem;
-  --space-md:  1.5rem;
-  --space-lg:  2.5rem;
-  --space-xl:  4rem;
-  --space-2xl: 6rem;
+  --font-body: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-mono: var(--font-body);
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs:  0.5rem;
+  --space-sm:  0.75rem;
+  --space-md:  1rem;
+  --space-lg:  1.5rem;
+  --space-xl:  2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
 
   --text-xs:   0.75rem;
   --text-sm:   0.875rem;
   --text-base: 1rem;
   --text-lg:   1.125rem;
-  --text-xl:   1.375rem;
 
-  --display-weight: 800;
-  --tracking-display: -0.045em;
-  --tracking-label: 0.09em;
-
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 180ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
 
   --rule-hair: 1px;
-  --page-max: 1280px;
+  --page-max: 1200px;
   --gutter: clamp(1rem, 4vw, 3rem);
 }

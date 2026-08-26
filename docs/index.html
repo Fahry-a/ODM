@@ -7,73 +7,50 @@
 <meta name="description" content="A CLI download manager in Go: one connection budget, split sensibly across files. Work-stealing chunks, four engine profiles, resume with integrity checks, JSON-RPC daemon.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/site.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%232a41b8'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23161616'/%3E%3Crect x='2' y='7' width='12' height='2' fill='%234af0a0'/%3E%3C/svg%3E">
 </head>
 <body>
 
 <div class="shell">
-  <div class="rails" aria-hidden="true"></div>
 
-  <header class="nav-mast">
-    <p class="mast-line label"><span>odm manual · edition 1.7.0</span><span>linux · single static binary</span></p>
-    <h1 class="mast-name">odm<span class="period" aria-hidden="true"></span></h1>
-    <p class="mast-sub">A CLI download manager that takes one connection budget and splits it sensibly — across files, across engines, across mirrors. Inspired by aria2c. Written in Go.</p>
-    <nav class="mast-nav" aria-label="Primary">
-      <ul>
-        <li><a href="#install">Install</a></li>
-        <li><a href="#quickstart">Quickstart</a></li>
-        <li><a href="#balancer">Balancer</a></li>
-        <li><a href="#profiles">Profiles</a></li>
-        <li><a href="#rpc">RPC</a></li>
-        <li><a href="https://github.com/Fahry-a/ODM">Source</a></li>
-      </ul>
-    </nav>
+  <header class="nav-term">
+    <p class="nav-term__line"><span class="prompt">&gt;</span> <span class="cmd">odm</span> <a href="#install">--install</a> <a href="#quickstart">--quickstart</a> <a href="#balancer">--balancer</a> <a href="#profiles">--profiles</a> <a href="#rpc">--rpc</a> <a href="https://github.com/Fahry-a/ODM">--source</a><span class="caret" aria-hidden="true">▮</span></p>
   </header>
-  <hr class="mast-rule double">
 
-  <!-- the install plate: the page's one poster moment -->
-  <section class="plate" id="install" aria-labelledby="install-h">
-    <div class="band">
-      <div class="plate-copy">
-        <h2 id="install-h">install it once<span aria-hidden="true">.</span></h2>
-        <p>Prebuilt on the AUR for i686, x86_64, armv7h and aarch64 — no toolchain needed. Source builds need Go 1.26+. Tarballs for linux and darwin ship on every release.</p>
-      </div>
-      <div class="plate-cmds install-cmds">
-        <div class="cmdrow">
-          <code>paru -S odm-bin</code>
-          <button class="copy-btn" type="button" data-copy="paru -S odm-bin">Copy</button>
-        </div>
-        <div class="cmdrow">
-          <code>yay -S odm-bin</code>
-          <button class="copy-btn" type="button" data-copy="yay -S odm-bin">Copy</button>
-        </div>
-        <div class="cmdrow">
-          <code>git clone https://github.com/Fahry-a/ODM && cd ODM && go build -o odm ./cmd/odm</code>
-          <button class="copy-btn" type="button" data-copy="git clone https://github.com/Fahry-a/ODM && cd ODM && go build -o odm ./cmd/odm">Copy</button>
-        </div>
-        <p class="note">Prefer a tarball? Grab one from the <a href="https://github.com/Fahry-a/ODM/releases/latest">releases page →</a></p>
-      </div>
-    </div>
+  <!-- marquee hero: the fold IS the page -->
+  <section class="masthead">
+    <p class="mast-issue">odm manual · edition 1.7.0 · linux · single static binary</p>
+    <h1 class="mast-name"><span class="sigil" aria-hidden="true">&gt;</span>&nbsp;<a href="https://github.com/Fahry-a/ODM">odm</a></h1>
+    <p class="mast-sub"><b>Oryn Download Manager</b>. A CLI download manager that takes one connection budget and splits it sensibly — across files, across engines, across mirrors. Work-stealing chunks, resume with per-chunk SHA-256, a JSON-RPC daemon for GUIs. Inspired by aria2c. Written in Go.</p>
   </section>
 
-  <div class="ticker" aria-hidden="true">
-    <div class="ticker-inner">
-      <span class="label">one budget · many connections</span><span class="label">work-stealing chunks</span><span class="label">resume with per-chunk sha-256</span><span class="label">json-rpc + websocket daemon</span><span class="label">mirrors rotate per chunk</span><span class="label">429 back-off built in</span>
-      <span class="label">one budget · many connections</span><span class="label">work-stealing chunks</span><span class="label">resume with per-chunk sha-256</span><span class="label">json-rpc + websocket daemon</span><span class="label">mirrors rotate per chunk</span><span class="label">429 back-off built in</span>
+  <div class="install">
+    <div class="prompt-row">
+      <span class="ps1" aria-hidden="true">$</span>
+      <code id="install-cmd">paru -S odm-bin</code>
+      <button class="copy-btn" type="button" data-copy="paru -S odm-bin">copy</button>
     </div>
+    <div class="prompt-row">
+      <span class="ps1" aria-hidden="true">$</span>
+      <code>yay -S odm-bin</code>
+      <button class="copy-btn" type="button" data-copy="yay -S odm-bin">copy</button>
+    </div>
+    <div class="prompt-row">
+      <span class="ps1" aria-hidden="true">$</span>
+      <code>git clone https://github.com/Fahry-a/ODM &amp;&amp; cd ODM &amp;&amp; go build -o odm ./cmd/odm</code>
+      <button class="copy-btn" type="button" data-copy="git clone https://github.com/Fahry-a/ODM && cd ODM && go build -o odm ./cmd/odm">copy</button>
+    </div>
+    <p class="alt-row">Prebuilt on the AUR for i686, x86_64, armv7h, aarch64. Source builds need Go 1.26+. Tarballs on the <a href="https://github.com/Fahry-a/ODM/releases/latest">releases page →</a></p>
   </div>
 
-  <!-- 1.0 quickstart -->
-  <section class="band" id="quickstart" aria-labelledby="qs-h">
-    <div class="stage-num" aria-hidden="true">1.0</div>
-    <div class="stage-body">
-      <p class="label">quickstart</p>
-      <h2 id="qs-h">three invocations cover everything.</h2>
-      <div class="stage-grid has-object">
-        <div>
-          <pre class="block"><code><span class="cmt"># one file, 16 parallel connections</span>
+  <!-- quickstart -->
+  <section class="sect" id="quickstart" aria-labelledby="qs-h">
+    <h2 id="qs-h"><span class="hash" aria-hidden="true"># </span>three invocations cover everything.</h2>
+    <div class="qs-grid">
+      <div>
+        <pre class="block"><code><span class="cmt"># one file, 16 parallel connections</span>
 odm -c 16 https://files.test.xyz/file.tar.gz
 
 <span class="cmt"># batch: -c = how many files run at once, 1 conn each</span>
@@ -81,212 +58,144 @@ odm -c 16 url1 url2 url3 …
 
 <span class="cmt"># or 4 conns per file → 4 files at a time, rest queue</span>
 odm -c 16 -sf 4 url1 url2 url3 …</code></pre>
-          <p style="margin-top:var(--space-sm)">Large lists go in a file — one URL per line, <code>#</code> comments allowed:</p>
-          <pre class="block"><code>odm -i file-list.txt</code></pre>
-        </div>
-        <aside class="side-object">
-          <span class="label">what happens on enter</span>
-          <ol class="mini-steps tnum">
-            <li><b>probe</b> — HEAD → ranged GET → single-stream fallback per URL</li>
-            <li><b>plan</b> — the balancer allocates connections (mode A/B/C)</li>
-            <li><b>confirm</b> — one prompt with sizes and engines (<code>-y</code> skips)</li>
-            <li><b>download</b> — workers pull chunks until the queue drains</li>
-          </ol>
-        </aside>
+        <p style="margin-top:var(--space-sm)">Large lists go in a file — one URL per line, <code>#</code> comments allowed:</p>
+        <pre class="block"><code>$ odm -i file-list.txt</code></pre>
       </div>
-    </div>
-  </section>
-  <hr class="sect-rule">
-
-  <!-- 2.0 balancer -->
-  <section class="band" id="balancer" aria-labelledby="bal-h">
-    <div class="stage-num" aria-hidden="true">2.0</div>
-    <div class="stage-body">
-      <p class="label">the connection balancer</p>
-      <h2 id="bal-h">-c is a budget, not a guess.</h2>
-      <div class="stage-grid has-object">
-        <div>
-          <table class="modes">
-            <caption class="label">allocation modes</caption>
-            <thead><tr><th scope="col">mode</th><th scope="col">when</th><th scope="col">-c controls</th><th scope="col">per file</th></tr></thead>
-            <tbody class="tnum">
-              <tr><th scope="row">A</th><td>one URL</td><td>whole budget → the file</td><td>min(-c, 32)</td></tr>
-              <tr><th scope="row">B</th><td>many URLs, no -sf</td><td>files in parallel</td><td>1</td></tr>
-              <tr><th scope="row">C</th><td>many URLs + -sf N</td><td>floor(-c / N) files at once</td><td>N + remainder</td></tr>
-            </tbody>
-          </table>
-          <p>Servers refusing HTTP range requests get exactly one connection; the freed budget redistributes to the rest in the same pass. Above the soft ceiling of 32, odm warns and proceeds.</p>
-        </div>
-        <aside class="side-object">
-          <span class="label">why work-stealing beats equal split</span>
-          <p>A 100-chunk file over 8 connections: static tools give each connection 12–13 fixed ranges — one slow peer holds the tail hostage. The chunk queue hands out 4 MiB pieces on demand:</p>
-          <div class="stepped tnum" role="img" aria-label="Chunks served: primary source 62, mirror 38 of 100">
-            <i style="width:100%"></i>
-            <i style="width:61%"></i>
-          </div>
-          <p class="tnum muted text-sm" style="margin:0">fast worker: 62 chunks<br>slow worker: 38 chunks — file finishes together</p>
-        </aside>
-      </div>
-    </div>
-  </section>
-  <hr class="sect-rule">
-
-  <!-- 3.0 profiles -->
-  <section class="band" id="profiles" aria-labelledby="prof-h">
-    <div class="stage-num" aria-hidden="true">3.0</div>
-    <div class="stage-body">
-      <p class="label">engine profiles</p>
-      <h2 id="prof-h">four engines. one flag.</h2>
-      <div class="stage-grid has-object">
-        <div>
-          <div class="profiles">
-            <article class="profile">
-              <h3>odm</h3>
-              <p>Fixed chunks in a work-stealing queue over N real HTTP/1.1 connections. The default — multi-connection aggregation is the point of the tool.</p>
-            </article>
-            <article class="profile">
-              <h3>aria2c</h3>
-              <p>Static equal split into --split segments, multiplexed as HTTP/2 streams over one connection. Mirrors aria2c’s -s/-x model.</p>
-            </article>
-            <article class="profile">
-              <h3>both</h3>
-              <p>A 50/50 split: first half on the odm engine, second half on the aria2c engine — both working the same file at once. Under 4 MiB degrades to plain odm.</p>
-            </article>
-            <article class="profile">
-              <h3>smart</h3>
-              <p>Probes range support, size, h2 readiness, then picks per file: small or non-rangeable → odm; ≥ 256 MiB with ≥ 6 conns → both; else → aria2c.</p>
-            </article>
-          </div>
-        </div>
-        <aside class="side-object">
-          <span class="label">choosing by hand</span>
-          <pre class="block" style="margin-top:0"><code><span class="cmt"># aria2c-style: 5 segments over h2</span>
-odm --profile aria2c -c 5 big.iso
-
-<span class="cmt"># tune the split</span>
-odm --profile aria2c \
-    --split 4 --min-split-size 10M big.iso</code></pre>
-          <p class="text-sm">HTTP/2 negotiation needs HTTPS (ALPN). On plain http:// or h1-only servers the h2 profiles fall back automatically.</p>
-        </aside>
-      </div>
-    </div>
-  </section>
-  <hr class="sect-rule">
-
-  <!-- 4.0 integrity -->
-  <section class="band" id="integrity" aria-labelledby="int-h">
-    <div class="stage-num" aria-hidden="true">4.0</div>
-    <div class="stage-body">
-      <p class="label">resume &amp; integrity</p>
-      <h2 id="int-h">interrupted is not corrupted.</h2>
-      <div class="stage-grid has-object">
-        <div>
-          <p>Each download writes a <code>.odm</code> control file recording finished chunks. Re-run the same command and only the missing ranges are fetched. On resume the stored ETag rides as <code>If-Range</code>: if the remote file changed since the interruption, odm restarts cleanly instead of stitching old bytes to new ones.</p>
-          <p>Mirrors (<code>--mirror URL</code>, repeatable) join the per-chunk rotation — a throttling source serves fewer chunks while the rest keep speed. Each mirror’s responses are validated independently, so a misbehaving one fails its own chunks, not your file.</p>
-          <p>When a server answers 429, the global rate halves so every connection eases off together, then restores your configured cap after a quiet period.</p>
-        </div>
-        <aside class="side-object">
-          <span class="label">three ways to verify</span>
-          <ol class="mini-steps">
-            <li><code>--checksum sha256:&lt;hex&gt;</code> — hash the written file</li>
-            <li><code>--checksum-url</code> — fetch a sha256sum-style sidecar</li>
-            <li><code>-i file.meta4</code> — Metalink4 embeds the strongest hash</li>
-          </ol>
-          <p class="text-sm muted">Completed chunks also carry per-chunk SHA-256 digests, verified against disk before any resume continues. A mismatch fails the task — never silent corruption.</p>
-        </aside>
-      </div>
-    </div>
-  </section>
-  <hr class="sect-rule">
-
-  <!-- 5.0 rpc -->
-  <section class="band" id="rpc" aria-labelledby="rpc-h">
-    <div class="stage-num" aria-hidden="true">5.0</div>
-    <div class="stage-body">
-      <p class="label">rpc daemon</p>
-      <h2 id="rpc-h">drive it from anywhere.</h2>
-      <div class="stage-grid has-object">
-        <div>
-          <pre class="block"><code><span class="cmt"># start the daemon</span>
-odm --rpc --rpc-secret hunter2 -d ~/Downloads &amp;
-
-<span class="cmt"># add a download — token:&lt;secret&gt; first param</span>
-curl -s -X POST http://127.0.0.1:6900/rpc \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"odm.addUri",
-       "params":["token:hunter2","https://files.test.xyz/x.tar.gz"],"id":1}'</code></pre>
-          <p>JSON-RPC 2.0 on <code>/rpc</code>, five WebSocket events on <code>/ws</code> (start, progress ≈250 ms, complete, error, pause). Default bind 127.0.0.1 — pair <code>--rpc-listen-all</code> with <code>--rpc-secret</code>.</p>
-          <div class="rpc-index">
-            <div class="rpc-row"><code>odm.addUri / addBatch</code><span>queue one or many URLs</span></div>
-            <div class="rpc-row"><code>odm.pause · unpause · remove</code><span>steer running tasks (+ *All variants)</span></div>
-            <div class="rpc-row"><code>odm.tellStatus / Active / Waiting / Stopped</code><span>inspect tasks by state</span></div>
-            <div class="rpc-row"><code>odm.changeOption</code><span>rate limits + connections, mid-flight</span></div>
-            <div class="rpc-row"><code>odm.getGlobalStat · getVersion</code><span>counts and capabilities</span></div>
-            <div class="rpc-row"><code>odm.shutdown</code><span>wind the daemon down</span></div>
-          </div>
-        </div>
-        <aside class="side-object">
-          <span class="label">build on it</span>
-          <p class="text-sm">The event feed carries the same field set as tellStatus, so a GUI needs exactly two endpoints to render live progress. For scripting without RPC, <code>--session-log</code> writes JSONL events to a file.</p>
-        </aside>
-      </div>
+      <ol class="steps tnum">
+        <li><b>probe</b> — HEAD → ranged GET → single-stream fallback per URL</li>
+        <li><b>plan</b> — the balancer allocates connections (mode A/B/C)</li>
+        <li><b>confirm</b> — one prompt with sizes and engines (<code>-y</code> skips)</li>
+        <li><b>download</b> — workers pull chunks until the queue drains</li>
+      </ol>
     </div>
   </section>
 
-  <hr class="sect-rule ink">
-
-  <!-- spec sheet -->
-  <section class="band" id="flags" aria-labelledby="flags-h">
-    <div class="specwrap">
-      <p class="label" id="flags-h" style="margin-top:0">flag reference</p>
-      <table class="spec-sheet tnum">
-        <thead><tr><th scope="col">flag</th><th scope="col">meaning</th><th scope="col">default</th></tr></thead>
+  <!-- balancer -->
+  <section class="sect" id="balancer" aria-labelledby="bal-h">
+    <h2 id="bal-h"><span class="hash" aria-hidden="true"># </span>-c is a budget, not a guess.</h2>
+    <div class="tblwrap">
+      <table class="spec tnum">
+        <thead><tr><th scope="col">mode</th><th scope="col">when</th><th scope="col">-c controls</th><th scope="col">per file</th></tr></thead>
         <tbody>
-          <tr><td><code>-c, --connections</code></td><td>total connection budget</td><td>5</td></tr>
-          <tr><td><code>-sf, --split-file</code></td><td>connections per file in batch mode</td><td>unset (1)</td></tr>
-          <tr><td><code>-s, --chunk-size</code></td><td>work-stealing chunk size</td><td>4M</td></tr>
-          <tr><td><code>--profile</code></td><td>engine: odm | aria2c | both | smart</td><td>odm</td></tr>
-          <tr><td><code>-x, --continue</code></td><td>resume via .odm control file</td><td>on</td></tr>
-          <tr><td><code>-l, --limit-rate</code></td><td>global speed cap (token bucket)</td><td>off</td></tr>
-          <tr><td><code>-r / -w</code></td><td>retries per segment · backoff base</td><td>3 · 2s</td></tr>
-          <tr><td><code>-t, --timeout</code></td><td>dial + headers timeout</td><td>30s</td></tr>
-          <tr><td><code>-p, --proxy</code></td><td>http(s)/socks5 proxy</td><td>—</td></tr>
-          <tr><td><code>--checksum / --checksum-url</code></td><td>verify md5/sha1/sha256</td><td>—</td></tr>
-          <tr><td><code>--mirror</code></td><td>alternate source for the same file</td><td>—</td></tr>
-          <tr><td><code>--auto-rename / --skip-existing</code></td><td>collision policies for existing files</td><td>—</td></tr>
-          <tr><td><code>--session-log</code></td><td>JSONL event feed for wrappers/GUIs</td><td>—</td></tr>
-          <tr><td><code>--dry-run / -q / -y</code></td><td>plan only · quiet · no prompt</td><td>—</td></tr>
+          <tr><th scope="row">A</th><td>one URL</td><td>whole budget → the file</td><td>min(-c, 32)</td></tr>
+          <tr><th scope="row">B</th><td>many URLs, no -sf</td><td>files in parallel</td><td>1</td></tr>
+          <tr><th scope="row">C</th><td>many URLs + -sf N</td><td>floor(-c / N) files at once</td><td>N + remainder</td></tr>
         </tbody>
       </table>
-      <p class="text-sm muted">Full list: <code>odm --help</code> · config reference: <a href="https://github.com/Fahry-a/ODM/blob/main/configs/odm.conf.example">odm.conf.example</a></p>
     </div>
+    <p>Servers refusing HTTP range requests get exactly one connection; the freed budget redistributes to the rest in the same pass. Above the soft ceiling of 32 connections per file, odm warns and proceeds. Chunks are handed out from a queue in 4 MiB pieces on demand — one slow peer can't hold the tail hostage, so every worker finishes together.</p>
   </section>
 
-  <hr class="sect-rule">
+  <!-- profiles -->
+  <section class="sect" id="profiles" aria-labelledby="prof-h">
+    <h2 id="prof-h"><span class="hash" aria-hidden="true"># </span>four engines. one flag.</h2>
+    <div class="profiles">
+      <article class="profile">
+        <h3>odm</h3>
+        <p>Fixed chunks in a work-stealing queue over N real HTTP/1.1 connections. The default — multi-connection aggregation is the point of the tool.</p>
+      </article>
+      <article class="profile">
+        <h3>aria2c</h3>
+        <p>Static equal split into --split segments, multiplexed as HTTP/2 streams over one connection. Mirrors aria2c's -s/-x model.</p>
+      </article>
+      <article class="profile">
+        <h3>both</h3>
+        <p>A 50/50 split: first half on the odm engine, second half on the aria2c engine — both working the same file at once. Under 4 MiB degrades to plain odm.</p>
+      </article>
+      <article class="profile">
+        <h3>smart</h3>
+        <p>Probes range support, size, h2 readiness, then picks per file: small or non-rangeable → odm; ≥ 256 MiB with ≥ 6 conns → both; else → aria2c.</p>
+      </article>
+    </div>
+    <p style="margin-top:var(--space-md)">HTTP/2 negotiation needs HTTPS (ALPN). On plain http:// or h1-only servers the h2 profiles fall back automatically.</p>
+    <pre class="block" style="max-width:60ch;margin-top:var(--space-md)"><code><span class="cmt"># aria2c-style: 5 segments over h2</span>
+$ odm --profile aria2c -c 5 big.iso
+
+<span class="cmt"># tune the split</span>
+$ odm --profile aria2c --split 4 --min-split-size 10M big.iso</code></pre>
+  </section>
+
+  <!-- integrity -->
+  <section class="sect" id="integrity" aria-labelledby="int-h">
+    <h2 id="int-h"><span class="hash" aria-hidden="true"># </span>interrupted is not corrupted.</h2>
+    <p>Each download writes a <code class="inline">.odm</code> control file recording finished chunks. Re-run the same command and only the missing ranges are fetched. On resume the stored ETag rides as <code class="inline">If-Range</code>: if the remote file changed since the interruption, odm restarts cleanly instead of stitching old bytes to new ones.</p>
+    <p>Mirrors (<code class="inline">--mirror URL</code>, repeatable) join the per-chunk rotation — a throttling source serves fewer chunks while the rest keep speed. Each mirror's responses are validated independently, so a misbehaving one fails its own chunks, not your file. When a server answers 429, the global rate halves so every connection eases off together, then restores your configured cap after a quiet period.</p>
+    <p style="margin-top:var(--space-lg)">Three ways to verify what landed:</p>
+    <pre class="block" style="max-width:60ch"><code><span class="cmt"># hash it yourself</span>
+$ odm --checksum sha256:&lt;hex&gt; file.iso
+
+<span class="cmt"># fetch a sha256sum-style sidecar</span>
+$ odm --checksum-url file.iso
+
+<span class="cmt"># Metalink4 embeds the strongest hash</span>
+$ odm -i file.meta4</code></pre>
+    <p class="tnum" style="color:var(--color-neutral);font-size:var(--text-sm)">Completed chunks also carry per-chunk SHA-256 digests, verified against disk before any resume continues. A mismatch fails the task — never silent corruption.</p>
+  </section>
+
+  <!-- rpc -->
+  <section class="sect" id="rpc" aria-labelledby="rpc-h">
+    <h2 id="rpc-h"><span class="hash" aria-hidden="true"># </span>drive it from anywhere.</h2>
+    <pre class="block"><code><span class="cmt"># start the daemon</span>
+$ odm --rpc --rpc-secret hunter2 -d ~/Downloads &amp;
+
+<span class="cmt"># add a download — token:&lt;secret&gt; first param</span>
+$ curl -s -X POST http://127.0.0.1:6900/rpc \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"odm.addUri",
+         "params":["token:hunter2","https://files.test.xyz/x.tar.gz"],"id":1}'</code></pre>
+    <p>JSON-RPC 2.0 on <code class="inline">/rpc</code>, five WebSocket events on <code class="inline">/ws</code> (start, progress ≈250 ms, complete, error, pause). Default bind is 127.0.0.1 — pair <code class="inline">--rpc-listen-all</code> with <code class="inline">--rpc-secret</code>.</p>
+    <div class="rpc-index">
+      <div class="rpc-row"><code>odm.addUri / addBatch</code><span>queue one or many URLs</span></div>
+      <div class="rpc-row"><code>odm.pause · unpause · remove</code><span>steer running tasks (+ *All variants)</span></div>
+      <div class="rpc-row"><code>odm.tellStatus / Active / Waiting / Stopped</code><span>inspect tasks by state</span></div>
+      <div class="rpc-row"><code>odm.changeOption</code><span>rate limits + connections, mid-flight</span></div>
+      <div class="rpc-row"><code>odm.getGlobalStat · getVersion</code><span>counts and capabilities</span></div>
+      <div class="rpc-row"><code>odm.shutdown</code><span>wind the daemon down</span></div>
+    </div>
+    <p style="font-size:var(--text-sm);color:var(--color-muted)">The event feed carries the same field set as tellStatus, so a GUI needs exactly two endpoints to render live progress. For scripting without RPC, <code class="inline">--session-log</code> writes JSONL events to a file.</p>
+  </section>
+
+  <!-- flag reference -->
+  <section class="sect" id="flags" aria-labelledby="flags-h">
+    <h2 id="flags-h"><span class="hash" aria-hidden="true"># </span>flag reference.</h2>
+    <div class="tblwrap">
+      <table class="spec tnum">
+        <thead><tr><th scope="col">flag</th><th scope="col">meaning</th><th scope="col">default</th></tr></thead>
+        <tbody>
+          <tr><td><code class="inline">-c, --connections</code></td><td>total connection budget</td><td>5</td></tr>
+          <tr><td><code class="inline">-sf, --split-file</code></td><td>connections per file in batch mode</td><td>unset (1)</td></tr>
+          <tr><td><code class="inline">-s, --chunk-size</code></td><td>work-stealing chunk size</td><td>4M</td></tr>
+          <tr><td><code class="inline">--profile</code></td><td>engine: odm | aria2c | both | smart</td><td>odm</td></tr>
+          <tr><td><code class="inline">-x, --continue</code></td><td>resume via .odm control file</td><td>on</td></tr>
+          <tr><td><code class="inline">-l, --limit-rate</code></td><td>global speed cap (token bucket)</td><td>off</td></tr>
+          <tr><td><code class="inline">-r / -w</code></td><td>retries per segment · backoff base</td><td>3 · 2s</td></tr>
+          <tr><td><code class="inline">-t, --timeout</code></td><td>dial + headers timeout</td><td>30s</td></tr>
+          <tr><td><code class="inline">-p, --proxy</code></td><td>http(s)/socks5 proxy</td><td>—</td></tr>
+          <tr><td><code class="inline">--checksum / --checksum-url</code></td><td>verify md5/sha1/sha256</td><td>—</td></tr>
+          <tr><td><code class="inline">--mirror</code></td><td>alternate source for the same file</td><td>—</td></tr>
+          <tr><td><code class="inline">--auto-rename / --skip-existing</code></td><td>collision policies for existing files</td><td>—</td></tr>
+          <tr><td><code class="inline">--session-log</code></td><td>JSONL event feed for wrappers/GUIs</td><td>—</td></tr>
+          <tr><td><code class="inline">--dry-run / -q / -y</code></td><td>plan only · quiet · no prompt</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:var(--text-sm);color:var(--color-muted)">Full list: <code class="inline">odm --help</code> · config reference: <a href="https://github.com/Fahry-a/ODM/blob/main/configs/odm.conf.example">odm.conf.example</a></p>
+  </section>
 
   <!-- exit codes -->
-  <section class="band" aria-labelledby="exit-h" style="padding-block: var(--space-lg);">
-    <div style="grid-column: 1 / -1;">
-      <p class="label" id="exit-h" style="margin-top:0">exit codes</p>
-      <div class="exits" style="margin-top: var(--space-xs);">
-        <div class="exit"><b>0</b><div>all downloads succeeded</div></div>
-        <div class="exit"><b>1</b><div>invalid argument</div></div>
-        <div class="exit"><b>2</b><div>network error</div></div>
-        <div class="exit"><b>3</b><div>partial failure</div></div>
-        <div class="exit"><b>4</b><div>cancelled by user</div></div>
-      </div>
+  <section class="sect" id="exit-codes" aria-labelledby="exit-h">
+    <h2 id="exit-h"><span class="hash" aria-hidden="true"># </span>exit codes.</h2>
+    <div class="exits">
+      <div class="exit"><b>0</b><div>all downloads succeeded</div></div>
+      <div class="exit"><b>1</b><div>invalid argument</div></div>
+      <div class="exit"><b>2</b><div>network error</div></div>
+      <div class="exit"><b>3</b><div>partial failure</div></div>
+      <div class="exit"><b>4</b><div>cancelled by user</div></div>
     </div>
   </section>
 
-  <footer class="foot-mast">
-    <p class="wordmark">odm</p>
-    <p class="tagline muted">One budget, split sensibly.</p>
-    <p class="links muted">
-      <a href="https://github.com/Fahry-a/ODM">GitHub</a>
-      <a href="https://aur.archlinux.org/packages/odm-bin">AUR</a>
-      <a href="https://github.com/Fahry-a/ODM/releases/latest">Releases</a>
-    </p>
-    <p class="fine muted">MIT licence · a Go program by Fahry-a · this page documents v1.7.0</p>
+  <footer class="colophon">
+    <p>odm v1.7.0 · MIT licence · written in Go by Fahry-a. One budget, split sensibly. Docs: this page · source: <a href="https://github.com/Fahry-a/ODM">github.com/Fahry-a/ODM</a> · package: <a href="https://aur.archlinux.org/packages/odm-bin">aur.odm-bin</a> · tarballs: <a href="https://github.com/Fahry-a/ODM/releases/latest">releases/latest</a> · full flags: <code class="inline">odm --help</code>.</p>
   </footer>
 </div>
 
@@ -295,9 +204,9 @@ document.querySelectorAll('.copy-btn').forEach(function (btn) {
   btn.addEventListener('click', function () {
     var text = btn.dataset.copy || '';
     function done() {
-      btn.textContent = 'Copied';
+      btn.textContent = 'copied ✓';
       btn.classList.add('is-done');
-      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('is-done'); }, 1600);
+      setTimeout(function () { btn.textContent = 'copy'; btn.classList.remove('is-done'); }, 2500);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(done, function () {});
