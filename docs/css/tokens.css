@@ -1,22 +1,26 @@
-/* Hallmark · macrostructure: Narrative Workflow · genre: editorial · theme: Grid
- * tone: technical-editorial · anchor hue: ultramarine oklch(45% 0.19 264)
+/* Hallmark · macrostructure: Manifesto · genre: editorial · theme: custom
+ * vibe: dark industrial poster, signal amber
+ * axes: dark (paper L14) / display-condensed (Anton) / warm (amber, hue 78)
+ * tone: brutalist-technical · anchor hue: signal amber oklch(76% 0.155 78)
  * audience: Linux/CLI users (Arch-first) · use: copy one install command, then a 3-line quickstart
  * pre-emit critique: P5 H4 E4 S5 R4 V5
  */
 :root {
-  --color-paper:    oklch(99% 0.003 255);
-  --color-paper-2:  oklch(97.2% 0.004 255);
-  --color-paper-3:  oklch(94.5% 0.005 255);
-  --color-rule:     oklch(88% 0.006 255);
-  --color-neutral:  oklch(53% 0.010 255);
-  --color-muted:    oklch(40% 0.012 258);
-  --color-ink:      oklch(16% 0.010 255);
-  --color-accent:      oklch(45% 0.19 264);   /* signal ink: ultramarine */
-  --color-accent-ink:  var(--color-paper);
-  --color-focus:       oklch(45% 0.19 264);
+  --color-paper:    oklch(14% 0.010 80);
+  --color-paper-2:  oklch(18% 0.012 80);
+  --color-paper-3:  oklch(23% 0.014 80);
+  --color-rule:     oklch(31% 0.012 80);
+  --color-neutral:  oklch(62% 0.010 80);
+  --color-muted:    oklch(73% 0.008 80);
+  --color-ink:      oklch(95% 0.006 85);
 
-  --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;
-  --font-body:    "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --color-accent:      oklch(76% 0.155 78);   /* signal amber */
+  --color-accent-ink:  oklch(16% 0.035 70);
+  --color-accent-wash: oklch(16% 0.035 70 / 6%);
+  --color-focus:       oklch(83% 0.160 84);
+
+  --font-display: "Anton", "Arial Narrow", ui-sans-serif, sans-serif;
+  --font-body:    "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
   --space-2xs: 0.5rem;
@@ -32,17 +36,15 @@
   --text-base: 1rem;
   --text-lg:   1.125rem;
   --text-xl:   1.375rem;
-  --text-4xl:  clamp(2rem, 4vw, 3rem);
 
-  --display-weight: 800;
-  --tracking-display: -0.045em;
-  --tracking-label: 0.09em;
+  --tracking-display: 0.01em;
+  --tracking-label:   0.09em;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 180ms;
+  --dur-fast: 140ms;
 
   --rule-hair: 1px;
-  --radius-card: 0;
-  --page-max: 1280px;
+  --rule-bold: 2px;
+  --page-max: 1160px;
   --gutter: clamp(1rem, 4vw, 3rem);
 }

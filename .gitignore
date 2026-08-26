@@ -59,3 +59,6 @@ graphify-out/*
 3dicons-png-dynamic-*.zip*
 odm-bin-*
 assets/
+
+# Hallmark design-skill log (local only)
+.hallmark/
