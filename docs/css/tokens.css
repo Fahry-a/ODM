@@ -1,42 +1,50 @@
-/* Hallmark · theme: Terminal · genre: atmospheric-cluster (CLI register)
- * axes: dark paper (L 14%) · mono display · phosphor accent
- * single-font page on purpose — a terminal aesthetic is mono-everywhere
+/* Hallmark · macrostructure: Manifesto · genre: editorial · theme: custom
+ * vibe: dark industrial poster, signal amber
+ * axes: dark (paper L14) / display-condensed (Anton) / warm (amber, hue 78)
+ * tone: brutalist-technical · anchor hue: signal amber oklch(76% 0.155 78)
+ * audience: Linux/CLI users (Arch-first) · use: copy one install command, then a 3-line quickstart
+ * pre-emit critique: P5 H4 E4 S5 R4 V5
  */
 :root {
-  --color-paper:    oklch(14% 0.008 165);
-  --color-paper-2:  oklch(17.5% 0.010 165);
-  --color-paper-3:  oklch(21% 0.012 165);
-  --color-rule:     oklch(29% 0.015 165);
-  --color-neutral:  oklch(66% 0.020 165);
-  --color-muted:    oklch(74% 0.018 165);
-  --color-ink:      oklch(93% 0.014 165);
+  --color-paper:    oklch(14% 0.010 80);
+  --color-paper-2:  oklch(18% 0.012 80);
+  --color-paper-3:  oklch(23% 0.014 80);
+  --color-rule:     oklch(31% 0.012 80);
+  --color-neutral:  oklch(62% 0.010 80);
+  --color-muted:    oklch(73% 0.008 80);
+  --color-ink:      oklch(95% 0.006 85);
 
-  --color-accent:     oklch(82% 0.21 145);   /* signal phosphor */
-  --color-accent-ink: oklch(16% 0.045 148);
-  --color-focus:      oklch(84% 0.19 145);
+  --color-accent:      oklch(76% 0.155 78);   /* signal amber */
+  --color-accent-ink:  oklch(16% 0.035 70);
+  --color-accent-wash: oklch(16% 0.035 70 / 6%);
+  --color-focus:       oklch(83% 0.160 84);
 
-  --font-body: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
-  --font-mono: var(--font-body);
+  --font-display: "Anton", "Arial Narrow", ui-sans-serif, sans-serif;
+  --font-body:    "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
-  --space-3xs: 0.125rem;
-  --space-2xs: 0.25rem;
-  --space-xs:  0.5rem;
-  --space-sm:  0.75rem;
-  --space-md:  1rem;
-  --space-lg:  1.5rem;
-  --space-xl:  2.5rem;
-  --space-2xl: 4rem;
-  --space-3xl: 6rem;
+  --space-2xs: 0.5rem;
+  --space-xs:  0.75rem;
+  --space-sm:  1rem;
+  --space-md:  1.5rem;
+  --space-lg:  2.5rem;
+  --space-xl:  4rem;
+  --space-2xl: 6rem;
 
   --text-xs:   0.75rem;
   --text-sm:   0.875rem;
   --text-base: 1rem;
   --text-lg:   1.125rem;
+  --text-xl:   1.375rem;
 
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-fast: 120ms;
+  --tracking-display: 0.01em;
+  --tracking-label:   0.09em;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
 
   --rule-hair: 1px;
-  --page-max: 1200px;
+  --rule-bold: 2px;
+  --page-max: 1160px;
   --gutter: clamp(1rem, 4vw, 3rem);
 }

@@ -1,4 +1,5 @@
 [
+  { "date": "2026-08-26", "macrostructure": "Manifesto", "theme": "custom (dark industrial poster, signal amber)", "theme_axes": "dark (L14) / display-condensed (Anton) / warm (amber 78)", "enrichment": "none", "brief": "ODM docs site full dark rework · GitHub Pages" },
   { "date": "2026-08-26", "macrostructure": "Marquee Hero", "theme": "Terminal (phosphor)", "enrichment": "none", "brief": "ODM docs site full rework · GitHub Pages" },
   { "date": "2026-08-26", "macrostructure": "Narrative Workflow", "theme": "Grid (ultramarine)", "enrichment": "marks-kit geometry + one plate", "brief": "ODM docs site · GitHub Pages" }
 ]
