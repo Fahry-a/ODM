@@ -11,7 +11,7 @@ const required = [
   'const docsSections = [',
   '<main v-if="route === \'docs\'" id="docs" class="docs-page">',
   'ODM Documentation',
-  'RPC quick reference',
+  'RPC reference',
 ]
 
 const missing = required.filter((needle) => !app.includes(needle))
