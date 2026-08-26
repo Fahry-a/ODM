@@ -358,6 +358,7 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
 /* ---- Ft5 statement footer ---------------------------------------------------- */
 .foot-stmt {
   padding: var(--space-xl) var(--gutter) var(--space-lg);
+  border-top: var(--rule-bold) solid var(--color-ink);
 }
 .foot-stmt__line {
   margin: 0;
@@ -370,8 +371,8 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
 }
 .foot-stmt__line em { font-style: normal; color: var(--color-accent); }
 .foot-stmt__meta {
-  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
-  gap: var(--space-xs) var(--space-md);
+  display: flex; flex-wrap: wrap; align-items: center;
+  row-gap: var(--space-xs); column-gap: var(--space-md);
   margin-top: var(--space-lg);
   padding-block-start: var(--space-sm);
   border-top: var(--rule-hair) solid var(--color-rule);
@@ -384,6 +385,7 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
 }
 .foot-stmt__meta .links { display: flex; gap: var(--space-md); }
 .foot-stmt__meta .links a { text-decoration: none; white-space: nowrap; font-weight: 600; }
+.foot-stmt__fine { flex-basis: 100%; }
 
 /* ---- reduced motion ----------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
