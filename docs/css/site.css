@@ -31,6 +31,9 @@ a:hover { color: var(--color-accent); }
 
 .shell { max-width: var(--page-max); margin-inline: auto; }
 
+/* anchored sections clear the sticky slab nav (taller when it wraps on narrow screens) */
+[id] { scroll-margin-top: 5.5rem; }
+
 /* ---- label voice --------------------------------------------------------- */
 .label {
   font-size: var(--text-xs);
@@ -144,16 +147,18 @@ a:hover { color: var(--color-accent); }
   padding: var(--space-xs) var(--space-sm);
 }
 .cmdrow code {
-  flex: 1 1 auto; overflow-wrap: anywhere;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
   font-family: var(--font-mono); font-size: var(--text-sm);
-  white-space: nowrap; overflow-x: auto; scrollbar-width: none;
   font-weight: 600;
 }
 .copy-btn {
   flex: 0 0 auto;
   background: var(--color-accent-ink); color: var(--color-accent);
   border: 0;
-  padding: 0.4rem 0.75rem;
+  padding: var(--space-xs) var(--space-sm);
+  min-height: 2.75rem;
+  min-width: 2.75rem;
   font: inherit; font-size: var(--text-xs); font-weight: 700;
   letter-spacing: var(--tracking-label); text-transform: uppercase;
   cursor: pointer; white-space: nowrap;
@@ -165,22 +170,19 @@ a:hover { color: var(--color-accent); }
 .plate .note { margin: var(--space-xs) 0 0; font-size: var(--text-sm); }
 .plate .note a { color: inherit; font-weight: 700; }
 
-/* ---- feature strip (static, the ticker's quiet sibling) -------------------- */
+/* ---- feature strip --------------------------------------------------------- */
 .strip {
-  display: flex; flex-wrap: wrap; gap: 0;
-  border-bottom: var(--rule-bold) solid var(--color-ink);
+  display: flex; flex-wrap: wrap; justify-content: center;
+  border-block: var(--rule-bold) solid var(--color-ink);
 }
 .strip span {
-  flex: 1 1 auto;
+  flex: 0 1 auto; min-width: 0;
   font-size: var(--text-xs); font-weight: 600;
   letter-spacing: var(--tracking-label); text-transform: uppercase;
   color: var(--color-neutral);
-  padding: var(--space-xs) var(--space-sm);
-  border-right: var(--rule-hair) solid var(--color-rule);
+  padding: var(--space-xs) var(--space-md);
   text-align: center;
-  white-space: nowrap;
 }
-.strip span:last-child { border-right: 0; }
 
 /* ---- sections: declaration heads over assertion prose ---------------------- */
 .sect {
@@ -243,7 +245,6 @@ pre.block .cmt { color: var(--color-neutral); }
 
 /* ---- mode table ------------------------------------------------------------ */
 .modes { display: block; overflow-x: auto; border-collapse: collapse; margin-top: var(--space-sm); }
-.modes:not(table) { width: 100%; }
 .modes caption { caption-side: top; text-align: left; padding-bottom: var(--space-2xs); }
 .modes th, .modes td {
   border-top: var(--rule-hair) solid var(--color-rule);
