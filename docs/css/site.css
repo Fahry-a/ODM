@@ -31,8 +31,8 @@ a:hover { color: var(--color-accent); }
 
 .shell { max-width: var(--page-max); margin-inline: auto; }
 
-/* anchored sections clear the sticky slab nav (taller when it wraps on narrow screens) */
-[id] { scroll-margin-top: 5.5rem; }
+/* anchored sections clear the sticky slab nav (taller when it wraps to 3 rows on phones) */
+[id] { scroll-margin-top: 7rem; }
 
 /* ---- label voice --------------------------------------------------------- */
 .label {
@@ -84,17 +84,17 @@ a:hover { color: var(--color-accent); }
   font-family: var(--font-display);
   font-weight: 400; /* anton ships one weight */
   font-size: clamp(2.9rem, 9vw, 6rem);
-  line-height: 1.02;
+  line-height: 1.1;
   text-transform: uppercase;
   text-wrap: balance;
   overflow-wrap: anywhere;
   min-width: 0;
 }
 .hero h1 .verb {
+  display: inline-block; /* confines the amber block to its own line box — no bleed onto wrapped lines */
   background: var(--color-accent);
   color: var(--color-accent-ink);
   padding: 0 0.12em;
-  /* stacked colour-block highlight on the verb */
 }
 .hero-sub {
   margin: var(--space-md) 0 0;
@@ -112,6 +112,7 @@ a:hover { color: var(--color-accent); }
   border: var(--rule-hair) solid var(--color-rule);
   padding: var(--space-2xs) var(--space-sm);
   color: var(--color-neutral);
+  white-space: nowrap;
 }
 
 /* ---- heavy rules: the Manifesto divider ----------------------------------- */
@@ -170,18 +171,35 @@ a:hover { color: var(--color-accent); }
 .plate .note { margin: var(--space-xs) 0 0; font-size: var(--text-sm); }
 .plate .note a { color: inherit; font-weight: 700; }
 
-/* ---- feature strip --------------------------------------------------------- */
+/* ---- feature strip: marquee on phones, chips from tablet up ----------------- */
 .strip {
-  display: flex; flex-wrap: wrap; justify-content: center;
+  overflow: clip;
   border-block: var(--rule-bold) solid var(--color-ink);
 }
-.strip span {
-  flex: 0 1 auto; min-width: 0;
+.strip-track { display: flex; width: max-content; animation: strip-tick 40s linear infinite; }
+.strip:hover .strip-track,
+.strip:focus-within .strip-track { animation-play-state: paused; }
+.strip-group {
+  display: flex; align-items: baseline;
+  padding-block: var(--space-xs);
+}
+.strip-group span {
   font-size: var(--text-xs); font-weight: 600;
   letter-spacing: var(--tracking-label); text-transform: uppercase;
   color: var(--color-neutral);
-  padding: var(--space-xs) var(--space-md);
-  text-align: center;
+  white-space: nowrap;
+  padding-inline: var(--space-md);
+}
+@keyframes strip-tick { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+@media (min-width: 48rem) {
+  .strip-track { width: auto; animation: none; }
+  .strip-group[aria-hidden] { display: none; }
+  .strip-group {
+    justify-content: center; flex-wrap: wrap;
+    gap: var(--space-2xs) var(--space-sm);
+    padding: var(--space-xs) var(--gutter);
+  }
 }
 
 /* ---- sections: declaration heads over assertion prose ---------------------- */
@@ -201,8 +219,9 @@ a:hover { color: var(--color-accent); }
   display: grid; gap: var(--space-md);
 }
 @media (min-width: 60rem) {
-  .sect-grid.has-side { grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); align-items: start; }
+  .sect-grid.has-side { grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); align-items: stretch; }
 }
+.sect-grid.has-side > div:first-child > :first-child { margin-top: 0; }
 .sect-grid > div { min-width: 0; }
 .sect p { max-width: 68ch; }
 .sect .lead { font-size: var(--text-lg); color: var(--color-muted); max-width: 58ch; }
@@ -361,4 +380,7 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
 /* ---- reduced motion ----------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation: none !important; }
+  .strip-track { width: auto; }
+  .strip-group[aria-hidden] { display: none; }
+  .strip-group { flex-wrap: wrap; justify-content: center; padding: var(--space-xs) var(--gutter); }
 }
