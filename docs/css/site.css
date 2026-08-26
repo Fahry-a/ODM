@@ -41,13 +41,6 @@ a:hover { color: var(--color-accent); }
   grid-template-columns: repeat(12, minmax(0, 1fr));
   padding: clamp(var(--space-lg), 9vw, 7rem) var(--gutter);
 }
-/* the stage rail: a hairline column track the cropped numeral hangs in */
-.stage-rail {
-  grid-column: 1 / span 3;
-  border-inline-end: var(--rule-hair) solid var(--color-rule);
-  padding-inline-end: var(--space-sm);
-}
-@media (min-width: 60rem) { .stage-rail { display: block; } }
 .band > * { min-width: 0; }
 
 /* ---- label voice -------------------------------------------------------- */
@@ -203,6 +196,7 @@ pre.block .cmt { color: var(--color-neutral); }
   border: var(--rule-hair) solid var(--color-rule);
   padding: var(--space-sm) var(--space-md);
 }
+.side-object .text-sm { font-size: var(--text-sm); }
 .side-object .label { display: block; margin-bottom: var(--space-xs); }
 
 /* stepped bars figure beside real numbers */
@@ -262,7 +256,6 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
 .spec-sheet thead th { border-top: 2px solid var(--color-ink); font-size: var(--text-xs); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--color-muted); }
 .spec-sheet tbody tr:hover { background: var(--color-paper-2); }
 .spec-sheet td:first-child code { font-family: var(--font-mono); font-size: 0.9em; }
-.spec-sheet .muted { color: var(--color-muted); }
 
 /* rpc method list: index rows riding the grid */
 .rpc-index { grid-column: 1 / -1; border-top: 2px solid var(--color-ink); }
@@ -295,14 +288,6 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
 }
 .exit b { font-family: var(--font-display); font-weight: 800; font-size: var(--text-xl); }
 .exit div { color: var(--color-muted); font-size: var(--text-sm); }
-
-/* typographic links (C3) */
-.link-typo {
-  display: inline-block; margin-top: var(--space-sm);
-  text-decoration: underline; text-decoration-thickness: 1px;
-  font-weight: 600; white-space: nowrap;
-}
-.link-typo:hover { color: var(--color-accent); }
 
 /* section rule between bands */
 .sect-rule { border: 0; border-top: 1px solid var(--color-rule); margin: 0; max-width: none; }

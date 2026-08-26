@@ -124,7 +124,7 @@ odm -c 16 -sf 4 url1 url2 url3 …</code></pre>
             <i style="width:100%"></i>
             <i style="width:61%"></i>
           </div>
-          <p class="tnum muted" style="font-size:var(--text-sm);margin:0">fast worker: 62 chunks<br>slow worker: 38 chunks — file finishes together</p>
+          <p class="tnum muted text-sm" style="margin:0">fast worker: 62 chunks<br>slow worker: 38 chunks — file finishes together</p>
         </aside>
       </div>
     </div>
@@ -166,7 +166,7 @@ odm --profile aria2c -c 5 big.iso
 <span class="cmt"># tune the split</span>
 odm --profile aria2c \
     --split 4 --min-split-size 10M big.iso</code></pre>
-          <p style="font-size:var(--text-sm)">HTTP/2 negotiation needs HTTPS (ALPN). On plain http:// or h1-only servers the h2 profiles fall back automatically.</p>
+          <p class="text-sm">HTTP/2 negotiation needs HTTPS (ALPN). On plain http:// or h1-only servers the h2 profiles fall back automatically.</p>
         </aside>
       </div>
     </div>
@@ -192,7 +192,7 @@ odm --profile aria2c \
             <li><code>--checksum-url</code> — fetch a sha256sum-style sidecar</li>
             <li><code>-i file.meta4</code> — Metalink4 embeds the strongest hash</li>
           </ol>
-          <p style="font-size:var(--text-sm)" class="muted">Completed chunks also carry per-chunk SHA-256 digests, verified against disk before any resume continues. A mismatch fails the task — never silent corruption.</p>
+          <p class="text-sm muted">Completed chunks also carry per-chunk SHA-256 digests, verified against disk before any resume continues. A mismatch fails the task — never silent corruption.</p>
         </aside>
       </div>
     </div>
@@ -227,7 +227,7 @@ curl -s -X POST http://127.0.0.1:6900/rpc \
         </div>
         <aside class="side-object">
           <span class="label">build on it</span>
-          <p style="font-size:var(--text-sm)">The event feed carries the same field set as tellStatus, so a GUI needs exactly two endpoints to render live progress. For scripting without RPC, <code>--session-log</code> writes JSONL events to a file.</p>
+          <p class="text-sm">The event feed carries the same field set as tellStatus, so a GUI needs exactly two endpoints to render live progress. For scripting without RPC, <code>--session-log</code> writes JSONL events to a file.</p>
         </aside>
       </div>
     </div>
@@ -258,7 +258,7 @@ curl -s -X POST http://127.0.0.1:6900/rpc \
           <tr><td><code>--dry-run / -q / -y</code></td><td>plan only · quiet · no prompt</td><td>—</td></tr>
         </tbody>
       </table>
-      <p class="muted" style="font-size:var(--text-sm)">Full list: <code>odm --help</code> · config reference: <a href="https://github.com/Fahry-a/ODM/blob/main/configs/odm.conf.example">odm.conf.example</a></p>
+      <p class="text-sm muted">Full list: <code>odm --help</code> · config reference: <a href="https://github.com/Fahry-a/ODM/blob/main/configs/odm.conf.example">odm.conf.example</a></p>
     </div>
   </section>
 
