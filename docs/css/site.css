@@ -39,8 +39,15 @@ a:hover { color: var(--color-accent); }
   position: relative; z-index: 1;
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  padding: clamp(var(--space-lg), 9vw, 8rem) var(--gutter);
+  padding: clamp(var(--space-lg), 9vw, 7rem) var(--gutter);
 }
+/* the stage rail: a hairline column track the cropped numeral hangs in */
+.stage-rail {
+  grid-column: 1 / span 3;
+  border-inline-end: var(--rule-hair) solid var(--color-rule);
+  padding-inline-end: var(--space-sm);
+}
+@media (min-width: 60rem) { .stage-rail { display: block; } }
 .band > * { min-width: 0; }
 
 /* ---- label voice -------------------------------------------------------- */
@@ -95,7 +102,25 @@ hr.mast-rule.double { width: calc(100% - 2 * var(--gutter)); margin-inline: auto
     color-mix(in oklab, var(--color-paper) 15%, transparent) 1px,
     transparent 1px, transparent calc(100% / 12));
 }
-.plate .band { padding-block: clamp(var(--space-lg), 7vw, 6rem); }
+.plate .band { padding-block: clamp(var(--space-lg), 7vw, 6rem); gap: var(--space-md) var(--space-lg); }
+.plate-copy { grid-column: 1 / -1; }
+.plate-copy p { max-width: 52ch; margin: 0; opacity: 0.9; }
+@media (min-width: 60rem) {
+  .plate .band { grid-template-rows: auto 1fr; align-content: start; }
+  .plate-copy { grid-column: 1 / span 5; grid-row: 1 / span 2; padding-inline-end: var(--space-md); border-inline-end: 1px solid color-mix(in oklab, var(--color-paper) 35%, transparent); }
+  .install-cmds { grid-column: 6 / -1; grid-row: 1 / span 2; align-self: center; }
+}
+.plate-cmds { display: grid; gap: var(--space-xs); align-content: start; }
+.mini-steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: grid; gap: var(--space-xs); }
+.mini-steps li { position: relative; padding-inline-start: 2rem; font-size: var(--text-sm); color: var(--color-muted); }
+.mini-steps li::before {
+  counter-increment: step;
+  content: counter(step, decimal-leading-zero);
+  position: absolute; left: 0; top: 0.05em;
+  font-family: var(--font-display); font-weight: 800;
+  color: var(--color-accent);
+}
+.mini-steps b { color: var(--color-ink); }
 .plate h2 {
   margin: 0 0 var(--space-md);
   font-family: var(--font-display); font-weight: var(--display-weight);
@@ -103,8 +128,8 @@ hr.mast-rule.double { width: calc(100% - 2 * var(--gutter)); margin-inline: auto
   letter-spacing: var(--tracking-display); line-height: 0.95;
   text-transform: lowercase;
 }
-.install-cmds { grid-column: 1 / span 12; display: grid; gap: var(--space-xs); }
-@media (min-width: 60rem) { .install-cmds { grid-column: 1 / span 8; } }
+.install-cmds { display: grid; gap: var(--space-xs); align-content: start; }
+@media (max-width: 59.99rem) { .install-cmds { margin-top: var(--space-sm); } }
 .cmdrow {
   display: flex; align-items: center; gap: var(--space-sm);
   border: 1px solid color-mix(in oklab, var(--color-paper) 45%, transparent);
@@ -133,27 +158,30 @@ hr.mast-rule.double { width: calc(100% - 2 * var(--gutter)); margin-inline: auto
 
 /* ---- workflow stages (F4 on the 12 columns) ------------------------------ */
 .stage-num {
+  display: block;
   font-family: var(--font-display); font-weight: var(--display-weight);
-  font-size: clamp(64px, 10vw, 150px); line-height: 0.8;
+  font-size: clamp(56px, 7vw, 110px); line-height: 0.85;
   letter-spacing: -0.05em;
-  color: color-mix(in oklab, var(--color-ink) 8%, transparent);
+  color: color-mix(in oklab, var(--color-ink) 10%, transparent);
   user-select: none;
-  grid-column: 1 / span 3;
 }
-.stage-body { grid-column: 1 / span 12; margin-top: calc(-0.4 * var(--space-lg)); }
+.stage-body { grid-column: 1 / -1; }
 @media (min-width: 60rem) {
-  .stage-num { grid-column: span 12; }
-  .stage-body { grid-column: 4 / span 6; margin-top: calc(-1 * var(--space-xl)); }
+  .stage-num { grid-column: 1 / span 3; grid-row: 1; align-self: start; position: sticky; top: 2rem; }
+  .stage-body { grid-column: 4 / span 9; grid-row: 1; max-width: none; padding-inline-end: var(--space-md); }
 }
 .stage-body h2 {
-  margin: var(--space-sm) 0 var(--space-sm);
+  margin: var(--space-xs) 0 var(--space-sm);
   font-family: var(--font-display); font-weight: 700;
-  font-size: var(--text-4xl);
-  letter-spacing: -0.02em; line-height: 1.05;
+  font-size: clamp(1.5rem, 2.6vw, 2.25rem);
+  letter-spacing: -0.02em; line-height: 1.08;
   text-transform: lowercase;
   overflow-wrap: anywhere;
 }
-.stage-body p { max-width: 62ch; }
+.stage-body p { max-width: 68ch; }
+/* prose and its object share the wide column in a 2-col sub-grid */
+.stage-grid { display: grid; gap: var(--space-md); }
+@media (min-width: 60rem) { .stage-grid.has-object { grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); align-items: start; } }
 .stage-body p code, td code, li code {
   font-family: var(--font-mono); font-size: 0.92em;
   background: var(--color-paper-3);
@@ -169,6 +197,20 @@ pre.block {
 }
 pre.block code { font-family: var(--font-mono); font-size: var(--text-sm); background: none; padding: 0; }
 pre.block .cmt { color: var(--color-neutral); }
+
+/* side objects inside a stage (the theme demands one per section) */
+.side-object {
+  border: var(--rule-hair) solid var(--color-rule);
+  padding: var(--space-sm) var(--space-md);
+}
+.side-object .label { display: block; margin-bottom: var(--space-xs); }
+
+/* stepped bars figure beside real numbers */
+.stepped { display: grid; gap: var(--space-2xs); margin-block: var(--space-xs); }
+.stepped i {
+  display: block; height: 14px;
+  background: var(--color-accent);
+}
 
 /* mode table inside stage 2 */
 .modes { width: 100%; border-collapse: collapse; margin-top: var(--space-sm); }
@@ -238,16 +280,19 @@ table.spec-sheet { width: 100%; border-collapse: collapse; font-size: var(--text
   .rpc-row { grid-template-columns: minmax(0, 22rem) minmax(0, 1fr); align-items: baseline; }
 }
 
-/* exit codes strip: four equal cells of one band */
-.exits { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); border-block: 1px solid var(--color-rule); }
+/* exit codes strip: five equal cells of one band */
+.exits { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-block: 1px solid var(--color-rule); }
 .exit {
-  grid-column: span 6;
   padding: var(--space-sm) var(--space-sm) var(--space-sm) 0;
-  border-bottom: var(--rule-hair) solid var(--color-rule);
 }
-.exit:nth-child(even) { border-inline-start: var(--rule-hair) solid var(--color-rule); padding-left: var(--space-sm); }
-.exit:nth-child(n+3) { border-bottom: 0; }
-@media (min-width: 60rem) { .exit { grid-column: span 3; } .exit:nth-child(even) { border-inline-start: 0; padding-left: 0; } .exit:nth-child(n+2) { border-inline-start: var(--rule-hair) solid var(--color-rule); padding-left: var(--space-sm); } }
+.exit + .exit { border-inline-start: var(--rule-hair) solid var(--color-rule); padding-left: var(--space-sm); }
+@media (max-width: 40rem) {
+  .exits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .exit { border-bottom: var(--rule-hair) solid var(--color-rule); }
+  .exit:nth-child(even) { border-inline-start: var(--rule-hair) solid var(--color-rule); padding-left: var(--space-sm); }
+  .exit:nth-child(odd) { border-inline-start: 0; padding-left: 0; }
+  .exit:last-child { grid-column: span 2; border-bottom: 0; border-inline-start: 0; padding-left: 0; }
+}
 .exit b { font-family: var(--font-display); font-weight: 800; font-size: var(--text-xl); }
 .exit div { color: var(--color-muted); font-size: var(--text-sm); }
 
