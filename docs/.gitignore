@@ -1,0 +1,5 @@
+# dependencies
+node_modules/
+
+# vite build output
+dist/

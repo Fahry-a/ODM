@@ -23,9 +23,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Build site
+        working-directory: docs
+        run: |
+          bun install --frozen-lockfile
+          bun run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs
+          path: docs/dist
       - id: deployment
         uses: actions/deploy-pages@v4
