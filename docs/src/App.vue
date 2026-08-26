@@ -1,4 +1,5 @@
 <script setup>
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import CopyButton from './components/CopyButton.vue'
 
 // --- page data (was inline HTML in the single-file page) ---------------------
@@ -8,6 +9,7 @@ const navLinks = [
   { href: '#quickstart', label: 'Quickstart' },
   { href: '#profiles', label: 'Profiles' },
   { href: '#rpc', label: 'RPC' },
+  { href: '#/docs', label: 'Docs' },
   { href: 'https://github.com/Fahry-a/ODM', label: 'Source' },
 ]
 
@@ -72,6 +74,88 @@ const flags = [
   { flag: '--dry-run / -q / -y', meaning: 'plan only · quiet · no prompt', def: '—' },
 ]
 
+
+const routeHash = ref(window.location.hash)
+const route = computed(() => (routeHash.value === '#/docs' || routeHash.value.startsWith('#docs-') ? 'docs' : 'home'))
+
+function syncRoute() {
+  routeHash.value = window.location.hash
+}
+
+onMounted(() => window.addEventListener('hashchange', syncRoute))
+onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
+
+const docsSections = [
+  { id: 'docs-install', title: 'Installation' },
+  { id: 'docs-concepts', title: 'Core concepts' },
+  { id: 'docs-cli', title: 'CLI reference' },
+  { id: 'docs-profiles', title: 'Profiles' },
+  { id: 'docs-resume', title: 'Resume and integrity' },
+  { id: 'docs-rpc', title: 'RPC quick reference' },
+  { id: 'docs-config', title: 'Configuration' },
+  { id: 'docs-troubleshooting', title: 'Troubleshooting' },
+]
+
+const cliGroups = [
+  {
+    title: 'Input and output',
+    rows: [
+      ['URL...', 'Download one or more URLs. Multiple URLs trigger the scheduler modes described below.'],
+      ['-i, --input-file', 'Read newline-separated URLs, local .meta4 Metalink files, or remote Metalink documents. Lines beginning with # are ignored.'],
+      ['-d, --dir', 'Directory for final files and .odm resume sidecars. Defaults to the current working directory.'],
+      ['-o, --out', 'Override the output filename for a single URL. For batches, prefer server names or Metalink names.'],
+      ['--auto-rename', 'If a target exists, write name.1.ext, name.2.ext, and so on instead of overwriting.'],
+      ['--skip-existing', 'Treat an existing complete-looking target as already done. Useful for idempotent scripts.'],
+    ],
+  },
+  {
+    title: 'Planning and connections',
+    rows: [
+      ['-c, --connections', 'The global connection budget. ODM allocates this budget across files and chunks. Default: 5.'],
+      ['-sf, --split-file', 'Connections per active file in multi-file mode. With -c 16 -sf 4, four files run at once.'],
+      ['-s, --chunk-size', 'Work unit size for the ODM engine. Default: 4M. Smaller chunks rebalance faster; larger chunks reduce overhead.'],
+      ['--profile', 'Select odm, aria2c, both, or smart. Smart probes each URL and chooses an engine.'],
+      ['--split', 'Aria2c-style segment count for the aria2c profile.'],
+      ['--min-split-size', 'Minimum segment size before splitting in aria2c-style profiles.'],
+    ],
+  },
+  {
+    title: 'Network behavior',
+    rows: [
+      ['-t, --timeout', 'Dial and response-header timeout. Default: 30s.'],
+      ['-r, --retries', 'Retries per segment or chunk. Default: 3.'],
+      ['-w, --retry-wait', 'Base wait between retries. Default: 2s; adaptive 429 handling can lower the global cap.'],
+      ['-l, --limit-rate', 'Global token-bucket download cap, for example 5M or 750K.'],
+      ['-p, --proxy', 'HTTP, HTTPS, SOCKS5, or SOCKS5H proxy URL. SOCKS5H resolves hostnames through the proxy.'],
+      ['--mirror', 'Additional URL for the same file. Repeat the flag to add more mirrors; chunks rotate across healthy sources.'],
+    ],
+  },
+  {
+    title: 'Safety and automation',
+    rows: [
+      ['-x, --continue', 'Resume using the .odm control file. Enabled by default.'],
+      ['--checksum', 'Verify the final file with md5, sha1, or sha256 syntax such as sha256:<hex>.'],
+      ['--checksum-url', 'Download a checksum sidecar and verify the final file.'],
+      ['--dry-run', 'Probe and print the plan without writing payload bytes.'],
+      ['-y, --yes', 'Skip the interactive confirmation prompt.'],
+      ['-q, --quiet', 'Suppress progress UI; useful in cron and CI.'],
+      ['--session-log', 'Append JSONL lifecycle events for wrapper tools and GUIs.'],
+    ],
+  },
+]
+
+const rpcMethods = [
+  ['odm.addUri', 'Queue one URL and return its GID. The first param may be token:<secret> when auth is enabled.'],
+  ['odm.addBatch', 'Queue many URLs in one request. ODM applies the same scheduler logic as the CLI.'],
+  ['odm.tellStatus', 'Return the same progress view used by the terminal UI: state, bytes, speed, ETA, conns, and error.'],
+  ['odm.tellActive / tellWaiting / tellStopped', 'List tasks by lifecycle bucket for dashboards and queue managers.'],
+  ['odm.pause / unpause / remove', 'Control a single task. All variants exist for bulk control.'],
+  ['odm.changeOption', 'Adjust max-download-limit, max-download-limit-per-task, or connections while a task is running.'],
+  ['odm.getGlobalStat', 'Inspect aggregate counts and speed across the daemon.'],
+  ['odm.getVersion', 'Read the daemon version and capability surface.'],
+  ['odm.shutdown', 'Ask the daemon to stop after current bookkeeping is complete.'],
+]
+
 const exits = [
   { code: '0', what: 'all downloads succeeded' },
   { code: '1', what: 'invalid argument' },
@@ -91,7 +175,104 @@ const exits = [
   </nav>
 </header>
 
-<main id="top">
+<main v-if="route === 'docs'" id="docs" class="docs-page">
+  <section class="docs-hero" aria-labelledby="docs-title">
+    <p class="label">Reference manual · v1.7.0</p>
+    <h1 id="docs-title">ODM Documentation</h1>
+    <p class="docs-lead">A detailed field guide for installing, configuring, scripting, and operating ODM: the Go download manager that treats connections as one budget and then splits that budget across files, chunks, profiles, mirrors, and RPC clients.</p>
+    <div class="docs-actions">
+      <a class="docs-cta" href="#top">Back to landing</a>
+      <a class="docs-cta ghost" href="https://github.com/Fahry-a/ODM">Source on GitHub</a>
+    </div>
+  </section>
+
+  <div class="docs-layout">
+    <aside class="docs-toc" aria-label="Documentation sections">
+      <p class="label">On this page</p>
+      <a v-for="section in docsSections" :key="section.id" :href="`#${section.id}`">{{ section.title }}</a>
+    </aside>
+
+    <div class="docs-content">
+      <section id="docs-install" class="docs-block">
+        <h2>Installation</h2>
+        <p>Use the AUR package when you want a prebuilt binary on Arch-based systems, or build from source when you want the exact current branch. Release artifacts are named <code>odm_X.Y.Z_&lt;os&gt;_&lt;arch&gt;</code>.</p>
+        <pre class="block"><code>paru -S odm-bin
+yay -S odm-bin
+git clone https://github.com/Fahry-a/ODM
+cd ODM
+go build -o odm ./cmd/odm</code></pre>
+        <div class="docs-callout"><b>Verify the install</b><span>Run <code>odm --version</code>, then <code>odm --help</code>. The version string should match the current release documented by this site.</span></div>
+      </section>
+
+      <section id="docs-concepts" class="docs-block">
+        <h2>Core concepts</h2>
+        <div class="docs-cards">
+          <article><h3>Budget first</h3><p><code>-c</code> is not blindly copied to every file. ODM treats it as a global budget and allocates it by scheduler mode.</p></article>
+          <article><h3>Chunks are work</h3><p>The default engine slices rangeable files into chunks. Workers steal the next unfinished chunk instead of owning a fixed slice forever.</p></article>
+          <article><h3>State is resumable</h3><p>A sidecar <code>.odm</code> file records metadata, completed ranges, and per-chunk hashes so interrupted work can continue safely.</p></article>
+          <article><h3>RPC mirrors CLI</h3><p>The daemon exposes queueing, status, pause, resume, removal, limits, and shutdown through JSON-RPC 2.0 and WebSocket events.</p></article>
+        </div>
+      </section>
+
+      <section id="docs-cli" class="docs-block">
+        <h2>CLI reference</h2>
+        <p>These groups cover the options used most often in real scripts and terminals. For the canonical generated list, run <code>odm --help</code>.</p>
+        <div class="docs-table-group" v-for="group in cliGroups" :key="group.title">
+          <h3>{{ group.title }}</h3>
+          <table class="docs-table"><tbody><tr v-for="row in group.rows" :key="row[0]"><th scope="row"><code>{{ row[0] }}</code></th><td>{{ row[1] }}</td></tr></tbody></table>
+        </div>
+      </section>
+
+      <section id="docs-profiles" class="docs-block">
+        <h2>Profiles</h2>
+        <p>Choose <code>odm</code> for the work-stealing engine, <code>aria2c</code> for h2-oriented static segments, <code>both</code> to split one file between both strategies, or <code>smart</code> to let probes decide per URL.</p>
+        <pre class="block"><code>odm --profile odm -c 16 big.iso
+odm --profile aria2c --split 8 --min-split-size 16M big.iso
+odm --profile both -c 12 big.iso
+odm --profile smart -c 16 url1 url2 url3</code></pre>
+      </section>
+
+      <section id="docs-resume" class="docs-block">
+        <h2>Resume and integrity</h2>
+        <p>Resume is conservative by design. ODM keeps control-file metadata beside the target, sends validators such as <code>If-Range</code> when possible, and restarts cleanly when the remote object no longer matches the saved state.</p>
+        <ul class="docs-list"><li>Completed chunks are verified against stored per-chunk SHA-256 before reuse.</li><li>Final checksums can come from <code>--checksum</code>, <code>--checksum-url</code>, or Metalink metadata.</li><li>Mirrors are validated independently so a bad mirror fails its own chunks rather than corrupting the output silently.</li></ul>
+      </section>
+
+      <section id="docs-rpc" class="docs-block">
+        <h2>RPC quick reference</h2>
+        <p>Start the daemon with <code>--rpc</code>. Keep the default loopback bind for local automation, or pair <code>--rpc-listen-all</code> with <code>--rpc-secret</code> before exposing it to a network.</p>
+        <pre class="block"><code>odm --rpc --rpc-secret hunter2 -d ~/Downloads
+curl -s http://127.0.0.1:6900/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"odm.getVersion","params":["token:hunter2"],"id":1}'</code></pre>
+        <table class="docs-table"><tbody><tr v-for="method in rpcMethods" :key="method[0]"><th scope="row"><code>{{ method[0] }}</code></th><td>{{ method[1] }}</td></tr></tbody></table>
+      </section>
+
+      <section id="docs-config" class="docs-block">
+        <h2>Configuration</h2>
+        <p>Configuration files mirror CLI behavior for defaults you do not want to repeat. CLI flags remain the clearest place to express one-off choices in scripts.</p>
+        <pre class="block"><code># inspect the shipped example
+configs/odm.conf.example
+
+# common pattern
+dir = ~/Downloads
+connections = 16
+profile = smart
+continue = true
+limit-rate = 0</code></pre>
+      </section>
+
+      <section id="docs-troubleshooting" class="docs-block">
+        <h2>Troubleshooting</h2>
+        <details open><summary>Server ignores ranges</summary><p>ODM falls back to one stream for non-rangeable targets and redistributes unused budget to other files when possible.</p></details>
+        <details><summary>Downloads slow down after 429</summary><p>That is intentional adaptive back-off. The global cap eases down when a server asks clients to slow down, then restores after a quiet period.</p></details>
+        <details><summary>Resume restarts from zero</summary><p>The remote object likely changed, validators did not match, or the saved chunk hashes did not match disk. Restarting is safer than stitching mismatched bytes.</p></details>
+      </section>
+    </div>
+  </div>
+</main>
+
+<main v-else id="top">
 
 <!-- hero declaration -->
 <section class="hero">
