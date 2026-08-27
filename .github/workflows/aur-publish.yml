@@ -93,7 +93,7 @@ jobs:
             odm-bin.LICENSE:assets/LICENSE
           rm_patterns: >-
             odm-bin-*.1,
-            odm-bin-*.conf.example,
+            odm-bin.conf-*.example,
             odm-bin-*.service,
             odm-bin-*.LICENSE
 
