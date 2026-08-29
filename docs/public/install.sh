@@ -186,12 +186,17 @@ INSTALL_BIN="${PREFIX}/bin/odm"
 if [ "$YES" -eq 0 ] && [ -f "$INSTALL_BIN" ]; then
     EXISTING_VER="$("$INSTALL_BIN" --version 2>/dev/null || echo "unknown")"
     warn "existing installation found: ${EXISTING_VER}"
-    printf "install v${VERSION} to ${INSTALL_BIN}? [y/N] "
-    read -r REPLY
-    case "$REPLY" in
-        [yY][eE][sS]|[yY]) ;;
-        *) info "aborted"; exit 0 ;;
-    esac
+    if [ -t 0 ]; then
+        printf "install v${VERSION} to ${INSTALL_BIN}? [y/N] "
+        read -r REPLY
+        case "$REPLY" in
+            [yY][eE][sS]|[yY]) ;;
+            *) info "aborted"; exit 0 ;;
+        esac
+    else
+        # piped via curl|sh — no interactive prompt, auto-proceed
+        info "non-interactive install (use -y to suppress this message)"
+    fi
 fi
 
 # --- install helper (auto sudo if needed) ------------------------------------
