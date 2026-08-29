@@ -6,10 +6,12 @@ package update
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -33,8 +35,7 @@ const (
 // CheckLatest fetches the latest release version from GitHub API.
 // Returns the bare version string (e.g. "1.8.0") and the tarball download URL.
 func CheckLatest() (ver string, downloadURL string, err error) {
-	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Get(githubAPI)
+	resp, err := apiClient().Get(githubAPI)
 	if err != nil {
 		return "", "", fmt.Errorf("GitHub API: %w", err)
 	}
@@ -80,6 +81,32 @@ func parseSemver(s string) [3]int {
 		parts[i], _ = strconv.Atoi(p)
 	}
 	return parts
+}
+
+// apiClient returns an HTTP client that resolves DNS via Cloudflare (1.1.1.1)
+// when the system resolver fails (e.g. on Android/Termux where the pure-Go
+// resolver tries IPv6 localhost which doesn't exist).
+func apiClient() *http.Client {
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(_ context.Context, network, address string) (net.Conn, error) {
+			// Override: always use Cloudflare DNS on IPv4.
+			d := &net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(context.Background(), "udp", "1.1.1.1:53")
+		},
+	}
+	dialer := &net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 5 * time.Second,
+		Resolver:  resolver,
+	}
+	return &http.Client{
+		Timeout: httpTimeout,
+		Transport: &http.Transport{
+			DialContext:       dialer.DialContext,
+			ForceAttemptHTTP2: true,
+		},
+	}
 }
 
 func goarch() string {
