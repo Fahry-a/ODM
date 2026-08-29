@@ -151,7 +151,8 @@ CHECKSUM_URL="https://github.com/${REPO}/releases/download/v${VERSION}/checksums
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-TARBALL="${TMPDIR}/odm.tar.gz"
+TARBALL_NAME="odm_${VERSION}_${OS}_${ARCH}.tar.gz"
+TARBALL="${TMPDIR}/${TARBALL_NAME}"
 
 info "downloading ${DOWNLOAD_URL}..."
 curl -fSL -o "$TARBALL" "$DOWNLOAD_URL" || err "download failed — check if v${VERSION} exists for ${OS}/${ARCH}"
@@ -162,7 +163,6 @@ CHECKSUM_FILE="${TMPDIR}/checksums.txt"
 curl -fsSL -o "$CHECKSUM_FILE" "$CHECKSUM_URL" 2>/dev/null || true
 
 if [ -s "$CHECKSUM_FILE" ]; then
-    TARBALL_NAME="odm_${VERSION}_${OS}_${ARCH}.tar.gz"
     grep "$TARBALL_NAME" "$CHECKSUM_FILE" > "${TMPDIR}/checksum.txt" 2>/dev/null || true
     if [ -s "${TMPDIR}/checksum.txt" ]; then
         (cd "$TMPDIR" && sha256_check "${TMPDIR}/checksum.txt") || err "checksum verification failed"
