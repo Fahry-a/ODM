@@ -148,7 +148,19 @@ func DetectInstallMethod() InstallMethod {
 }
 
 func isAUR() bool {
-	// pacman -Qi exits 0 if the package is installed
+	// Check if pacman exists first — exec.LookPath can SIGSYS on Android/Termux
+	// because faccessat(AT_SYMLINK_NOFOLLOW) is seccomp-blocked. Stat the
+	// common locations instead; if none exist, pacman isn't here anyway.
+	hasPacman := false
+	for _, p := range []string{"/usr/bin/pacman", "/usr/local/bin/pacman"} {
+		if _, err := os.Stat(p); err == nil {
+			hasPacman = true
+			break
+		}
+	}
+	if !hasPacman {
+		return false
+	}
 	cmd := exec.Command("pacman", "-Qi", "odm-bin")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
