@@ -123,13 +123,6 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 // working. This makes the drain exact regardless of how many workers check
 // simultaneously. Returns true when the caller should exit (the counter was
 // already decremented here).
-// retireIfAboveTarget attempts to retire this worker when the live connection
-// count exceeds the target (AdjustConns reduction). The retirement is a CAS
-// on t.conns: exactly the first (live - target) workers to call it win and
-// exit, and every loser re-reads the (now-decremented) count and keeps
-// working. This makes the drain exact regardless of how many workers check
-// simultaneously. Returns true when the caller should exit (the counter was
-// already decremented here).
 func (t *Task) retireIfAboveTarget() bool {
 	for {
 		live := t.conns.Load()
@@ -144,17 +137,11 @@ func (t *Task) retireIfAboveTarget() bool {
 
 // isPermanent reports whether err is a retry-proof failure (a
 // transport.StatusError flagged permanent anywhere in its Unwrap chain).
-// isPermanent reports whether err is a retry-proof failure (a
-// transport.StatusError flagged permanent anywhere in its Unwrap chain).
 func isPermanent(err error) bool {
 	var se transport.StatusError
 	return errors.As(err, &se) && se.Permanent
 }
 
-// throttleOK restores the configured rate after a successful chunk — but only
-// once throttleCooldown has passed since the latest 429. Without the cooldown,
-// the first healthy worker (chunks complete every few hundred ms on an active
-// download) would undo the halving while others are still being throttled.
 // throttleOK restores the configured rate after a successful chunk — but only
 // once throttleCooldown has passed since the latest 429. Without the cooldown,
 // the first healthy worker (chunks complete every few hundred ms on an active
@@ -169,16 +156,10 @@ func (t *Task) throttleOK() {
 // statusErr classifies an HTTP status from a ranged/plain GET: permanent for
 // client errors except the two retryable ones (transport.IsPermanent),
 // transient otherwise.
-// statusErr classifies an HTTP status from a ranged/plain GET: permanent for
-// client errors except the two retryable ones (transport.IsPermanent),
-// transient otherwise.
 func statusErr(msg string, status int) error {
 	return transport.PermanentWrap(fmt.Errorf("%s: status %d", msg, status), status)
 }
 
-// downloadChunk fetches one chunk's byte-range (retrying up to opts.Retry times
-// with exponential RetryWait backoff) and writes it to disk at the chunk's
-// offset. `eng` supplies the region base (both profile) and transport client.
 // downloadChunk fetches one chunk's byte-range (retrying up to opts.Retry times
 // with exponential RetryWait backoff) and writes it to disk at the chunk's
 // offset. `eng` supplies the region base (both profile) and transport client.
@@ -249,8 +230,6 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 
 // chunkTimeoutCtx derives the per-chunk context: Timeout*10 (default 300s)
 // so a stalled connection can't hang a worker forever.
-// chunkTimeoutCtx derives the per-chunk context: Timeout*10 (default 300s)
-// so a stalled connection can't hang a worker forever.
 func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	tmo := t.opts.Timeout * 10
 	if tmo <= 0 {
@@ -259,9 +238,6 @@ func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.Ca
 	return context.WithTimeout(ctx, tmo)
 }
 
-// contentRangeStartsWith reports whether a Content-Range header value
-// ("bytes S-E/T") declares S == want. A 206 without a parseable start is
-// treated as hostile — RFC 9110 requires the header on single-range 206s.
 // contentRangeStartsWith reports whether a Content-Range header value
 // ("bytes S-E/T") declares S == want. A 206 without a parseable start is
 // treated as hostile — RFC 9110 requires the header on single-range 206s.
@@ -275,10 +251,6 @@ func contentRangeStartsWith(cr string, want int64) bool {
 	return err == nil && start == want
 }
 
-// fetchAndWrite does a single ranged GET and copies the body to disk, throttled
-// by the global limiter and accounting bytes into progress. h receives every
-// byte written to disk so the caller can record the chunk's SHA-256 on success.
-// eng supplies the region base (both profile) and transport client.
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
 // by the global limiter and accounting bytes into progress. h receives every
 // byte written to disk so the caller can record the chunk's SHA-256 on success.
@@ -394,10 +366,6 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
 // h receives every byte written to disk (the whole-file chunk's SHA-256).
-// fetchWhole handles the sizeless or range-less single-stream case:
-// plain GET of the whole resource, sequential write at offset 0; bytes are
-// counted into progress but the total stays -1 so the UI shows "sizeless".
-// h receives every byte written to disk (the whole-file chunk's SHA-256).
 func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash) error {
 	// Per-chunk timeout prevents a stalled connection from hanging forever.
 	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
@@ -438,9 +406,6 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 // copyChunkFrom copies r into w.WriteAt at base offset, advancing a local
 // offset counter, feeding every written byte through h (may be nil), and
 // calling onProgress for each read's delta. Returns total n.
-// copyChunkFrom copies r into w.WriteAt at base offset, advancing a local
-// offset counter, feeding every written byte through h (may be nil), and
-// calling onProgress for each read's delta. Returns total n.
 func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64)) (int64, error) {
 	var total int64
 	for {
@@ -472,16 +437,9 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 // progress gate elapses, pushes a fresh snapshot through sink so the UI/RPC
 // feeder sees live bytes-done *during* a long stream rather than only at chunk
 // boundaries. The gate is shared under rmMu across this task's workers, so the
-// sink fires ~10×/s per task regardless of how many connections are active
-// . sink may be nil (the Manager.Run test path
-// and RPC single-task probes pass nil); calling is skipped in that case.
-// noteBytes updates the rolling speed measure and atomics and, when the ~100ms
-// progress gate elapses, pushes a fresh snapshot through sink so the UI/RPC
-// feeder sees live bytes-done *during* a long stream rather than only at chunk
-// boundaries. The gate is shared under rmMu across this task's workers, so the
-// sink fires ~10×/s per task regardless of how many connections are active
-// . sink may be nil (the Manager.Run test path
-// and RPC single-task probes pass nil); calling is skipped in that case.
+// sink fires ~10×/s per task regardless of how many connections are active.
+// sink may be nil (the Manager.Run test path and RPC single-task probes pass
+// nil); calling is skipped in that case.
 func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 	if delta < 0 {
 		return

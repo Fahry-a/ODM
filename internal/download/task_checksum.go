@@ -66,9 +66,6 @@ func parseChecksumSidecar(s string) (string, error) {
 // verifyChecksum runs the --checksum verification against the real output file
 // (t.outPath — the name the server chose via Content-Disposition or the -o
 // override, not a URL-derived guess). No-op when no checksum was requested.
-// verifyChecksum runs the --checksum verification against the real output file
-// (t.outPath — the name the server chose via Content-Disposition or the -o
-// override, not a URL-derived guess). No-op when no checksum was requested.
 func (t *Task) verifyChecksum() error {
 	if t.opts.Checksum == "" {
 		return nil

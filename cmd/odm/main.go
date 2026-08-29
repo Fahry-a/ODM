@@ -32,6 +32,7 @@ import (
 	"odm/internal/transport"
 	"odm/internal/ui"
 	"odm/internal/version"
+	"odm/internal/update"
 )
 
 func main() {
@@ -389,6 +390,11 @@ func preHelpOrVersion(argv []string) bool {
 			return true
 		case "-V", "--version":
 			fmt.Println(version.Version)
+			return true
+		case "update":
+			if err := update.Run(version.Version); err != nil {
+				fmt.Fprintln(os.Stderr, "odm update:", err)
+			}
 			return true
 		}
 	}
@@ -842,6 +848,7 @@ Usage:
   odm [OPTIONS] "URL1,URL2,..."        # legacy comma form (http://-prefixed)
   odm [OPTIONS] -i <file-list.txt>     # URLs from a file, one per line
   odm --rpc [OPTIONS]                  # JSON-RPC + WebSocket daemon
+  odm update                           # self-update to the latest version
 
 Connection budget (the Balancer auto-splits -c across files):
   -c, --connections  total parallel-connection budget        (default 5)
@@ -906,4 +913,7 @@ URLs, -i is recommended.
 Exit codes: 0 ok | 1 bad args | 2 network (all retries exhausted) | 3 partial |
             4 cancelled.
 `, version.Version, version.Version)
+	if hint := update.Hint(version.Version); hint != "" {
+		fmt.Fprintf(w, "\n  %s\n", hint)
+	}
 }

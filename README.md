@@ -4,269 +4,295 @@
 [![Release](https://github.com/Fahry-a/ODM/actions/workflows/release.yml/badge.svg)](https://github.com/Fahry-a/ODM/actions/workflows/release.yml)
 [![AUR](https://img.shields.io/aur/version/odm-bin?label=AUR)](https://aur.archlinux.org/packages/odm-bin)
 
-`odm` is a CLI download manager written in Go, inspired by [`aria2c`](https://aria2.github.io/). It ships as a single static binary with no runtime dependencies.
+CLI download accelerator written in Go, inspired by [aria2c](https://aria2.github.io/). Single static binary, zero runtime dependencies.
 
-Its core differentiator is the **Connection Balancer** — automatic allocation of parallel connections that adapts between *single-file* and *many-files* (batch) modes, so you set one connection budget and the tool splits it sensibly across files instead of you computing connections-per-file by hand.
+The **Connection Balancer** automatically splits a single `-c` budget across files — one-file mode uses all connections on the file, batch mode distributes evenly — so you never compute connections-per-file by hand.
 
-It also has a pacman/CachyOS-style (`ILoveCandy`) progress bar, and a JSON-RPC 2.0 + WebSocket RPC server so other programs (CLIs, GUIs, scripts) can drive it — the same relationship `aria2c` has with `AriaNg`.
+Also ships a pacman-style (`ILoveCandy`) progress bar and a JSON-RPC 2.0 + WebSocket daemon for third-party GUIs and scripts.
 
 ---
 
-## Install
+## Features
 
-From source (requires Go 1.26+):
+- **Connection Balancer** — set `-c N` and the tool figures out per-file allocation
+- **Work-stealing chunk queue** — slow connections process fewer chunks instead of holding the file back
+- **4 engine profiles** — `odm` (multi-TCP), `aria2c` (h2 streams), `both` (hybrid), `smart` (auto-pick)
+- **Resume** — `.odm` control file, ETag drift detection, per-chunk SHA-256 integrity
+- **Mirrors & Metalink4** — rotate chunks across alternate sources, auto-verify checksums
+- **Rate limiting** — global + per-task token buckets, adaptive 429 back-off, runtime `changeOption`
+- **Collision handling** — `--auto-rename` / `--skip-existing`
+- **RPC daemon** — JSON-RPC 2.0 + WebSocket, TLS support, aria2-style token auth
+- **Pacman progress bar** — responsive, CJK-aware, ANSI color, non-TTY fallback
+
+---
+
+## Installation
+
+### One-line install
 
 ```bash
-git clone <this repo> && cd odm
+curl -fsSL https://odm.orynix.id/install | sh
+```
+
+Auto-detects prefix: writable `/usr/local` → system-wide, otherwise falls back to `~/.local` (no sudo). Also installs man page and config. Options: `--version X.Y.Z`, `--prefix /path`, `-y` (skip prompt).
+
+### Arch Linux (AUR)
+
+```bash
+# Pre-built binary (recommended)
+yay -S odm-bin
+
+# Or build from source
+yay -S odm
+```
+
+### Pre-built binaries
+
+Download from [GitHub Releases](https://github.com/Fahry-a/odm/releases). Available for:
+
+| Platform | Architecture |
+|----------|-------------|
+| Linux    | amd64, i386, arm, arm64 |
+| macOS    | amd64, arm64 |
+
+```bash
+# Example: Linux amd64
+curl -LO https://github.com/Fahry-a/odm/releases/latest/download/odm_1.7.0_linux_amd64.tar.gz
+tar -xzf odm_*.tar.gz
+sudo install -Dm755 odm /usr/local/bin/odm
+```
+
+### From source
+
+Requires **Go 1.26+**.
+
+```bash
+git clone https://github.com/Fahry-a/odm.git && cd odm
 go build -o odm ./cmd/odm
-# optional: install to PATH
-install -Dm755 odm /usr/local/bin/odm
+sudo install -Dm755 odm /usr/local/bin/odm
 ```
 
-System-wide default config (root-owned, `0644`, per the security guidance):
+### Systemd daemon
+
+The AUR package installs a systemd unit. For manual installs:
 
 ```bash
-install -Dm644 configs/odm.conf.example /etc/odm/config.conf
+sudo install -Dm644 packaging/odm.service /usr/lib/systemd/system/odm.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now odm
 ```
 
-Per-user overrides go in `~/.config/odm/config.conf`.
+The unit runs `odm --rpc` with `DynamicUser=yes` and hardening applied. Configure via `/etc/odm/odm.env` (environment file) or `/etc/odm/config.conf`.
+
+### Man page
+
+```bash
+sudo install -Dm644 docs/odm.1 /usr/share/man/man1/odm.1
+man odm
+```
 
 ---
 
 ## Quick start
 
-The three canonical invocations (from the spec):
-
 ```bash
-# 1. Single file, 16 parallel connections to one server for one file.
-odm -c 16 https://files.test.xyz/file.tar.gz
+# Single file, 16 parallel connections
+odm -c 16 https://example.com/big.iso
 
-# 2. Batch (no -sf): 16 URLs, 1 connection per file, 16 files run in parallel.
-#    RECOMMENDED: space-separated positional args (comma-safe).
-odm -c 16 https://files.test.xyz/file1.tar.gz url2 url3 ...   # 16 urls
+# Batch: 1 connection per file, files run in parallel
+odm -c 16 https://example.com/a.tar.gz https://example.com/b.tar.gz https://example.com/c.tar.gz
 
-# 3. Batch with -sf 4: 16 connections split 4 per file → 4 files run in parallel
-#    (the rest queue automatically as slots free).
-odm -c 16 -sf 4 https://files.test.xyz/file1.tar.gz url2 url3 ...
-```
+# Batch with explicit split: 4 connections per file, 4 files at a time
+odm -c 16 -sf 4 https://example.com/a.tar.gz https://example.com/b.tar.gz ...
 
-For large batches (>10 URLs) prefer an input file:
-
-```bash
-odm -i file-list.txt        # one URL per line, '#' comments and blanks skipped
+# From an input file (one URL per line, '#' comments and blanks skipped)
+odm -i urls.txt
 ```
 
 ---
 
-## The Connection Balancer (`-c`, `-sf`)
+## Connection Balancer (`-c`, `-sf`)
 
-`-c` is the **total** parallel-connection budget. What it controls depends on the mode:
+`-c` is the **total** parallel-connection budget. How it's used depends on the mode:
 
-| Mode | Condition | What `-c` controls | per-file connections |
-|---|---|---|---|
-| **A** | one URL (`-sf` ignored) | whole budget → the one file | `min(-c, --max-connections)` |
+| Mode | Condition | What `-c` controls | Per-file connections |
+|------|-----------|-------------------|---------------------|
+| **A** | one URL | whole budget → the one file | `min(-c, --max-connections)` |
 | **B** | many URLs, no `-sf` | how many files run **in parallel** | 1 each |
-| **C** | many URLs + `-sf N` | `floor(-c / N)` files run in parallel | `N` (remainder distributed to the first files) |
+| **C** | many URLs + `-sf N` | `floor(-c / N)` files in parallel | N (remainder to first files) |
 
-`--max-connections` (default **32**) is a soft ceiling: going above it just prints a warning (`connections above 32 may get throttled/blocked by some servers`), since many CDN/servers treat >~30 concurrent connections from one IP as abusive. Power users on a LAN/local CDN can raise it.
+`--max-connections` (default 32) is a soft ceiling — exceeding it prints a warning. Files without HTTP range support get 1 connection; the freed budget is redistributed to the other files.
 
-Files that don't support HTTP range requests (the probe falls back through HEAD → ranged GET → single-stream) are automatically given a single connection, and the freed budget is redistributed to the other files in the same scheduling pass. (Mid-flight dynamic rebalancing of *already-downloading* chunks is a roadmap item, not in this release.)
+### Why work-stealing
 
-### Why a chunk queue (work-stealing)
-
-Each file is split into small chunks (default `--chunk-size 4M`) pushed into a shared per-file queue. Worker goroutines — one per allocated connection — pull the next chunk as soon as they finish the previous one. This avoids the classic **straggler problem** of a static equal-split: a slow connection just processes fewer chunks instead of holding the whole file back.
+Each file is split into chunks (`--chunk-size 4M` default) pushed into a per-file queue. Worker goroutines pull the next chunk as soon as they finish the previous one. A slow connection just processes fewer chunks instead of stalling the whole file.
 
 ---
 
-## Downloader profiles (`--profile`)
-
-`odm` ships four engine profiles that change how a file is fetched. Pick one
-with `--profile NAME` (or `profile = NAME` in the config file). The default
-is `odm`.
+## Engine profiles (`--profile`)
 
 | Profile | Engine | When to use |
-|---|---|---|
-| `odm` (default) | fixed chunks, work-stealing, HTTP/1.1 multi-connection | the default; best with range-capable servers |
-| `aria2c` | static equal split into `--split` segments, HTTP/2 streams over one connection | large files on HTTPS servers; mimics aria2c's `-s`/`-x` model |
-| `both` | 50/50 split: first half via the odm engine, second half via the aria2c engine | very large files where you want both engines at once |
-| `smart` | auto-picks per file after probing (range support, size, h2 readiness) | set it and forget it |
+|---------|--------|-------------|
+| `odm` (default) | Fixed chunks, work-stealing, HTTP/1.1 | Default; best with range-capable servers |
+| `aria2c` | Static equal split, HTTP/2 streams | Large files on HTTPS; mimics aria2c `-s`/`-x` |
+| `both` | odm (region 1) + aria2c (region 2) | Very large files, both engines at once |
+| `smart` | Auto-picks per file after probing | Set it and forget it |
 
 ### Profile flags
 
-- `--split N` — aria2c/both: number of segments per file (default `5`).
-- `--min-split-size SIZE` — aria2c/both: don't split ranges smaller than 2×
-  this (default `20M`); a file below that downloads as a single segment.
-- `--max-connection-per-server N` — aria2c: per-server connection cap when
-  the server falls back to HTTP/1.1 (default `1`). Under HTTP/2 all streams
-  share one connection, so the cap is irrelevant there.
+- `--split N` — aria2c/both: segments per file (default 5)
+- `--min-split-size SIZE` — aria2c/both: don't split ranges < 2x this (default 20M)
+- `--max-connection-per-server N` — aria2c: per-server h1 cap (default 1); irrelevant under h2
 
-### How each profile fetches
+### How each profile works
 
-**`odm`** splits the file into fixed `--chunk-size` chunks (default 4 MiB)
-pushed into a shared work-stealing queue; `-c` workers pull the next chunk as
-soon as they finish, one HTTP/1.1 connection each. This is the multi-connection
-aggregation ODM is built around.
+**`odm`** splits into fixed `--chunk-size` chunks in a work-stealing queue; `-c` workers grab the next chunk over individual HTTP/1.1 connections. This is the multi-connection aggregation ODM is built around.
 
-**`aria2c`** divides the file into `--split` (default 5) roughly-equal
-segments — one per worker — and speaks HTTP/2, so all segments multiplex over
-a single TCP connection (the aria2c model where `-c` means concurrent h2
-streams, not TCP connections). A failed segment is retried by the same worker
-(no work-stealing). On `http://` URLs or h1-only servers Go falls back to
-HTTP/1.1 automatically.
+**`aria2c`** divides into `--split` roughly-equal segments, one per worker, multiplexed over HTTP/2. A failed segment retries in the same worker (no stealing). Falls back to HTTP/1.1 on plain `http://` or h1-only servers.
 
-**`both`** runs the two engines side by side: region 1 `[0, mid)` uses the odm
-engine (work-stealing chunks, HTTP/1.1), region 2 `[mid, end)` uses the aria2c
-engine (static segments, HTTP/2). Files under 4 MiB degrade to the plain odm
-engine.
+**`both`** runs both engines side by side: region 1 `[0, mid)` uses odm/h1, region 2 `[mid, end)` uses aria2c/h2. Files under 4 MiB degrade to plain odm.
 
-**`smart`** probes each URL (range support, size, h2 readiness) and picks the
-engine per file: no-range / sizeless / small (< 8 MiB) / no-h2 / low
-connections → `odm`; ≥ 256 MiB with ≥ 6 connections → `both`; otherwise →
-`aria2c`.
+**`smart`** probes each URL and picks: no-range / sizeless / small / no-h2 / low conns → `odm`; ≥256 MiB + ≥6 conns → `both`; otherwise → `aria2c`.
 
 ### Examples
 
 ```bash
-# aria2c-style: 5 segments over h2 streams (HTTPS server)
-odm --profile aria2c -c 5 https://files.test.xyz/big.iso
-
-# both engines at once on a big file: odm half + aria2c half
-odm --profile both -c 8 https://files.test.xyz/huge.iso
-
-# smart: let odm decide per file (batch)
+odm --profile aria2c -c 5 https://example.com/big.iso
+odm --profile both -c 8 https://example.com/huge.iso
 odm --profile smart -c 16 -i file-list.txt
-
-# tune the aria2c split (4 segments, don't split below 10 MiB)
-odm --profile aria2c --split 4 --min-split-size 10M https://files.test.xyz/big.iso
+odm --profile aria2c --split 4 --min-split-size 10M https://example.com/big.iso
 ```
 
-> **Note:** HTTP/2 negotiation needs HTTPS (ALPN). An `http://` URL or an
-> h1-only server makes the h2 profiles fall back to HTTP/1.1 automatically.
-> ODM's default `odm` profile deliberately disables HTTP/2 so `-c` always
-> means N real TCP connections — the multi-connection aggregation is the
-> point of the tool.
+> **Note:** HTTP/2 needs HTTPS (ALPN). `http://` URLs or h1-only servers fall back to HTTP/1.1 automatically.
 
 ---
 
 ## Configuration
 
-Config source priority (`CLI flags` win; a defaulted flag never overwrites a value the user put in a file):
+Config priority (a defaulted flag never overwrites a user-set value):
 
 ```
 CLI args  >  ~/.config/odm/config.conf  >  /etc/odm/config.conf  >  defaults
 ```
 
-The file is `key = value`, one per line, `#` for comments; key names match the CLI long-flags (without `--`). See [`configs/odm.conf.example`](configs/odm.conf.example) for a fully-commented template.
+Format is `key = value`, one per line, `#` for comments. Key names match CLI long-flags without `--`. See [`configs/odm.conf.example`](configs/odm.conf.example) for a fully-commented template.
 
-Key flags (`odm --help` for the full list):
+### Common flags
 
-```
--c, --connections N        total connection budget           (default 5)
--m, --max-connections N    soft ceiling; exceeding warns     (default 32)
-    --split-file/-sf N     connections per file in batch     (unset = 1 each)
--o, --output NAME          output filename (single-file only)
--d, --dir PATH             destination directory             (default cwd)
--i, --input-file FILE     read URL list from FILE
--y, --yes                  skip the confirmation prompt
-    --dry-run              probe + show the plan, download nothing
--q, --quiet                no progress bar (cron/scripts); also skips prompt
--x, --continue             resume incomplete file via .odm control file (default on)
-    --auto-rename          existing destination → name.<N>.ext
-    --skip-existing         skip files present with a matching size
-    --session-log FILE     JSONL progress/summary events (wrappers/GUIs)
--s, --chunk-size SIZE      work-stealing chunk size          (default 4M)
--n, --max-redirect N       redirect hops to follow            (default 5)
--r, --retry N              retries per segment                 (default 3)
--w, --retry-wait SEC       delay between retries             (default 2)
--t, --timeout SEC          dial+headers timeout              (default 30)
--u, --user-agent UA        custom User-Agent                 (default odm/<ver>)
--H, --header K:V           add a custom header (repeatable)
-    --load-cookies FILE    load Netscape cookies.txt as a Cookie header
-    --referer URL          set the Referer header
--p, --proxy URL            http/https/socks5 proxy
-    --check-certificate    verify TLS                        (default true)
-    --checksum algo:hash   verify md5/sha1/sha256
-    --checksum-url URL     fetch the checksum from a sidecar URL
-    --mirror URL           alternate URL for the same file (repeatable)
--l, --limit-rate RATE      global speed limit, e.g. 5M/500K
-    --limit-rate-per-task RATE  per-task speed cap (stacked on global), e.g. 2M
--L, --log FILE             mirror logs to FILE
-```
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c`, `--connections N` | Total connection budget | 5 |
+| `-m`, `--max-connections N` | Soft ceiling (warns above) | 32 |
+| `--split-file`, `-sf N` | Connections per file in batch | 1 each |
+| `-o`, `--output NAME` | Output filename (single-file only) | — |
+| `-d`, `--dir PATH` | Destination directory | cwd |
+| `-i`, `--input-file FILE` | Read URLs from file | — |
+| `-y`, `--yes` | Skip confirmation prompt | — |
+| `--dry-run` | Probe + show plan, download nothing | off |
+| `-q`, `--quiet` | No progress bar (cron/scripts); skips prompt | off |
+| `-x`, `--continue` | Resume via `.odm` control file | on |
+| `--auto-rename` | Save as `name.<N>.ext` on collision | off |
+| `--skip-existing` | Skip files present with matching size | off |
+| `--session-log FILE` | JSONL progress/summary events | — |
+| `-s`, `--chunk-size SIZE` | Work-stealing chunk size | 4M |
+| `-n`, `--max-redirect N` | Redirect hops | 5 |
+| `-r`, `--retry N` | Retries per segment | 3 |
+| `-w`, `--retry-wait SEC` | Delay between retries | 2 |
+| `-t`, `--timeout SEC` | Dial + headers timeout | 30 |
+| `-u`, `--user-agent UA` | Custom User-Agent | odm/\<ver\> |
+| `-H`, `--header K:V` | Add custom header (repeatable) | — |
+| `--load-cookies FILE` | Load Netscape cookies.txt | — |
+| `--referer URL` | Set Referer header | — |
+| `-p`, `--proxy URL` | http/https/socks5 proxy | — |
+| `--check-certificate` | Verify TLS | true |
+| `--checksum ALGO:HASH` | Verify md5/sha1/sha256 | — |
+| `--checksum-url URL` | Fetch checksum from sidecar URL | — |
+| `--mirror URL` | Alternate source (repeatable) | — |
+| `-l`, `--limit-rate RATE` | Global speed limit (e.g. 5M) | off |
+| `--limit-rate-per-task RATE` | Per-task speed cap | off |
+| `-L`, `--log FILE` | Mirror logs to file | — |
 
-> **Comma note:** each positional argument is one URL — commas inside a URL (e.g. `?ids=1,2,3`) are literal content. For long lists use `-i <file>` (one URL per line).
+> **Comma note:** each positional argument is one URL. Commas inside URLs (e.g. `?ids=1,2,3`) are literal. For long lists, use `-i <file>`.
 
 ---
 
 ## Rate limiting
 
-`--limit-rate` is enforced with a **global token bucket** shared across *all* active workers of *all* tasks, rather than splitting the limit per connection. Throttling happens at the data-stream level (bytes read from the network, before writing to disk), so the aggregate throughput stays close to the configured cap regardless of how many connections are alive or how the batch queue advances.
+`--limit-rate` uses a **global token bucket** shared across all workers of all tasks. Throttling happens at the data-stream level (bytes read from network, before writing to disk).
 
-An optional **per-task cap** (`--limit-rate-per-task`) can be stacked on top: each task gets its own token bucket, and the body is throttled through both the per-task and global buckets. The effective speed of a single task is `min(per-task, global)`, and the total across all tasks never exceeds the global cap. Both limits can be changed at runtime via RPC `odm.changeOption`.
+Optional `--limit-rate-per-task` adds a per-task bucket stacked on top. Effective single-task speed = `min(per-task, global)`. Both can be changed at runtime via RPC `odm.changeOption`.
 
-`--limit-rate` and `--limit-rate-per-task` both support human-readable suffixes: `5M`, `500K`, `2.5G`, `off` to disable.
+Suffixes: `5M`, `500K`, `2.5G`, `off` to disable.
 
-When a server starts throttling you (`HTTP 429`), ODM reacts on its own: the global rate halves (floor 64 KiB/s) so every connection eases off together, and the first successful chunk afterwards restores your configured cap.
+On HTTP 429, ODM halves the global rate automatically; the first healthy chunk after a cooldown restores your configured cap.
 
 ---
 
 ## Mirrors & verification
 
-**`--mirror URL`** (repeatable) registers alternate sources for the *same* file. Each chunk request rotates across the primary URL and every mirror, so a slow or throttling source simply serves fewer chunks while the rest keep full speed. Per-chunk `Content-Range` validation applies to each source independently — a misbehaving mirror fails its own chunks instead of corrupting the file. Mirrors are assumed byte-identical.
+**Mirrors** (`--mirror URL`, repeatable) rotate chunk requests across all sources. A slow/throttled source simply serves fewer chunks. Per-chunk `Content-Range` validation applies independently per source.
 
 ```bash
-odm -c 16 https://primary.example/big.iso --mirror https://mirror1.example/big.iso --mirror https://mirror2.example/big.iso
+odm -c 16 https://primary.example/big.iso \
+    --mirror https://mirror1.example/big.iso \
+    --mirror https://mirror2.example/big.iso
 ```
 
-**Verification** comes in three forms: explicit (`--checksum sha256:<hex>`), fetched from a sidecar (`--checksum-url https://host/file.sha256` accepts sha256sum/md5sum-style files or a bare hash), or embedded in a Metalink4 document. A checksum mismatch fails the task rather than keeping silently-corrupt output.
+**Verification** — three forms:
 
-**Metalink4**: `-i file.meta4` reads an RFC 5854 document — the mirror URLs become download targets (first = primary, rest feed `--mirror`) and the strongest listed hash becomes the checksum automatically:
+- Explicit: `--checksum sha256:<hex>`
+- Sidecar: `--checksum-url https://host/file.sha256` (sha256sum-style or bare hash)
+- Metalink4: `-i file.meta4` — mirrors become download targets, strongest hash auto-selected
 
 ```bash
 odm -c 16 -i release.meta4
 ```
 
+A checksum mismatch fails the task — no silent corruption.
+
 ---
 
 ## Resume & collisions
 
-With `-x`/`--continue` (on by default), each download writes a `<file>.odm` control file recording which chunks are already done. On re-run with the same destination present, only the un-finished chunks are re-fetched — no corruption, no restart. The control file is deleted on a clean completion. Resumed downloads also send the stored ETag as `If-Range`: if the remote file changed since the interruption, ODM detects it and restarts cleanly instead of stitching old bytes to new ones.
+With `--continue` (on by default), each download writes a `<file>.odm` control file tracking completed chunks. On re-run, only unfinished chunks are re-fetched. The stored ETag is sent as `If-Range` — if the remote file changed, ODM restarts cleanly instead of stitching old bytes to new.
 
-For an existing destination without a control file, two collision policies exist (mutually exclusive):
+Collision policies (mutually exclusive):
 
-- `--auto-rename` — save as `name.<N>.ext` (lowest free counter); the existing file is never touched.
-- `--skip-existing` — skip when a file of the same size is already there; a size mismatch warns and re-downloads.
+- `--auto-rename` — save as `name.<N>.ext` (lowest free counter), existing file untouched
+- `--skip-existing` — skip when same-size file is present, warn and re-download on mismatch
 
 ---
 
 ## Automation hooks
 
-- **`--dry-run`** — probe every URL, show the balancer's plan (mode, per-file connections, queue marks, total size), exit 0 without downloading.
-- **`--session-log FILE`** — append JSONL events (`progress` per task snapshot, closing `summary`) so wrappers/GUIs get a machine-readable feed without parsing terminal output; pairs naturally with the RPC server for full control.
+- **`--dry-run`** — probe every URL, show the balancer's plan (mode, per-file connections, total size), exit 0
+- **`--session-log FILE`** — append JSONL events (`progress` snapshots, closing `summary`) for wrappers/GUIs
 
 ---
 
 ## RPC server (`--rpc`)
 
-Run ODM as a daemon exposing JSON-RPC 2.0 + WebSocket, exactly so third-party GUIs/scripts can be built on top without parsing terminal output:
+JSON-RPC 2.0 + WebSocket daemon for third-party GUIs and scripts:
 
 ```
 POST  http://127.0.0.1:6900/rpc   (JSON-RPC 2.0)
- WS   ws://127.0.0.1:6900/ws      (event notifications)
+ WS   ws://127.0.0.1:6900/ws      (event push)
 ```
 
-Default bind is `127.0.0.1` (safe). `--rpc-listen-all` binds `0.0.0.0` — pair that with `--rpc-secret`. Auth is aria2-style: the first JSON-RPC param is `"token:<secret>"` (or `?secret=<value>` on the WebSocket upgrade).
+Default bind: `127.0.0.1`. `--rpc-listen-all` binds `0.0.0.0` — pair with `--rpc-secret`. TLS via `--rpc-tls-cert` + `--rpc-tls-key`.
 
-### Quickstart with `curl`
+Auth is aria2-style: first param is `"token:<secret>"` (or `?secret=<value>` on WebSocket upgrade).
+
+### Quickstart
 
 ```bash
-odm --rpc --rpc-secret hunter2 --rpc-listen-port 6900 -d ~/Downloads &
+odm --rpc --rpc-secret hunter2 -d ~/Downloads &
 
-# add a download; note the token:<secret> first param
+# Add a download
 curl -s -X POST http://127.0.0.1:6900/rpc -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"odm.addUri","params":["token:hunter2","https://files.test.xyz/x.tar.gz"],"id":1}'
-# → {"jsonrpc":"2.0","result":"odm-001","id":1}
+  -d '{"jsonrpc":"2.0","method":"odm.addUri","params":["token:hunter2","https://example.com/x.tar.gz"],"id":1}'
 
-# ask its status
+# Check status
 curl -s -X POST http://127.0.0.1:6900/rpc -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"odm.tellStatus","params":["token:hunter2","odm-001"],"id":2}'
 ```
@@ -274,76 +300,45 @@ curl -s -X POST http://127.0.0.1:6900/rpc -H 'Content-Type: application/json' \
 ### Methods
 
 | Method | Description |
-|---|---|
-| `odm.addUri` | Add a single URL to the queue. |
-| `odm.addBatch` | Add many URLs at once. |
-| `odm.pause` / `odm.pauseAll` | Pause a task / all tasks. |
-| `odm.unpause` / `odm.unpauseAll` | Resume paused task(s). |
-| `odm.remove` | Cancel and remove a task. |
-| `odm.tellStatus` | Detailed status of one task (progress, speed, conns, ETA). |
-| `odm.tellActive` / `odm.tellWaiting` / `odm.tellStopped` | List active / queued / finished tasks. |
-| `odm.changeOption` | Change options at runtime: `max-download-limit` (global rate), `max-download-limit-per-task` (per-task rate), `connections` (mid-flight reallocation). |
-| `odm.getGlobalStat` | Global stats (active/waiting/stopped counts). |
-| `odm.getVersion` | Version + enabled features. |
-| `odm.shutdown` | Shut the daemon down. |
+|--------|-------------|
+| `odm.addUri` | Add a single URL to the queue |
+| `odm.addBatch` | Add many URLs at once |
+| `odm.pause` / `odm.pauseAll` | Pause a task / all tasks |
+| `odm.unpause` / `odm.unpauseAll` | Resume paused task(s) |
+| `odm.remove` | Cancel and remove a task |
+| `odm.tellStatus` | Detailed status (progress, speed, conns, ETA) |
+| `odm.tellActive` / `tellWaiting` / `tellStopped` | List active / queued / finished tasks |
+| `odm.changeOption` | Runtime changes: `max-download-limit`, `connections`, etc. |
+| `odm.getGlobalStat` | Global stats (active/waiting/stopped counts) |
+| `odm.getVersion` | Version + features |
+| `odm.shutdown` | Shut the daemon down |
 
-### Events (WebSocket `/ws`)
-
-All five WebSocket events are emitted over the `/ws` fan-out:
+### WebSocket events (`/ws`)
 
 | Event | When |
-|---|---|
-| `onDownloadStart` | a task is added via `odm.addUri` |
-| `onDownloadProgress` | periodic snapshot (bytes done, speed, ETA) — throttled to ~250ms |
-| `onDownloadComplete` | a task finishes cleanly |
-| `onDownloadError` | a task fails / is cancelled |
-| `onDownloadPause` | a task is paused via `odm.pause` |
+|-------|------|
+| `onDownloadStart` | Task added via `odm.addUri` |
+| `onDownloadProgress` | Periodic snapshot (~250ms throttle) |
+| `onDownloadComplete` | Task finishes cleanly |
+| `onDownloadError` | Task fails / cancelled |
+| `onDownloadPause` | Task paused via `odm.pause` |
 
-Each event's `params` carries the same field set as `odm.tellStatus`'s result.
+Each event's `params` carries the same fields as `odm.tellStatus` result.
 
 ---
 
 ## Exit codes
 
 | Code | Meaning |
-|---|---|
-| `0` | All downloads succeeded |
-| `1` | General error / invalid argument |
-| `2` | Network error (all retries exhausted) |
-| `3` | Partial failure in a batch (some files failed) |
-| `4` | Cancelled by the user |
-
----
-
-## Acceptance
-
-The acceptance checklist is covered by the test suite:
-
-- Balancer Modes A/B/C produce allocations exactly matching the formulas — `internal/scheduler/balancer_test.go`.
-- Total active connections never exceed `--max-connections` (default 32) unless the user raises it — enforced in `Compute`, a warning is printed in that case.
-- Chunk-queue work-stealing: an artificially-slowed worker beats a static equal-split baseline — `internal/download/manager_workstealing_test.go`.
-- `--limit-rate` stable aggregate near the cap regardless of connection count — `internal/ratelimit` + integration in `internal/download`.
-- Progress bar renders per the pacman format with the `[x<N>]` per-file indicator and a non-TTY fallback — `internal/ui/progress_test.go`.
-- RPC `addUri`/`tellStatus` reachable via `curl`, all five RPC events (`onDownloadStart`/`Progress`/`Complete`/`Error`/`Pause`) received over a real `/ws` dial — `internal/rpc/server_test.go` (`TestServer_WSCompletionEvents`, `TestServer_WSErrorEvent`, `TestServer_WSDialEvent*`).
-- Resume (`--continue`) continues an interrupted download without corruption — `internal/download/manager_test.go`.
-- Redirects followed up to `--max-redirect` — `internal/transport/transport_test.go`.
-- Batch URL parsing (space-separated, URLs with literal commas, `-i`) — `internal/config/config_test.go`.
-- Dead links fail fast: a non-retryable 4xx chunk errors after one attempt instead of burning the retry budget — `internal/download/permanent_test.go`.
-- Resume drift detection via `If-Range` — a changed remote restarts cleanly instead of stitching old bytes to new — `internal/download/permanent_test.go`.
-- Mirror rotation spreads chunks across every source; assembled bytes match any single source — `internal/download/mirror_test.go`.
-- Collision policies (`--auto-rename`/`--skip-existing`) never touch a pre-existing file and re-download on size mismatch — `internal/download/collision_test.go`.
-- Cookies ride the header pipeline into every request and never leak into the `.odm` control file — `internal/download/cookie_test.go`, `internal/config/config_test.go`.
-- Metalink4 input parses URLs + strongest hash into the plan — `internal/config/config_test.go`.
-- Adaptive slowdown halves the global rate on 429 and restores the configured cap afterwards — `internal/ratelimit/bucket_test.go`.
-
-Run them all:
-
-```bash
-go test ./...
-```
+|------|---------|
+| 0 | All downloads succeeded |
+| 1 | General error / invalid argument |
+| 2 | Network error (all retries exhausted) |
+| 3 | Partial failure in batch |
+| 4 | Cancelled by user |
 
 ---
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [LICENSE](LICENSE).
