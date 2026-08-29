@@ -259,7 +259,7 @@ func runManual(latestVer, downloadURL string) error {
 	fmt.Printf("  %s\n", downloadURL)
 	fmt.Println()
 	fmt.Println("or use the install script:")
-	fmt.Println("  curl -fsSL https://odm.orynix.id/install | sh")
+	fmt.Println("  curl -fsSL https://odm.orynix.id/install.sh | sh")
 	return nil
 }
 

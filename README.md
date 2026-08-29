@@ -31,7 +31,7 @@ Also ships a pacman-style (`ILoveCandy`) progress bar and a JSON-RPC 2.0 + WebSo
 ### One-line install
 
 ```bash
-curl -fsSL https://odm.orynix.id/install | sh
+curl -fsSL https://odm.orynix.id/install.sh | sh
 ```
 
 Auto-detects prefix: writable `/usr/local` → system-wide, otherwise falls back to `~/.local` (no sudo). Also installs man page and config. Options: `--version X.Y.Z`, `--prefix /path`, `-y` (skip prompt).

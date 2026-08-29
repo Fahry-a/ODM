@@ -1,7 +1,7 @@
 #!/bin/sh
 # ODM (Oryn Download Manager) install script
-# Usage: curl -fsSL https://odm.orynix.id/install | sh
-#        curl -fsSL https://odm.orynix.id/install | sh -s -- --version 1.7.0
+# Usage: curl -fsSL https://odm.orynix.id/install.sh | sh
+#        curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --version 1.7.0
 set -e
 
 # --- defaults ----------------------------------------------------------------
@@ -28,8 +28,8 @@ usage() {
 ODM (Oryn Download Manager) installer
 
 Usage:
-  curl -fsSL https://odm.orynix.id/install | sh
-  curl -fsSL https://odm.orynix.id/install | sh -s -- [OPTIONS]
+  curl -fsSL https://odm.orynix.id/install.sh | sh
+  curl -fsSL https://odm.orynix.id/install.sh | sh -s -- [OPTIONS]
 
 Options:
   --version VERSION   Install a specific version (default: latest)
