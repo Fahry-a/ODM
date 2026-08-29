@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-08-29
+
+### Fixed
+
+- **Install script: handle `armv8l` architecture** — Android/Termux devices with
+  32-bit mode on ARMv8 CPUs (e.g. Samsung A13) reported `armv8l` from
+  `uname -m`, which was unrecognized. Now maps to `arm`. (`docs/public/install.sh`)
+- **Install script: checksum verification filename mismatch** — tarball was saved
+  as `odm.tar.gz` but `checksums.txt` expects `odm_VERSION_OS_ARCH.tar.gz`,
+  causing `sha256sum -c` to fail. (`docs/public/install.sh`)
+- **`odm update` crash on Termux/Android** — `isAUR()` called
+  `exec.LookPath("pacman")` which triggers `faccessat(AT_SYMLINK_NOFOLLOW)`,
+  a syscall blocked by Android's seccomp sandbox (SIGSYS). Now checks
+  `pacman` existence via `os.Stat` first. (`internal/update`)
+
 ## [1.7.1] - 2026-08-29
 
 ### Added
@@ -844,7 +859,8 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/Fahry-a/ODM/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/Fahry-a/ODM/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Fahry-a/ODM/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/Fahry-a/ODM/compare/v1.6.0...v1.6.1
