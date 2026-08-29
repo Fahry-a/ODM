@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-08-29
+
+### Added
+
+- **`odm update` subcommand** — self-update that auto-detects the install method
+  (AUR via `pacman -Qi`, self-installed via install.sh, or manual) and dispatches
+  to the appropriate update path: AUR prompts for yay/paru, self-installed
+  downloads + replaces the binary in-place, manual prints instructions.
+  (`internal/update`, `cmd/odm`)
+- **Version hint in `odm -h`** — when a newer release exists on GitHub, the help
+  output shows `→ update available: vX.Y.Z (odm update)`. Cached 24h via
+  `~/.config/odm/.last-update-check` to avoid hitting the API on every `--help`.
+  (`internal/update`, `cmd/odm`)
+- **One-line install script** (`curl -fsSL https://odm.orynix.id/install.sh | sh`)
+  — auto-detects prefix (writable `/usr/local` → system-wide, else `~/.local`),
+  installs binary + man page + config, verifies checksum. (`docs/public/install.sh`)
+
+### Changed
+
+- **README rewritten** — cleaner structure with features overview, one-line
+  install, installation guides (AUR, pre-built binaries, source, systemd),
+  and a more scannable flag reference table. (`README.md`)
+
+### Fixed
+
+- Duplicate doc comments in `task_io.go` and `task_checksum.go` (merge artifact
+  from the `task.go` split into 6 files). (`internal/download`)
+
 ## [1.7.0] - 2026-08-25
 
 ### Fixed
@@ -816,7 +844,9 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/Fahry-a/ODM/compare/v1.7.0...v1.7.1
+[1.7.0]: https://github.com/Fahry-a/ODM/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/Fahry-a/ODM/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/Fahry-a/ODM/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/Fahry-a/ODM/compare/v1.5.0...v1.5.1

@@ -57,6 +57,7 @@ internal/rpc → JSON-RPC 2.0 + WebSocket server, Broadcaster
 internal/ratelimit → Global token bucket (--limit-rate)
 internal/storage → File WriteAt, resume control files (.odm, per-chunk hashes)
 internal/logging → Leveled logger (--log / --log-level)
+internal/update → Self-update (odm update), version check, install method detection
 ```
 
 ## Key conventions
