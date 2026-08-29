@@ -88,7 +88,7 @@ detect_arch() {
     case "$_arch" in
         x86_64|amd64)   echo "amd64" ;;
         aarch64|arm64)   echo "arm64" ;;
-        armv7*|armv7l)   echo "arm" ;;
+        armv7*|armv7l|armv8*)  echo "arm" ;;
         i686|i386)       echo "386" ;;
         *)               err "unsupported architecture: $_arch" ;;
     esac
