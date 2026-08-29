@@ -214,7 +214,7 @@ func runSelf(latestVer, downloadURL string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	tarball := filepath.Join(tmpDir, "odm.tar.gz")
 
@@ -225,10 +225,7 @@ func runSelf(latestVer, downloadURL string) error {
 	}
 
 	// verify checksum
-	checksumURL := strings.Replace(downloadURL, "odm_"+latestVer, "checksums", 1)
-	checksumURL = checksumURL[:strings.LastIndex(checksumURL, "_")+1] + "checksums.txt"
-	// simpler: reconstruct from release URL pattern
-	checksumURL = fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/checksums.txt",
+	checksumURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/checksums.txt",
 		repoOwner, repoName, latestVer)
 	if err := verifyChecksum(tarball, checksumURL); err != nil {
 		fmt.Printf("checksum warning: %v\n", err)
@@ -414,11 +411,12 @@ func Hint(currentVersion string) string {
 		return ""
 	}
 
-	// write cache
+	// write cache (best-effort)
 	if cachePath != "" {
-		os.MkdirAll(filepath.Dir(cachePath), 0755)
-		content := fmt.Sprintf("%d\n%s", time.Now().Unix(), latestVer)
-		os.WriteFile(cachePath, []byte(content), 0644)
+		if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err == nil {
+			content := fmt.Sprintf("%d\n%s", time.Now().Unix(), latestVer)
+			_ = os.WriteFile(cachePath, []byte(content), 0644)
+		}
 	}
 
 	if CompareVersions(currentVersion, latestVer) < 0 {
