@@ -120,6 +120,103 @@ func TestWorker_RequeuesFailedChunk(t *testing.T) {
 	}
 }
 
+// TestConcurrentFailedAttemptRollbackOnlyOwnBytes pins a progress-accounting
+// race: a failed chunk attempt must roll back only bytes read by that attempt,
+// not bytes concurrently completed by other workers. The old implementation
+// computed rollback from the task-global bytesDone before/after values, so a
+// slow failing chunk could subtract another worker's successful chunk and leave
+// a completed download reporting partial progress (for example 43%).
+func TestConcurrentFailedAttemptRollbackOnlyOwnBytes(t *testing.T) {
+	payload := make([]byte, 2*1024)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+
+	partialWritten := make(chan struct{})
+	allowFailClose := make(chan struct{})
+	var chunkOneDone atomic.Bool
+	var firstChunkAttempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", itoaS(len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		start, end, ok := parseClientRangeS(r.Header.Get("Range"), len(payload))
+		if !ok {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Range", "bytes "+itoaS(int(start))+"-"+itoaS(int(end))+"/"+itoaS(len(payload)))
+		w.Header().Set("Content-Length", itoaS(int(end-start+1)))
+		w.WriteHeader(http.StatusPartialContent)
+
+		if start == 0 && firstChunkAttempts.Add(1) == 1 {
+			_, _ = w.Write(payload[:512])
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			close(partialWritten)
+			for !chunkOneDone.Load() {
+				select {
+				case <-allowFailClose:
+				case <-time.After(time.Millisecond):
+				}
+			}
+			return
+		}
+
+		_, _ = w.Write(payload[start : end+1])
+		if start == 1024 {
+			chunkOneDone.Store(true)
+			close(allowFailClose)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cli, err := transport.NewClient(transport.ClientConfig{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim, _ := ratelimit.New("")
+	task := NewTask(TaskID("rollback-own-bytes"), srv.URL, TaskOptions{
+		OutputName: "out.bin",
+		Dir:        dir,
+		Retry:      1,
+		RetryWait:  time.Millisecond,
+		ChunkSize:  1024,
+		Timeout:    5 * time.Second,
+	}, cli, lim, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- task.Start(context.Background(), 2, nil)
+	}()
+	select {
+	case <-partialWritten:
+	case err := <-done:
+		t.Fatalf("download finished before partial first chunk write: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for partial first chunk write")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("download should recover after retry: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for download completion")
+	}
+
+	if got := task.Snapshot().BytesDone; got != int64(len(payload)) {
+		t.Fatalf("completed download BytesDone = %d, want %d; failed attempt likely rolled back another worker's progress", got, len(payload))
+	}
+}
+
 // TestResume_DetectsStaleData pins the resume integrity check: when an
 // interrupted download is resumed but the on-disk bytes of a supposedly
 // completed chunk no longer match the server, the engine must re-download from

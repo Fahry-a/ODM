@@ -187,8 +187,10 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		// the digest is only recorded on a fully-successful attempt — a hash is
 		// never stored for a partially-written chunk.
 		h := sha256.New()
-		before := t.bytesDone.Load()
-		err := t.fetchAndWrite(ctx, eng, c, sink, h)
+		var attemptDone int64
+		err := t.fetchAndWrite(ctx, eng, c, sink, h, func(delta int64) {
+			attemptDone += delta
+		})
 		if err == nil {
 			t.storeChunkHash(eng.AbsStart(c.Start), hex.EncodeToString(h.Sum(nil)))
 			t.throttleOK()
@@ -201,9 +203,11 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		// the partial bytes via noteBytes, and the retry would count them AGAIN,
 		// pushing BytesDone past TotalSize (honest-metrics fix; data integrity
 		// is unaffected — the hasher is per-attempt too).
-		if d := t.bytesDone.Load() - before; d > 0 {
-			t.bytesDone.Add(-d)
-			t.noteBytes(-d, sink)
+		if attemptDone > 0 {
+			t.bytesDone.Add(-attemptDone)
+			if sink != nil {
+				sink(t.Snapshot())
+			}
 		}
 		// A 429 means the server is throttling THIS client's aggregate rate:
 		// halve the shared limiter so every worker eases off, not just this
@@ -255,7 +259,7 @@ func contentRangeStartsWith(cr string, want int64) bool {
 // by the global limiter and accounting bytes into progress. h receives every
 // byte written to disk so the caller can record the chunk's SHA-256 on success.
 // eng supplies the region base (both profile) and transport client.
-func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView), h hash.Hash) error {
+func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView), h hash.Hash, onAttemptBytes func(int64)) error {
 	// Per-chunk timeout prevents a stalled connection from hanging a worker
 	// forever (see chunkTimeoutCtx). If the timeout fires, the chunk is
 	// retried by the caller (downloadChunk).
@@ -265,7 +269,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	pr := t.probe.Load()
 	// Sizeless single-stream chunk: plain GET, no Range.
 	if pr.TotalSize < 0 || (pr.SingleStream && c.Start == 0 && c.Index == 0) {
-		return t.fetchWhole(chunkCtx, c, sink, h)
+		return t.fetchWhole(chunkCtx, c, sink, h, onAttemptBytes)
 	}
 
 	// Absolute offsets: region2 (both) starts at base, so Range and disk
@@ -345,6 +349,9 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	buf := make([]byte, 64*1024)
 	var off int64
 	n, err := copyChunkFrom(body, t.disk, absStart, buf, &off, h, func(delta int64) {
+		if onAttemptBytes != nil {
+			onAttemptBytes(delta)
+		}
 		t.noteBytes(delta, sink)
 	})
 	if err != nil {
@@ -366,7 +373,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 // plain GET of the whole resource, sequential write at offset 0; bytes are
 // counted into progress but the total stays -1 so the UI shows "sizeless".
 // h receives every byte written to disk (the whole-file chunk's SHA-256).
-func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash) error {
+func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash, onAttemptBytes func(int64)) error {
 	// Per-chunk timeout prevents a stalled connection from hanging forever.
 	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
@@ -398,6 +405,9 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 	}
 	buf := make([]byte, 64*1024)
 	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), h, func(delta int64) {
+		if onAttemptBytes != nil {
+			onAttemptBytes(delta)
+		}
 		t.noteBytes(delta, sink)
 	})
 	return err
