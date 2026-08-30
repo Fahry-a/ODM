@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-08-30
+
+### Fixed
+
+- **Skip interactive prompt when install script is piped** — when `odm update` is
+  invoked via `curl|sh`, stdin is not a tty; the `[y/N]` prompt now auto-proceeds
+  in that case with an informational message. (`docs/public/install.sh`)
+- **Force Cloudflare DNS (1.1.1.1) in update client for Android/Termux** — Go's
+  pure-Go DNS resolver on Android tries `[::1]:53` (IPv6 localhost) which does not
+  exist, causing `connection refused` when calling the GitHub API; the API client
+  now always dials Cloudflare over UDP. (`internal/update/update.go`)
+- **Isolate failed chunk progress rollback** — under concurrent multi-worker
+  downloads, a failing chunk could subtract bytes written by other workers via the
+  shared atomic counter; rollback now uses a per-attempt byte tracker to prevent
+  progress corruption. (`internal/download/task_io.go`)
+
 ## [1.7.2] - 2026-08-29
 
 ### Fixed
