@@ -4,15 +4,8 @@
 package update
 
 import (
-	"archive/tar"
-	"compress/gzip"
-	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,25 +21,23 @@ const (
 	githubAPI       = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
 	hintCacheFile   = ".last-update-check"
 	hintCacheDir    = ".config/odm"
-	hintCacheMaxAge = 24 * time.Hour
-	httpTimeout     = 5 * time.Second
+	hintCacheMaxAge  = 24 * time.Hour
+	installScriptURL = "https://odm.orynix.id/install.sh"
 )
 
 // CheckLatest fetches the latest release version from GitHub API.
 // Returns the bare version string (e.g. "1.8.0") and the tarball download URL.
+// Uses curl to avoid TLS/DNS issues with Go's pure-Go resolver on Android/Termux.
 func CheckLatest() (ver string, downloadURL string, err error) {
-	resp, err := apiClient().Get(githubAPI)
+	cmd := exec.Command("curl", "-fsSL", githubAPI)
+	out, err := cmd.Output()
 	if err != nil {
-		return "", "", fmt.Errorf("GitHub API: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", "", fmt.Errorf("GitHub API: status %d", resp.StatusCode)
+		return "", "", fmt.Errorf("GitHub API (curl): %w", err)
 	}
 	var release struct {
 		TagName string `json:"tag_name"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(out, &release); err != nil {
 		return "", "", fmt.Errorf("GitHub API: %w", err)
 	}
 	ver = strings.TrimPrefix(release.TagName, "v")
@@ -81,32 +72,6 @@ func parseSemver(s string) [3]int {
 		parts[i], _ = strconv.Atoi(p)
 	}
 	return parts
-}
-
-// apiClient returns an HTTP client that resolves DNS via Cloudflare (1.1.1.1)
-// when the system resolver fails (e.g. on Android/Termux where the pure-Go
-// resolver tries IPv6 localhost which doesn't exist).
-func apiClient() *http.Client {
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(_ context.Context, network, address string) (net.Conn, error) {
-			// Override: always use Cloudflare DNS on IPv4.
-			d := &net.Dialer{Timeout: 5 * time.Second}
-			return d.DialContext(context.Background(), "udp", "1.1.1.1:53")
-		},
-	}
-	dialer := &net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 5 * time.Second,
-		Resolver:  resolver,
-	}
-	return &http.Client{
-		Timeout: httpTimeout,
-		Transport: &http.Transport{
-			DialContext:       dialer.DialContext,
-			ForceAttemptHTTP2: true,
-		},
-	}
 }
 
 func goarch() string {
@@ -189,15 +154,15 @@ func isAUR() bool {
 		return false
 	}
 	cmd := exec.Command("pacman", "-Qi", "odm-bin")
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stdout = nil
+	cmd.Stderr = nil
 	return cmd.Run() == nil
 }
 
 // Run executes the self-update for the detected install method.
 func Run(currentVersion string) error {
 	method := DetectInstallMethod()
-	latestVer, downloadURL, err := CheckLatest()
+	latestVer, _, err := CheckLatest()
 	if err != nil {
 		return fmt.Errorf("checking for updates: %w", err)
 	}
@@ -213,9 +178,9 @@ func Run(currentVersion string) error {
 	case MethodAUR:
 		return runAUR()
 	case MethodSelf:
-		return runSelf(latestVer, downloadURL)
+		return runInstallScript()
 	case MethodManual:
-		return runManual(latestVer, downloadURL)
+		return runManual(latestVer)
 	}
 	return nil
 }
@@ -242,186 +207,54 @@ func runAUR() error {
 	return cmd.Run()
 }
 
-func runSelf(latestVer, downloadURL string) error {
-	exe, err := os.Executable()
+func runInstallScript() error {
+	// Resolve temp dir: prefer $TMPDIR (set by Termux), then os.TempDir(),
+	// then fall back to ~/.odm-tmp. Termux's /tmp is a symlink that may not
+	// exist or be writable.
+	tmpDir := os.Getenv("TMPDIR")
+	if tmpDir == "" {
+		tmpDir = os.TempDir()
+	}
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
+		home, _ := os.UserHomeDir()
+		tmpDir = filepath.Join(home, ".odm-tmp")
+		_ = os.MkdirAll(tmpDir, 0700)
+	}
+
+	tmpFile, err := os.CreateTemp(tmpDir, "odm-install-*.sh")
 	if err != nil {
-		return fmt.Errorf("cannot find binary path: %w", err)
+		return fmt.Errorf("creating temp file: %w", err)
 	}
-	exe, _ = filepath.EvalSymlinks(exe)
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
 
-	tmpDir, err := os.MkdirTemp("", "odm-update-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	tarball := filepath.Join(tmpDir, "odm.tar.gz")
-
-	// download
-	fmt.Println("downloading...")
-	if err := downloadFile(downloadURL, tarball); err != nil {
-		return fmt.Errorf("download failed: %w", err)
+	// Download install.sh via curl (uses system DNS/certs, works on all platforms).
+	fmt.Println("downloading install script...")
+	cmd := exec.Command("curl", "-fsSL", "-o", tmpPath, installScriptURL)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("downloading install script: %w", err)
 	}
 
-	// verify checksum
-	checksumURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/checksums.txt",
-		repoOwner, repoName, latestVer)
-	if err := verifyChecksum(tarball, checksumURL); err != nil {
-		fmt.Printf("checksum warning: %v\n", err)
+	// Execute install.sh --update with ODM_UPDATE=1 for env var fallback.
+	// Connect stdin/stdout/stderr so the user sees output and can interact
+	// with any prompts (e.g., sudo password).
+	cmd = exec.Command("bash", tmpPath, "--update")
+	cmd.Env = append(os.Environ(), "ODM_UPDATE=1")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("install script failed: %w", err)
 	}
-
-	// extract
-	fmt.Println("extracting...")
-	if err := extractTarball(tarball, tmpDir); err != nil {
-		return fmt.Errorf("extract failed: %w", err)
-	}
-
-	newBin := filepath.Join(tmpDir, "odm")
-	if _, err := os.Stat(newBin); err != nil {
-		return fmt.Errorf("binary 'odm' not found in tarball")
-	}
-
-	// replace current binary
-	fmt.Println("replacing binary...")
-	if err := replaceBinary(exe, newBin); err != nil {
-		return fmt.Errorf("replace failed: %w (you may need to run with sudo)", err)
-	}
-
-	fmt.Printf("odm updated to %s\n", latestVer)
 	return nil
 }
 
-func runManual(latestVer, downloadURL string) error {
+func runManual(latestVer string) error {
 	fmt.Printf("new version available: %s\n", latestVer)
-	fmt.Println()
-	fmt.Println("download from:")
-	fmt.Printf("  %s\n", downloadURL)
-	fmt.Println()
-	fmt.Println("or use the install script:")
-	fmt.Println("  curl -fsSL https://odm.orynix.id/install.sh | sh")
-	return nil
-}
-
-func replaceBinary(dst, src string) error {
-	// try atomic rename first (works on same filesystem)
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	// fallback: copy + chmod
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0755)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
-}
-
-func downloadFile(url, dest string) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	f, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
-}
-
-func verifyChecksum(tarball, checksumURL string) error {
-	resp, err := http.Get(checksumURL)
-	if err != nil {
-		return fmt.Errorf("fetch checksums: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("checksums.txt: HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	// compute sha256 of tarball
-	f, err := os.Open(tarball)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return err
-	}
-	actual := fmt.Sprintf("%x", h.Sum(nil))
-
-	// find matching line in checksums.txt
-	basename := filepath.Base(tarball)
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, basename) {
-			parts := strings.Fields(line)
-			if len(parts) >= 1 && parts[0] == actual {
-				return nil // match
-			}
-			return fmt.Errorf("checksum mismatch: got %s, want %s", actual, parts[0])
-		}
-	}
-	return nil // no matching line, skip
-}
-
-func extractTarball(tarball, dest string) error {
-	f, err := os.Open(tarball)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		name := filepath.Base(hdr.Name)
-		// only extract the binary and LICENSE
-		if name != "odm" && name != "LICENSE" {
-			continue
-		}
-		outPath := filepath.Join(dest, name)
-		out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode))
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, tr); err != nil {
-			out.Close()
-			return err
-		}
-		out.Close()
-	}
-	return nil
+	return runInstallScript()
 }
 
 // Hint returns a version-hint string if a newer release exists, or "" if

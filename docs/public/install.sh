@@ -2,6 +2,7 @@
 # ODM (Oryn Download Manager) install script
 # Usage: curl -fsSL https://odm.orynix.id/install.sh | sh
 #        curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --version 1.7.0
+#        curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --update
 set -e
 
 # --- defaults ----------------------------------------------------------------
@@ -9,6 +10,7 @@ REPO="Fahry-a/odm"
 PREFIX=""
 VERSION=""
 YES=0
+UPDATE=0
 
 # --- colors ------------------------------------------------------------------
 RED='\033[0;31m'
@@ -30,11 +32,13 @@ ODM (Oryn Download Manager) installer
 Usage:
   curl -fsSL https://odm.orynix.id/install.sh | sh
   curl -fsSL https://odm.orynix.id/install.sh | sh -s -- [OPTIONS]
+  curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --update
 
 Options:
   --version VERSION   Install a specific version (default: latest)
   --prefix PATH       Install prefix (default: auto-detect)
   -y, --yes           Skip confirmation prompt
+  --update            Update mode (auto-proceed, update messages)
   -h, --help          Show this help
 
 Install locations (auto-detected):
@@ -49,10 +53,16 @@ while [ $# -gt 0 ]; do
         --version)  VERSION="$2"; shift 2 ;;
         --prefix)   PREFIX="$2"; shift 2 ;;
         -y|--yes)   YES=1; shift ;;
+        --update)   UPDATE=1; shift ;;
         -h|--help)  usage ;;
         *)          err "unknown option: $1 (try --help)" ;;
     esac
 done
+
+# ODM_UPDATE=1 env var implies --update (for curl|sh pipeline fallback)
+if [ "${ODM_UPDATE:-0}" = "1" ]; then
+    UPDATE=1
+fi
 
 # --- dependency checks -------------------------------------------------------
 need() {
@@ -183,7 +193,7 @@ tar -xzf "$TARBALL" -C "$TMPDIR"
 # --- confirm -----------------------------------------------------------------
 INSTALL_BIN="${PREFIX}/bin/odm"
 
-if [ "$YES" -eq 0 ] && [ -f "$INSTALL_BIN" ]; then
+if [ "$UPDATE" -eq 0 ] && [ "$YES" -eq 0 ] && [ -f "$INSTALL_BIN" ]; then
     EXISTING_VER="$("$INSTALL_BIN" --version 2>/dev/null || echo "unknown")"
     warn "existing installation found: ${EXISTING_VER}"
     if [ -t 0 ]; then
@@ -216,7 +226,11 @@ do_install() {
 }
 
 # --- install binary ----------------------------------------------------------
-info "installing binary to ${INSTALL_BIN}..."
+if [ "$UPDATE" -eq 1 ]; then
+    info "updating binary at ${INSTALL_BIN}..."
+else
+    info "installing binary to ${INSTALL_BIN}..."
+fi
 do_install "$TMPDIR/odm" "$INSTALL_BIN" 755
 
 # --- install man page --------------------------------------------------------
@@ -234,7 +248,7 @@ else
     CONFIG_DIR="${HOME}/.config/odm"
 fi
 
-if [ ! -f "${CONFIG_DIR}/config.conf" ]; then
+if [ "$UPDATE" -eq 0 ] && [ ! -f "${CONFIG_DIR}/config.conf" ]; then
     info "installing config to ${CONFIG_DIR}/config.conf..."
     curl -fsSL -o "${TMPDIR}/odm.conf.example" \
         "https://raw.githubusercontent.com/${REPO}/main/configs/odm.conf.example" 2>/dev/null || true
@@ -245,8 +259,14 @@ fi
 
 # --- done --------------------------------------------------------------------
 echo ""
-ok "ODM v${VERSION} installed to ${INSTALL_BIN}"
+if [ "$UPDATE" -eq 1 ]; then
+    ok "ODM updated to v${VERSION}"
+else
+    ok "ODM v${VERSION} installed to ${INSTALL_BIN}"
+fi
 echo ""
 "$INSTALL_BIN" --version 2>/dev/null || true
-echo ""
-info "run 'odm --help' to get started"
+if [ "$UPDATE" -eq 0 ]; then
+    echo ""
+    info "run 'odm --help' to get started"
+fi

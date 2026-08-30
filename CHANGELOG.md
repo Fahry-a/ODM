@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`odm update` delegates to install.sh via subprocess** — instead of downloading
+  and replacing the binary internally (which fails on Termux due to TLS/DNS issues),
+  `odm update` now downloads install.sh and executes it in update mode. This unifies
+  the update path across all non-AUR platforms and leverages curl (system DNS/certs).
+  (`internal/update/update.go`)
+- **`CheckLatest()` uses curl instead of Go HTTP client** — avoids TLS certificate
+  verification failures caused by Go's pure-Go DNS resolver on Android/Termux.
+  (`internal/update/update.go`)
+
+### Added
+
+- **`--update` flag and `ODM_UPDATE` env var for install.sh** — install.sh now
+  accepts `--update` flag (or `ODM_UPDATE=1` env var for curl|sh pipeline fallback)
+  to enable update mode: auto-proceeds past confirmation, shows "Updating" messages
+  instead of "Installing", skips config install and PATH warnings.
+  (`docs/public/install.sh`)
+
+### Fixed
+
+- **Temp directory resolution for Termux** — `runInstallScript()` now resolves the
+  temp directory via `$TMPDIR` → `os.TempDir()` → `~/.odm-tmp` fallback chain,
+  avoiding Termux's `/tmp` symlink which may not exist or be writable.
+  (`internal/update/update.go`)
+
 ## [1.7.3] - 2026-08-30
 
 ### Fixed
