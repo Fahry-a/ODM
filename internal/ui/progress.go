@@ -175,12 +175,29 @@ func NewRenderer(w io.Writer, quiet bool) *Renderer {
 	}
 }
 
+// flushWriter pushes buffered output to the screen. When stdout is piped
+// through a block-buffered stdio layer (e.g., when the user's shell wraps the
+// command or when stdout is redirected), writes stay invisible until the buffer
+// is full or a newline flushes it — the classic "progress only appears on
+// Enter/new line" bug. Flushing after every frame makes the bar visible
+// immediately without waiting for the next newline.
+func flushWriter(w io.Writer) {
+	if f, ok := w.(interface{ Flush() error }); ok {
+		_ = f.Flush()
+		return
+	}
+	if s, ok := w.(interface{ Sync() error }); ok {
+		_ = s.Sync()
+	}
+}
+
 // Begin hides the cursor (TTY mode).
 func (r *Renderer) Begin() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.tty {
 		fmt.Fprint(r.w, ansiCursorHide)
+		flushWriter(r.w)
 	}
 }
 
@@ -197,6 +214,7 @@ func (r *Renderer) End() {
 		r.lastLines++
 	}
 	fmt.Fprintln(r.w)
+	flushWriter(r.w)
 }
 
 // Live reports whether the renderer owns a TTY screen (interactive run, not
@@ -234,6 +252,7 @@ func (r *Renderer) Interject(line string) {
 	}
 	if !r.tty {
 		fmt.Fprintln(r.w, line)
+		flushWriter(r.w)
 		return
 	}
 	// \r first: cursor-up preserves the column, so the erase must start from a
@@ -250,6 +269,7 @@ func (r *Renderer) Interject(line string) {
 		fmt.Fprintln(r.w, l)
 	}
 	r.lastLines = len(redrawn)
+	flushWriter(r.w)
 }
 
 // updateCache merges the frame's live + queued snapshots into r.cur.cache and
@@ -439,6 +459,7 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	// true totals, not the last throttled midpoint.)
 	if !r.tty {
 		r.emitNonTTY(view, st, live == nil && queued == nil)
+		flushWriter(r.w)
 		return
 	}
 
@@ -455,6 +476,7 @@ func (r *Renderer) Frame(live, queued []download.ProgressView) {
 	}
 	r.lastLines = len(lines)
 	r.indeterminateTick++
+	flushWriter(r.w)
 }
 
 // composeLines builds one frame's rows for a TTY: per-file task lines plus

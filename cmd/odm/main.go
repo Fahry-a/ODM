@@ -267,7 +267,12 @@ func run(argv []string) error {
 	// Progress renderer: a buffered snapshot channel feeds the RunLoop at the
 	// ~100ms cadence. The
 	// scheduler's ProgressCB pushes into it.
-	r := ui.NewRenderer(os.Stdout, o.Quiet)
+	// Prefer the TTY for progress: when stdout is piped (e.g., `odm url | cat`)
+	// but stderr is still a terminal, writing the bar to the piped stdout makes
+	// it block-buffered and invisible until a newline (Enter) flushes it — the
+	// classic "progress only appears on Enter" bug. Choose the TTY writer.
+	wOut := progressWriter()
+	r := ui.NewRenderer(wOut, o.Quiet)
 	// While the renderer owns a TTY screen, engine logs must go through it:
 	// a bare stderr write between frames shifts the terminal cursor, the next
 	// frame's cursor-up under-counts, and stale rows survive as duplicated
@@ -591,7 +596,8 @@ func shortURL(u string) string {
 // confirmPlan renders the prompt for the appropriate mode (single-file vs
 // batch) and returns the user's Y/n answer.
 func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64, profiles map[string]string, reasons map[string]string, mgr *download.Manager) (bool, error) {
-	useColor := ui.IsTTY(os.Stdout)
+	pw := progressWriter()
+	useColor := ui.IsTTY(pw)
 	if len(o.URLs) == 1 {
 		url := o.URLs[0]
 		conns := 1
@@ -613,7 +619,7 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 			profile = profiles[url]
 			reason = reasons[url]
 		}
-		return ui.ConfirmSingle(os.Stdin, os.Stdout, disp, name, size, conns, profile, reason, useColor)
+		return ui.ConfirmSingle(os.Stdin, pw, disp, name, size, conns, profile, reason, useColor)
 	}
 	// For the smart profile the per-file engine IS the interesting info — show
 	// it even when it resolves to the default odm engine. Explicit profiles
@@ -630,7 +636,7 @@ func confirmPlan(o *config.Options, plan *scheduler.Plan, sizes map[string]int64
 	} else if len(plan.Parallel) > 0 {
 		connsPerFile = plan.Parallel[0].Connections // Mode A/B: 1 or the budget
 	}
-	return ui.ConfirmBatch(os.Stdin, os.Stdout, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
+	return ui.ConfirmBatch(os.Stdin, pw, rows, connsPerFile, len(plan.Parallel), len(o.URLs), useColor)
 }
 
 // sessionLog appends one JSON object per line to --session-log: a machine-
@@ -685,14 +691,33 @@ func (s *sessionLog) summary(event string, succeeded, failed, total int) {
 // even though nothing actually errored, so the message says so and reminds the
 // user that --continue resumes where it left off.
 func printSummary(succeeded, failed, total int, cancelled bool) {
+	w := progressWriter()
 	switch {
 	case cancelled:
-		fmt.Fprintf(os.Stdout, "\nodm: cancelled — %d/%d files done; partial progress kept, re-run with --continue to resume\n",
+		fmt.Fprintf(w, "\nodm: cancelled — %d/%d files done; partial progress kept, re-run with --continue to resume\n",
 			succeeded, total)
 	default:
-		fmt.Fprintf(os.Stdout, "\nodm: %d/%d files succeeded (%d failed)\n",
+		fmt.Fprintf(w, "\nodm: %d/%d files succeeded (%d failed)\n",
 			succeeded, total, failed)
 	}
+	if f, ok := w.(interface{ Sync() error }); ok {
+		_ = f.Sync()
+	}
+}
+
+// progressWriter chooses the writer for the progress bar. When stdout is
+// piped but stderr is still a terminal (common when the user does `odm url | cat`
+// or when a shell wrapper pipes stdout), writing the bar to the piped stdout
+// makes it block-buffered — the bar stays invisible in the pipe's buffer until
+// a newline (Enter) flushes it. Using the TTY writer keeps the bar live.
+func progressWriter() io.Writer {
+	if ui.IsTTY(os.Stdout) {
+		return os.Stdout
+	}
+	if ui.IsTTY(os.Stderr) {
+		return os.Stderr
+	}
+	return os.Stdout
 }
 
 // signalCtx builds a context cancelled on SIGINT/SIGTERM so ^C aborts cleanly

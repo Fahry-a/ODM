@@ -227,7 +227,7 @@ func runInstallScript() error {
 	}
 	tmpPath := tmpFile.Name()
 	tmpFile.Close()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	// Download install.sh via curl (uses system DNS/certs, works on all platforms).
 	fmt.Println("downloading install script...")
