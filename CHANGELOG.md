@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-31
+
 ### Changed
 
 - **`odm update` delegates to install.sh via subprocess** — instead of downloading
@@ -28,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Progress bar invisible until Enter/new line and stacked lines** — when stdout
+  is block-buffered (piped, wrapped, or fully buffered stdio) the pacman bar's
+  writes stayed invisible until a newline flushed the buffer, causing stacked
+  `37.3K/?` lines and requiring Enter to appear. The renderer now flushes after
+  every frame (`Begin`/`End`/`Frame`/`Interject`) and prefers the TTY writer
+  (`stderr` when `stdout` is piped) so the bar is live immediately.
+  (`internal/ui/progress.go`, `cmd/odm/main.go`)
 - **Temp directory resolution for Termux** — `runInstallScript()` now resolves the
   temp directory via `$TMPDIR` → `os.TempDir()` → `~/.odm-tmp` fallback chain,
   avoiding Termux's `/tmp` symlink which may not exist or be writable.
