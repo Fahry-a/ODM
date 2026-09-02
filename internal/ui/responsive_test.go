@@ -261,11 +261,12 @@ func TestRenderSummary_FitsAllWidths(t *testing.T) {
 		if !strings.Contains(got, "%") {
 			t.Errorf("width %d: summary must keep the percent: %q", w, got)
 		}
-		if w == 120 && !strings.Contains(got, "ETA") {
+		if w >= 80 && !strings.Contains(got, "ETA") {
 			t.Errorf("width %d: full summary must keep ETA: %q", w, got)
 		}
-		if w <= 72 && strings.Contains(got, "ETA") {
-			t.Errorf("width %d: compact summary must drop ETA: %q", w, got)
+		// Compact mode keeps speed+ETA; minimal/floor modes drop them.
+		if w <= 20 && strings.Contains(got, "ETA") {
+			t.Errorf("width %d: minimal summary must drop ETA: %q", w, got)
 		}
 	}
 }

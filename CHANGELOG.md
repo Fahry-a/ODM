@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-09-02
+
+### Fixed
+
+- **Summary line loses speed/ETA on narrow terminals** — the compact fallback
+  mode used `BarWidth` (30) instead of the adaptive `barW` from `layoutFor`,
+  causing padding to go negative and triggering aggressive degradation that
+  dropped speed/ETA entirely. The compact tier now uses the adaptive bar width,
+  keeps speed/ETA when they fit, and right-aligns like the per-file task lines.
+  (`internal/ui/summary.go`)
+
 ## [1.8.0] - 2026-08-31
 
 ### Changed
@@ -910,7 +921,8 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.7.2...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/Fahry-a/ODM/compare/v1.8.0...v1.8.1
 [1.7.2]: https://github.com/Fahry-a/ODM/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/Fahry-a/ODM/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Fahry-a/ODM/compare/v1.6.1...v1.7.0

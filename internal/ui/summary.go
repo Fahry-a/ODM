@@ -220,19 +220,26 @@ func renderSummaryWidth(completed, total int, speedBps int64, eta, elapsed time.
 		if pad >= 2 {
 			return leftColored + strings.Repeat(" ", pad) + right
 		}
-		// Compact: left + bytes + bar + pct.
-		compact := fmt.Sprintf("%s  %s  [%s]  %s", leftColored, bytesStr, bar, pctColored)
-		if displayWidth(compact) <= termWidth {
-			return compact
+		// Compact: drop bytes, keep speed/ETA + bar + pct (matching the
+		// task line's layoutNoSpeedETA width), right-aligned so the bar
+		// column stays glued to the right edge like per-file lines.
+		compactRight := fmt.Sprintf("%s  ETA %s  [%s]  %s", sp, etaStr, bar, pctColored)
+		if useColor {
+			compactRight = strings.Replace(compactRight, sp, string(colorYellow)+sp+string(colorReset), 1)
 		}
-		// Minimal: short left ("Total: 3/5", no "completed") + pct.
+		compactPad := termWidth - displayWidth(leftColored) - displayWidth(compactRight) - 1
+		if compactPad >= 1 {
+			return leftColored + strings.Repeat(" ", compactPad) + compactRight
+		}
+		// Minimal: short left ("Total: 3/5", no "completed") + bar + pct.
 		leftShort := fmt.Sprintf("Total: %d/%d", completed, total)
 		if useColor {
 			leftShort = string(colorGreen) + leftShort + string(colorReset)
 		}
-		min := fmt.Sprintf("%s  %s", leftShort, pctColored)
-		if displayWidth(min) <= termWidth {
-			return min
+		minRight := fmt.Sprintf("[%s]  %s", bar, pctColored)
+		minPad := termWidth - displayWidth(leftShort) - displayWidth(minRight) - 1
+		if minPad >= 1 {
+			return leftShort + strings.Repeat(" ", minPad) + minRight
 		}
 		// Floor: the percent alone — always fits any width ≥ 4.
 		return pctColored
