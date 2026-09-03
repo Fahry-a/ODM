@@ -34,12 +34,23 @@ type Allocation struct {
 }
 
 // Plan is the complete output of the Balancer: the files that start in
-// parallel with their connection counts, the files that are queued, and any
-// validation warning/error text.
+// parallel with their connection counts, the files that are queued, any
+// validation warning/error text, and the runtime budget metadata used by the
+// live scheduler.
 type Plan struct {
 	Parallel []Allocation // running files, order matches distribution order
 	Queued   []Allocation // waiting files
 	Warning  string       // non-fatal warning text (e.g. C above ceiling), "" if none
+
+	// ConnectionBudget preserves the original -c budget for runtime balancing.
+	// In Mode C this is the budget that may move between live tasks as tasks
+	// finish or are admitted from the queue.
+	ConnectionBudget int
+
+	// RebalanceConnections is true only for explicit split-file batch mode
+	// (Mode C). Mode B deliberately keeps its "one connection per file"
+	// semantics, while Mode A already has the whole budget on one file.
+	RebalanceConnections bool
 }
 
 // Compute is the pure Connection Balancer. See the design notes.
@@ -57,7 +68,8 @@ type Plan struct {
 //
 // Mode C also distributes the remainder one connection at a time to the first
 // parallel files, and allocation-time reallocation redistributes budget
-// freed by non-range files — applied per scheduling pass in list order.
+// freed by non-range files. The live scheduler may additionally rebalance the
+// same total budget whenever a Mode C task leaves or enters the live set.
 func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error) {
 	if maxConnections <= 0 {
 		maxConnections = DefaultMaxConnections
@@ -70,7 +82,7 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 		return nil, fmt.Errorf("connection budget (-c) must be at least 1")
 	}
 
-	plan := &Plan{}
+	plan := &Plan{ConnectionBudget: C}
 
 	// Warning when the user explicitly raised the budget above the ceiling.
 	// Still proceed — the user opted in.
@@ -100,6 +112,7 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 	case SF == 0:
 		plan.Parallel, plan.Queued = modeB(C, files, maxConnections)
 	default:
+		plan.RebalanceConnections = true
 		plan.Parallel, plan.Queued = modeC(C, files, SF, maxConnections)
 	}
 
@@ -108,7 +121,7 @@ func Compute(C int, files []FileInput, SF int, maxConnections int) (*Plan, error
 
 // modeA — Single File: entire budget to the one file, capped by the
 // ceiling. Range support is decided by the probe; if not supported the file
-// still gets 1 (single-stream fallback,), and that decision is reflected
+// still gets 1 (single-stream fallback), and that decision is reflected
 // here so callers/renders stay consistent.
 func modeA(C int, files []FileInput, max int) []Allocation {
 	f := files[0]
@@ -170,7 +183,7 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 	distribute(conns, C-used, nonRange)
 
 	// Allocation-time reallocation for non-range files. A non-range
-	// parallel file is capped to exactly 1 (single-stream fallback,);
+	// parallel file is capped to exactly 1 (single-stream fallback);
 	// the budget it frees is redistributed one at a time, round-robin, to the
 	// *other* parallel files (the same shape as the remainder distribution),
 	// so the C budget is used to the fullest without giving extras back to a
@@ -198,7 +211,7 @@ func modeC(C int, files []FileInput, SF int, maxConns int) (parallel, queued []A
 			// Queued files inherit SF when they're admitted (Mode C per and
 			// the Scheduler's contract "each queued task inherits the same
 			// per-file connection budget (Mode C: SF)"). A queued single-stream
-			// file still caps at 1 (single-stream fallback,).
+			// file still caps at 1 (single-stream fallback).
 			a.Connections = SF
 			if !files[i].SupportsRange {
 				a.Connections = 1
