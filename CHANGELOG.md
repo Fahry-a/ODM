@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-09-03
+
+### Fixed
+
+- **RPC shutdown returns fake task ID** — `Scheduler.Enqueue` now returns an
+  error when the scheduler is winding down or the pending queue is full (128
+  task cap), so `Daemon.AddURL` propagates the failure to the RPC layer instead
+  of returning a task ID that will never complete. (`internal/scheduler/queue.go`,
+  `internal/scheduler/daemon.go`)
+- **Config validation bypassed by config-file values** — `Validate()` checked
+  `IsSet()` (CLI-explicit only) for profile-specific rejections, allowing
+  config-file values to bypass semantic rules. Now validates final merged
+  values against defaults. (`internal/config/config.go`)
+- **Negative `--split-file` accepted** — values like `-sf -1` silently passed
+  validation. Now rejected. (`internal/config/config.go`)
+- **`--rpc-listen-all` without authentication** — binding to 0.0.0.0 with no
+  `--rpc-secret` or TLS was only warned, not blocked. Now rejected.
+  (`internal/config/config.go`)
+- **Known-size single-stream short read** — a single-stream download could
+  reach EOF before the probed `TotalSize` and still succeed. Now detects the
+  mismatch. (`internal/download/task_io.go`)
+- **Global 429 cooldown lived per-task** — the adaptive 429 back-off timestamp
+  was on each `Task`, allowing one task's success to prematurely restore the
+  shared rate. Now consolidated into `ratelimit.Limiter`. (`internal/ratelimit/bucket.go`)
+
+### Changed
+
+- **Dynamic connection reallocation** — when a task completes, its connection
+  budget is redistributed to remaining tasks instead of sitting idle. The
+  scheduler now calls `AdjustConns` at runtime. (`internal/scheduler/`)
+
+### Security
+
+- **WebSocket resource limits** — inbound message size capped at 1 MiB,
+  read/write deadlines enforced (60s/10s), ping/pong keep-alive added.
+  (`internal/rpc/ws.go`)
+- **Rate parser overflow protection** — rejects NaN, Inf, negative rates, and
+  values exceeding `int64` or platform `int` capacity. `SetRate` validates
+  before mutating. (`internal/ratelimit/bucket.go`)
+- **CI self-modifying workflow removed** — workflow no longer requests
+  `contents: write` or pushes from CI runners. (`.github/workflows/`)
+
 ## [1.8.1] - 2026-09-02
 
 ### Fixed
