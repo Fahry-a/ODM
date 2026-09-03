@@ -963,8 +963,11 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/Fahry-a/ODM/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/Fahry-a/ODM/compare/v1.8.0...v1.8.1
+[1.8.0]: https://github.com/Fahry-a/ODM/compare/v1.7.3...v1.8.0
+[1.7.3]: https://github.com/Fahry-a/ODM/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/Fahry-a/ODM/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/Fahry-a/ODM/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Fahry-a/ODM/compare/v1.6.1...v1.7.0

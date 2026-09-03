@@ -95,10 +95,13 @@ Automated end-to-end. Push a version bump to `main` → `auto-tag.yml` validates
 and tags it → `release.yml` (tag push) verifies versions, cross-compiles, and
 creates the GitHub Release → `aur-publish.yml` ships the AUR package.
 
-**Release checklist (both must match the version being released):**
+**Release checklist (all must match the version being released):**
 
 1. `internal/version/version.go:14` — `const Version = "odm/X.Y.Z"`
 2. `packaging/PKGBUILD:9` — `pkgver=X.Y.Z`
+3. `CHANGELOG.md` — new `## [X.Y.Z] - YYYY-MM-DD` section, `[Unreleased]`
+   link updated to compare against the new tag, `[X.Y.Z]` link added, and
+   any missing links for existing sections filled in
 
 No separate bump needed — `version.Version` is the only source, imported
 directly by the packages that need it.
@@ -108,9 +111,13 @@ directly by the packages that need it.
 ```bash
 # 1. Bump the version in the 2 locations above
 # 2. Move the [Unreleased] section in CHANGELOG.md → new "## [X.Y.Z] - YYYY-MM-DD"
-# 3. Commit
+# 3. Update the link references at the bottom of CHANGELOG.md:
+#    - [Unreleased] now compares against the new tag: vNEW...HEAD
+#    - Add [X.Y.Z] link: compares previous tag → new tag
+#    - Add any missing links for versions that have sections but no links
+# 4. Commit
 git add -A && git commit -m "release: vX.Y.Z"
-# 4. Push main only — auto-tag.yml creates the tag, then release + AUR follow
+# 5. Push main only — auto-tag.yml creates the tag, then release + AUR follow
 git push origin main
 ```
 
