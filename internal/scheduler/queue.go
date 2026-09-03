@@ -56,9 +56,12 @@ type Scheduler struct {
 }
 
 // scheduledTask pairs a download.Task with its allocated connection count.
+// counted is true for a daemon task that was already added to the scheduler's
+// WaitGroup while waiting in the queue; admission must not count it again.
 type scheduledTask struct {
-	task  *download.Task
-	conns int
+	task    *download.Task
+	conns   int
+	counted bool
 }
 
 // ProgressCB forwards a snapshot of live + queued tasks to the UI/RPC layer.
@@ -172,7 +175,19 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 			// wg.Add (undefined behavior once Wait has observed zero).
 			s.mu.Lock()
 			s.windingDown = true
+			queuedCounted := 0
+			for _, q := range s.queued {
+				if q.counted {
+					queuedCounted++
+				}
+			}
+			// Queued daemon tasks that were counted have no worker goroutine,
+			// so cancellation must release their WaitGroup reservations too.
+			s.queued = nil
 			s.mu.Unlock()
+			for i := 0; i < queuedCounted; i++ {
+				s.wg.Done()
+			}
 			s.releaseIdle()
 			// Fall through to the drain loop below: in-flight tasks are
 			// cancelled by the shared ctx and each posts to s.compl as it winds
@@ -182,6 +197,7 @@ func (s *Scheduler) Run(ctx context.Context) (succeeded, failed int, err error) 
 		case st := <-s.compl:
 			s.handleComplete(st)
 			s.admitNext(ctx)
+			s.rebalanceLive(ctx)
 			s.emit()
 			continue
 		case <-doneCh:
@@ -229,12 +245,8 @@ func (s *Scheduler) activeTasks() int {
 // AddCounter increments the WaitGroup under the run-loop's knowledge of whether
 // shutdown is in progress. This is the root-cause fix for the Add-vs-Wait
 // shutdown race: Enqueue/admitNext used to call wg.Add directly from the RPC
-// goroutine while Run's background wg.Wait() was concurrently observing the
-// count — once the count hit zero and Wait returned, a racing Add was
-// undefined behavior per the Go docs. By funneling every Add through this
-// helper (which never adds once Run has started winding down), the shutdown
-// path is the only writer of the "winding down" flag, so a late Add can only
-// happen while Run still holds the guarantee that Wait hasn't returned.
+// goroutine while Run's background wg.Wait was concurrently observing the
+// count. The helper refuses once Run has started winding down. Guarded by mu.
 func (s *Scheduler) AddCounter() bool {
 	s.mu.Lock()
 	if s.windingDown {
@@ -256,7 +268,7 @@ func (s *Scheduler) releaseIdle() {
 		if s.isIdle {
 			s.wg.Done()
 			s.isIdle = false
-		}
+	}
 	})
 }
 
@@ -314,31 +326,23 @@ func (s *Scheduler) handleComplete(st scheduledTask) {
 	}
 }
 
-// Enqueue injects an externally-built task (RPC addUri) into the queue. Slot
-// admission happens the same way as batch-queued tasks. ctx is passed through
-// to startOne so the task honours daemon cancellation. Used only in daemon
-// mode; the CLI one-shot path never calls this.
+// Enqueue injects an externally-built task (RPC addUri) into the queue. The
+// task is counted exactly once while waiting; admitNext consumes that existing
+// reservation when the task gets a live slot. Used only in daemon mode.
 func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) {
 	s.mu.Lock()
-	s.queued = append(s.queued, st)
-	s.mu.Unlock()
-	// Count under the winding-down guard: a task admitted after shutdown
-	// started would otherwise Add to a WaitGroup whose Wait may have already
-	// returned. Refused adds are dropped — the daemon is exiting anyway.
-	if !s.AddCounter() {
-		// The refused task must not linger in the queued list: it would show up
-		// in TellWaiting forever and never run. Remove it (first match by id —
-		// Enqueue owns this entry; nothing else pops from the tail).
-		s.mu.Lock()
-		for i, q := range s.queued {
-			if q.task.ID() == st.task.ID() {
-				s.queued = append(s.queued[:i], s.queued[i+1:]...)
-				break
-			}
-		}
+	if s.windingDown {
 		s.mu.Unlock()
 		return
 	}
+	// Reserve the WaitGroup count under the same lock used by admitNext and the
+	// shutdown flag. This prevents a queued task from being counted twice if an
+	// admission races the RPC enqueue.
+	s.wg.Add(1)
+	st.counted = true
+	s.queued = append(s.queued, st)
+	s.mu.Unlock()
+
 	s.admitNext(ctx)
 }
 
@@ -396,13 +400,15 @@ func (s *Scheduler) admitNext(ctx context.Context) {
 	s.live[nxt.task.ID()] = nxt
 	s.mu.Unlock()
 
-	if !s.AddCounter() {
-		// Winding down — the task was already moved to live; remove it again
-		// so the bookkeeping stays consistent (the daemon is exiting anyway).
-		s.mu.Lock()
-		delete(s.live, nxt.task.ID())
-		s.mu.Unlock()
-		return
+	if !nxt.counted {
+		if !s.AddCounter() {
+			// Winding down — the task was already moved to live; remove it again
+			// so the bookkeeping stays consistent (the daemon is exiting anyway).
+			s.mu.Lock()
+			delete(s.live, nxt.task.ID())
+			s.mu.Unlock()
+			return
+		}
 	}
 	s.launch(ctx, nxt)
 }
@@ -416,8 +422,3 @@ func (s *Scheduler) emit() {
 	}
 	s.prog(s.LiveViews(), s.QueuedViews())
 }
-
-// SucceededCount/FailedCount expose live tallies (used by daemon shutdown
-// tests; getGlobalStat reads the Tell* view lengths instead).
-func (s *Scheduler) SucceededCount() int { return int(atomic.LoadInt32(&s.succeeded)) }
-func (s *Scheduler) FailedCount() int    { return int(atomic.LoadInt32(&s.failed)) }
