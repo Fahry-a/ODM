@@ -58,7 +58,6 @@ func New(spec string) (*Limiter, error) {
 	return l, nil
 }
 
-func Unlimited(l *Limiter) bool { return l == nil || l.lr.Load() == nil }
 func (l *Limiter) Unlimited() bool { return l == nil || l.lr.Load() == nil }
 
 const minAdaptiveBps = 64 * 1024
@@ -94,7 +93,6 @@ func (l *Limiter) ThrottleOK() {
 	if until == 0 || time.Now().UnixNano() < until {
 		return
 	}
-	// CAS clears the cooldown so only one worker performs the reset.
 	if l.cooldownUntil.CompareAndSwap(until, 0) {
 		l.ResetRate()
 	}
