@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -303,6 +304,13 @@ func (s *Scheduler) launch(ctx context.Context, st *scheduledTask) {
 // (a fresh slice is allocated so the backing array's pointers are released).
 var maxStoppedTasks = 1000
 
+// maxPendingTasks bounds how many tasks can sit in the scheduler's queue waiting
+// for a free slot. Without a cap an unlimited stream of RPC addUri calls would
+// consume unbounded memory (each queued task holds a *download.Task and a
+// WaitGroup reservation). 128 is generous enough for ordinary batch downloads
+// while preventing resource exhaustion from misbehaving or malicious clients.
+const maxPendingTasks = 128
+
 // handleComplete tallies the result and retires the slot.
 func (s *Scheduler) handleComplete(st scheduledTask) {
 	s.mu.Lock()
@@ -329,11 +337,18 @@ func (s *Scheduler) handleComplete(st scheduledTask) {
 // Enqueue injects an externally-built task (RPC addUri) into the queue. The
 // task is counted exactly once while waiting; admitNext consumes that existing
 // reservation when the task gets a live slot. Used only in daemon mode.
-func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) {
+// Returns an error when the scheduler is shutting down or the pending queue is
+// full, so the RPC layer can report a meaningful failure to the client instead
+// of returning a fake task ID.
+func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) error {
 	s.mu.Lock()
 	if s.windingDown {
 		s.mu.Unlock()
-		return
+		return errors.New("scheduler is shutting down")
+	}
+	if len(s.queued) >= maxPendingTasks {
+		s.mu.Unlock()
+		return errors.New("too many pending tasks")
 	}
 	// Reserve the WaitGroup count under the same lock used by admitNext and the
 	// shutdown flag. This prevents a queued task from being counted twice if an
@@ -344,6 +359,7 @@ func (s *Scheduler) Enqueue(st *scheduledTask, ctx context.Context) {
 	s.mu.Unlock()
 
 	s.admitNext(ctx)
+	return nil
 }
 
 // LiveViews returns snapshots of currently running tasks.

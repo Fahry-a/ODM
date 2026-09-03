@@ -142,15 +142,10 @@ func isPermanent(err error) bool {
 	return errors.As(err, &se) && se.Permanent
 }
 
-// throttleOK restores the configured rate after a successful chunk — but only
-// once throttleCooldown has passed since the latest 429. Without the cooldown,
-// the first healthy worker (chunks complete every few hundred ms on an active
-// download) would undo the halving while others are still being throttled.
+// throttleOK restores the configured rate only after the shared limiter's
+// global adaptive cooldown has expired.
 func (t *Task) throttleOK() {
-	last := t.lastThrottle.Load()
-	if last == 0 || time.Since(time.Unix(0, last)) >= throttleCooldown {
-		t.lim.ResetRate()
-	}
+	t.lim.ThrottleOK()
 }
 
 // statusErr classifies an HTTP status from a ranged/plain GET: permanent for
@@ -219,7 +214,6 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 			if t.lim.BackOffSignal() {
 				t.logf("warn", "server asked to slow down (429) — global rate halved")
 			}
-			t.lastThrottle.Store(time.Now().UnixNano())
 		}
 		// A permanent failure won't heal; skip the remaining attempts AND the
 		// worker-level requeue passes (the worker checks isPermanent too).
@@ -344,8 +338,6 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 		body = io.NopCloser(tl.Reader(chunkCtx, body))
 	}
 
-	// Copy chunk to disk at the absolute offset (base+Start for region2) using
-	// a small buffer; the WriteAt positions the write regardless of file pointer.
 	buf := make([]byte, 64*1024)
 	var off int64
 	n, err := copyChunkFrom(body, t.disk, absStart, buf, &off, h, func(delta int64) {
@@ -357,10 +349,6 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	if err != nil {
 		return err
 	}
-	// Validate we got the expected chunk size when it's bounded. A mismatch
-	// after a 206-with-verified-Content-Range means the server is lying about
-	// its own layout (the lying-206 case) — no amount of retrying fixes that,
-	// so classify it permanent like the other drift signals.
 	if c.End >= 0 && pr.TotalSize > 0 && off != (c.End-c.Start+1) {
 		err := fmt.Errorf("chunk %d short read: got %d want %d", c.Index, off, c.End-c.Start+1)
 		return transport.PermanentWrap(err, http.StatusExpectationFailed)
@@ -369,12 +357,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	return nil
 }
 
-// fetchWhole handles the sizeless or range-less single-stream case:
-// plain GET of the whole resource, sequential write at offset 0; bytes are
-// counted into progress but the total stays -1 so the UI shows "sizeless".
-// h receives every byte written to disk (the whole-file chunk's SHA-256).
 func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash, onAttemptBytes func(int64)) error {
-	// Per-chunk timeout prevents a stalled connection from hanging forever.
 	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
 
@@ -388,10 +371,6 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 		return err
 	}
 	defer resp.Body.Close()
-	// Non-2xx here is an error, not an empty file: writing a 403/404/500 body
-	// to disk would silently "complete" the task with garbage data. The ranged
-	// path validates status inside GetRange; the whole-file fallback (every
-	// non-range-capable and sizeless URL) must do the same.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		transport.SkipBody(resp.Body)
 		return statusErr(fmt.Sprintf("GET %s", pr.FinalURL), resp.StatusCode)
@@ -404,18 +383,27 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 		body = io.NopCloser(tl.Reader(chunkCtx, body))
 	}
 	buf := make([]byte, 64*1024)
-	_, err = copyChunkFrom(body, t.disk, 0, buf, new(int64), h, func(delta int64) {
+	var off int64
+	_, err = copyChunkFrom(body, t.disk, 0, buf, &off, h, func(delta int64) {
 		if onAttemptBytes != nil {
 			onAttemptBytes(delta)
 		}
 		t.noteBytes(delta, sink)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// A known-size single-stream resource must end exactly at its probed size.
+	// EOF before that point is a failed download, not a successful partial file.
+	if pr.TotalSize > 0 && off != pr.TotalSize {
+		return transport.PermanentWrap(
+			fmt.Errorf("short read: got %d bytes, want %d", off, pr.TotalSize),
+			http.StatusExpectationFailed,
+		)
+	}
+	return nil
 }
 
-// copyChunkFrom copies r into w.WriteAt at base offset, advancing a local
-// offset counter, feeding every written byte through h (may be nil), and
-// calling onProgress for each read's delta. Returns total n.
 func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64)) (int64, error) {
 	var total int64
 	for {
@@ -425,7 +413,6 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 				return total, werr
 			}
 			if h != nil {
-				// sha256.Write never fails; ignore the count/error.
 				_, _ = h.Write(buf[:n])
 			}
 			*off += int64(n)
@@ -443,13 +430,6 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 	}
 }
 
-// noteBytes updates the rolling speed measure and atomics and, when the ~100ms
-// progress gate elapses, pushes a fresh snapshot through sink so the UI/RPC
-// feeder sees live bytes-done *during* a long stream rather than only at chunk
-// boundaries. The gate is shared under rmMu across this task's workers, so the
-// sink fires ~10×/s per task regardless of how many connections are active.
-// sink may be nil (the Manager.Run test path and RPC single-task probes pass
-// nil); calling is skipped in that case.
 func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {
 	if delta < 0 {
 		return

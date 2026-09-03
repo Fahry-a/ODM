@@ -438,6 +438,9 @@ func (o *Options) Validate() error {
 	if o.Connections < 1 {
 		return errors.New("connection budget (-c) must be at least 1")
 	}
+	if o.SplitFile < 0 {
+		return errors.New("--split-file must not be negative")
+	}
 	if o.SplitFile != 0 && o.SplitFile > o.Connections {
 		return errors.New("split-file (-sf) cannot be greater than the total connection budget (-c)")
 	}
@@ -481,7 +484,7 @@ func (o *Options) Validate() error {
 	if o.Profile != "odm" && o.Profile != "smart" && o.SplitFile != 0 {
 		return fmt.Errorf("--split-file is only valid with the odm or smart profile (got --profile %s)", o.Profile)
 	}
-	if o.Profile == "both" && o.IsSet("chunk-size") {
+	if o.Profile == "both" && o.ChunkSize != "4M" {
 		return errors.New("--chunk-size is not supported with --profile both (fixed 50/50 split)")
 	}
 	if o.Split < 0 || o.MaxConnPerServer < 1 {
@@ -494,8 +497,11 @@ func (o *Options) Validate() error {
 	if o.Retry < 0 || o.RetryWait < 0 {
 		return errors.New("--retry and --retry-wait must be ≥ 0")
 	}
-	if o.Profile == "odm" && (o.IsSet("split") || o.IsSet("min-split-size") || o.IsSet("max-connection-per-server")) {
+	if o.Profile == "odm" && (o.Split != DefaultSplit || o.MinSplitSize != DefaultMinSplitSize || o.MaxConnPerServer != DefaultMaxConnPerServer) {
 		return errors.New("--split / --min-split-size / --max-connection-per-server are only valid with --profile aria2c|both|smart")
+	}
+	if o.RPCListenAll && o.RPCSecret == "" && o.RPCTLSCert == "" && o.RPCTLSKey == "" {
+		return errors.New("--rpc-listen-all requires --rpc-secret or TLS (--rpc-tls-cert/--rpc-tls-key) for authentication")
 	}
 	return nil
 }

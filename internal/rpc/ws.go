@@ -4,8 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	wsReadLimit  = 1 << 20
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 60 * time.Second
+	wsPingPeriod = (wsPongWait * 9) / 10
 )
 
 // Broadcaster fans WebSocket events out to all connected subscribers.
@@ -23,14 +31,10 @@ type subscriber struct {
 	drop chan struct{}
 }
 
-// NewBroadcaster builds an empty Broadcaster.
 func NewBroadcaster() *Broadcaster {
 	return &Broadcaster{subscribers: map[*subscriber]struct{}{}}
 }
 
-// Broadcast enqueues an event to every connected client. Non-blocking: clients
-// whose buffer is full are skipped (their next missed events will be obvious in
-// the UI).
 func (b *Broadcaster) Broadcast(e Event) {
 	b.mu.Lock()
 	subs := make([]*subscriber, 0, len(b.subscribers))
@@ -48,30 +52,36 @@ func (b *Broadcaster) Broadcast(e Event) {
 }
 
 // addWS attaches a WebSocket connection to the fan-out set and pumps events to
-// it until the connection closes.
+// it until the connection closes. Resource limits protect the RPC daemon from
+// clients that hold connections open indefinitely or send unbounded frames.
 func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
 	up := websocket.Upgrader{
-		// We require the secret via the query string OR the upgrade handler's
-		// auth wrapper (rpcAuth); AllowAllOrigin so browser GUIs can connect.
+		// Authentication is enforced by the HTTP auth wrapper. Origin checks
+		// remain disabled intentionally because browser GUIs may connect from
+		// a different local development origin.
 		CheckOrigin: func(*http.Request) bool { return true },
 	}
 	c, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		return err
 	}
+	c.SetReadLimit(wsReadLimit)
+	_ = c.SetReadDeadline(time.Now().Add(wsPongWait))
+	c.SetPongHandler(func(string) error {
+		return c.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
+
 	sub := &subscriber{conn: c, ch: make(chan Event, 64), drop: make(chan struct{})}
 	b.mu.Lock()
 	b.subscribers[sub] = struct{}{}
 	b.mu.Unlock()
 
-	// stop closes sub.drop exactly once. Both loops call it on exit so a failed
-	// write unblocks the read loop (and vice versa) — otherwise a half-closed
-	// connection would leak the read goroutine until the socket actually died.
 	var dropOnce sync.Once
 	stop := func() { dropOnce.Do(func() { close(sub.drop) }) }
 
-	// Pump loop: forward queued events until the connection dies or drop fires.
 	go func() {
+		ticker := time.NewTicker(wsPingPeriod)
+		defer ticker.Stop()
 		defer func() {
 			b.mu.Lock()
 			delete(b.subscribers, sub)
@@ -86,7 +96,17 @@ func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
 				if err != nil {
 					continue
 				}
+				if err := c.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+					return
+				}
 				if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+					return
+				}
+			case <-ticker.C:
+				if err := c.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+					return
+				}
+				if err := c.WriteMessage(websocket.PingMessage, nil); err != nil {
 					return
 				}
 			case <-sub.drop:
@@ -94,11 +114,11 @@ func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}()
-	// Read loop: discard inbound frames, exit on close/error.
+
 	go func() {
+		defer stop()
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
-				stop()
 				return
 			}
 		}
@@ -106,7 +126,6 @@ func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// SubscriberCount is exposed for tests / monitoring.
 func (b *Broadcaster) SubscriberCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

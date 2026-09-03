@@ -16,30 +16,26 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/time/rate"
 )
 
-// Limiter is the shared global rate limiter. The underlying *rate.Limiter is
-// held in an atomic pointer so SetRate (RPC changeOption) can swap it while
-// workers are concurrently calling Acquire/Reader — a plain field would be a
-// data race between the RPC goroutine and every active download worker. A nil
-// loaded pointer means "unlimited": Acquire/Reader are cheap no-ops.
 type Limiter struct {
 	lr    atomic.Pointer[rate.Limiter]
-	bytes atomic.Int64 // active rate (bytes/sec), 0 = unlimited
+	bytes atomic.Int64
 
-	// configured holds the user's --limit-rate so adaptive BackOff/ResetRate
-	// cycles can restore it. 0 = user never set a cap.
 	configured atomic.Int64
+	// cooldownUntil is shared by every task/worker using this limiter. A 429
+	// from one task therefore cannot be immediately undone by a successful
+	// chunk in another task.
+	cooldownUntil atomic.Int64 // unix nanos; 0 = no adaptive cooldown
 }
 
-// New builds a Limiter from a --limit-rate string ("5M", "500K", "0"/""/off =
-// unlimited). Suffixes: B/K/M/G/T, optional trailing 'b'/'B', binary power (K
-// = 1024). Empty/unset → unlimited.
 func New(spec string) (*Limiter, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" || strings.EqualFold(spec, "off") || spec == "0" {
@@ -52,8 +48,9 @@ func New(spec string) (*Limiter, error) {
 	if bps <= 0 {
 		return &Limiter{}, nil
 	}
-	// Burst = bps so a burst up to 1s of the cap is allowed (matches x/time/rate
-	// ergonomics; the long-run average stays at bps).
+	if bps > int64(maxInt()) {
+		return nil, fmt.Errorf("rate %d exceeds platform burst capacity", bps)
+	}
 	l := &Limiter{}
 	l.bytes.Store(bps)
 	l.configured.Store(bps)
@@ -61,15 +58,11 @@ func New(spec string) (*Limiter, error) {
 	return l, nil
 }
 
-// Unlimited reports whether the limiter is disabled.
 func (l *Limiter) Unlimited() bool { return l == nil || l.lr.Load() == nil }
 
-// minAdaptiveBps floors the adaptive slowdown so a hostile server can't drive
-// the effective rate to zero (which would look like a hang).
 const minAdaptiveBps = 64 * 1024
+const adaptiveCooldown = 30 * time.Second
 
-// BackOffSignal is BackOff with a "did anything change" report, so callers can
-// log only real transitions. False = unlimited limiter or already at floor.
 func (l *Limiter) BackOffSignal() bool {
 	if l == nil {
 		return false
@@ -86,11 +79,25 @@ func (l *Limiter) BackOffSignal() bool {
 		return false
 	}
 	l.setBytes(half)
+	l.cooldownUntil.Store(time.Now().Add(adaptiveCooldown).UnixNano())
 	return true
 }
 
-// ResetRate restores the configured rate after an adaptive back-off.
-// No-op when no cap was configured or the rate was never reduced.
+// ThrottleOK restores the configured rate only after the GLOBAL cooldown has
+// expired. It is safe to call from any task/worker sharing the limiter.
+func (l *Limiter) ThrottleOK() {
+	if l == nil {
+		return
+	}
+	until := l.cooldownUntil.Load()
+	if until == 0 || time.Now().UnixNano() < until {
+		return
+	}
+	if l.cooldownUntil.CompareAndSwap(until, 0) {
+		l.ResetRate()
+	}
+}
+
 func (l *Limiter) ResetRate() {
 	if l == nil {
 		return
@@ -100,27 +107,24 @@ func (l *Limiter) ResetRate() {
 	}
 }
 
-// setBytes swaps the active rate, creating the limiter if it was unlimited.
 func (l *Limiter) setBytes(bps int64) {
 	l.bytes.Store(bps)
 	cur := l.lr.Load()
+	burst := int(bps)
 	if cur == nil {
-		l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
+		l.lr.Store(rate.NewLimiter(rate.Limit(bps), burst))
 	} else {
 		cur.SetLimit(rate.Limit(bps))
-		cur.SetBurst(int(bps))
+		cur.SetBurst(burst)
 	}
 }
 
-// SetRate updates the global rate limit at runtime. spec is the same format as
-// New ("5M", "500K", "off"/""=unlimited). Safe for concurrent use — the limiter
-// itself is swapped/stored atomically, and x/time/rate's SetLimit/SetBurst are
-// goroutine-safe.
 func (l *Limiter) SetRate(spec string) error {
 	spec = strings.TrimSpace(spec)
 	if spec == "" || strings.EqualFold(spec, "off") || spec == "0" {
 		l.lr.Store(nil)
 		l.bytes.Store(0)
+		l.cooldownUntil.Store(0)
 		return nil
 	}
 	bps, err := ParseRate(spec)
@@ -130,10 +134,15 @@ func (l *Limiter) SetRate(spec string) error {
 	if bps <= 0 {
 		l.lr.Store(nil)
 		l.bytes.Store(0)
+		l.cooldownUntil.Store(0)
 		return nil
 	}
+	if bps > int64(maxInt()) {
+		return fmt.Errorf("rate %d exceeds platform burst capacity", bps)
+	}
 	l.bytes.Store(bps)
-	l.configured.Store(bps) // an explicit SetRate redefines the restore point
+	l.configured.Store(bps)
+	l.cooldownUntil.Store(0)
 	cur := l.lr.Load()
 	if cur == nil {
 		l.lr.Store(rate.NewLimiter(rate.Limit(bps), int(bps)))
@@ -144,14 +153,10 @@ func (l *Limiter) SetRate(spec string) error {
 	return nil
 }
 
-// Acquire waits until n bytes worth of tokens are available, honouring ctx
-// cancellation. n may be 0 (returns immediately) or negative (no-op).
 func (l *Limiter) Acquire(ctx context.Context, n int) error {
 	if n <= 0 {
 		return nil
 	}
-	// Load the pointer ONCE: a concurrent SetRate("off") stores nil between a
-	// separate Unlimited() check and this load would panic on WaitN.
 	lr := l.lr.Load()
 	if lr == nil {
 		return nil
@@ -162,11 +167,6 @@ func (l *Limiter) Acquire(ctx context.Context, n int) error {
 	return nil
 }
 
-// Reader wraps r so that reads acquire rate tokens proportional to the number
-// of bytes actually returned. It honours ctx for the wait; ctx==nil ⇒
-// background context. The returned reader is NOT safe for concurrent use on a
-// single reader (one stream → one reader), but the underlying Limiter is shared
-// across many concurrent readers — that's the whole point.
 func (l *Limiter) Reader(ctx context.Context, r io.Reader) *RateReader {
 	if ctx == nil {
 		ctx = context.Background()
@@ -174,39 +174,15 @@ func (l *Limiter) Reader(ctx context.Context, r io.Reader) *RateReader {
 	return &RateReader{src: r, l: l, ctx: ctx}
 }
 
-// RateReader is an io.Reader that throttles its source against the shared
-// Limiter.
-//
-// Throttling is POST-read: Read first lets the source return up to len(p)
-// bytes, then waits for tokens to cover exactly what it got. That means up to
-// one burst (by default ≈1s worth of the configured rate, see New) of bytes can
-// be in flight at any instant across all concurrent readers sharing the
-// Limiter. This is intentional and standard for stream throttling: the token
-// wait back-pressures the caller's NEXT read, so the long-run aggregate stays
-// at the ceiling while the pipe stays full. A pre-read wait would instead idle
-// each connection for a full burst interval on every read, starving throughput
-// on small buffers. The in-flight window is bounded by the burst, so the
-// worst-case overshoot is one burst — never one burst per read.
-//
-// A RateReader is NOT safe for concurrent use: create one per stream and use it
-// from a single goroutine (the engine wraps each connection's own source). The
-// underlying Limiter is shared across many concurrent readers — that sharing is
-// what enforces the global ceiling.
 type RateReader struct {
 	src io.Reader
 	l   *Limiter
 	ctx context.Context
 }
 
-// Read implements io.Reader. It delegates the read to src first, then waits
-// for tokens matching the bytes received (post-read throttling — see RateReader
-// for the burst-in-flight semantics). The *aggregate* across all readers stays
-// capped regardless of how buffers are sized per-connection.
 func (rr *RateReader) Read(p []byte) (int, error) {
 	n, err := rr.src.Read(p)
 	if n > 0 {
-		// Acquire re-checks the limiter pointer under one load — no TOCTOU
-		// with a concurrent SetRate("off") storing nil.
 		if werr := rr.l.Acquire(rr.ctx, n); werr != nil {
 			return n, errors.Join(err, werr)
 		}
@@ -214,15 +190,11 @@ func (rr *RateReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// ParseRate converts a human rate string ("5M", "500K", "2.5G") to bytes/sec.
-// Suffix K/M/G/T = powers of 1024; optional trailing 'B' or 'B/s'. Bare
-// integer ⇒ bytes/sec.
 func ParseRate(spec string) (int64, error) {
 	s := strings.TrimSpace(spec)
 	if s == "" {
 		return 0, errors.New("empty rate")
 	}
-	// strip trailing "/s" or "/S" if present
 	if strings.HasSuffix(s, "/s") || strings.HasSuffix(s, "/S") {
 		s = strings.TrimSpace(s[:len(s)-2])
 	}
@@ -255,7 +227,19 @@ func ParseRate(spec string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid rate %q: %w", spec, err)
 	}
-	// Multiply in float then truncate so fractional rates keep precision
-	// (int64(1.5)*mult would lose the .5).
-	return int64(v * float64(mult)), nil
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0, fmt.Errorf("invalid rate %q", spec)
+	}
+	max := float64(maxInt64()) / float64(mult)
+	if v > max {
+		return 0, fmt.Errorf("rate %q overflows int64", spec)
+	}
+	bps := int64(v * float64(mult))
+	if bps > int64(maxInt()) {
+		return 0, fmt.Errorf("rate %q exceeds platform int capacity", spec)
+	}
+	return bps, nil
 }
+
+func maxInt() int { return int(^uint(0) >> 1) }
+func maxInt64() int64 { return int64(^uint64(0) >> 1) }

@@ -51,10 +51,6 @@ const (
 	// displayed speed decays to 0 (see rateMeasure.tick). Shorter than this a
 	// quiet window reads as jitter, not a stall.
 	stallDecayWindow = 2 * time.Second
-
-	// throttleCooldown is how long after the latest 429 before a successful
-	// chunk restores the user's configured rate (see downloadChunk/throttleOK).
-	throttleCooldown = 30 * time.Second
 )
 
 func (s TaskState) String() string {
@@ -191,10 +187,6 @@ type Task struct {
 
 	// mirrorIdx rotates chunk requests across opts.Mirrors (round-robin).
 	mirrorIdx atomic.Uint64
-
-	// lastThrottle tracks the most recent 429 so throttleOK only restores the
-	// configured rate after a quiet period, not on the first healthy chunk.
-	lastThrottle atomic.Int64 // unix nanos; 0 = never throttled
 
 	// persistWarned gates the one-shot log warning when SaveControl fails
 	// (checkpoints fire per-chunk-count/time — one warn per task, not per try).
