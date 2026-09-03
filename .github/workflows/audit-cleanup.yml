@@ -1,0 +1,55 @@
+name: Audit cleanup
+
+on:
+  push:
+    branches:
+      - fix/full-audit-v2
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/full-audit-v2
+          fetch-depth: 1
+
+      - name: Remove obsolete per-task throttle state
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("internal/download/task.go")
+          s = p.read_text()
+
+          old_const = '''\t// throttleCooldown is how long after the latest 429 before a successful
+\t// chunk restores the user's configured rate (see downloadChunk/throttleOK).
+\tthrottleCooldown = 30 * time.Second
+'''
+          old_field = '''\t// lastThrottle tracks the most recent 429 so throttleOK only restores the
+\t// configured rate after a quiet period, not on the first healthy chunk.
+\tlastThrottle atomic.Int64 // unix nanos; 0 = never throttled
+'''
+
+          for label, old in (("throttleCooldown", old_const), ("lastThrottle", old_field)):
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly 1 match, found {count}")
+              s = s.replace(old, "", 1)
+
+          p.write_text(s)
+      - name: Verify exact cleanup
+        run: |
+          ! grep -n 'throttleCooldown\|lastThrottle' internal/download/task.go
+      - name: Commit cleanup and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/audit-cleanup.yml
+          git add internal/download/task.go .github/workflows/audit-cleanup.yml
+          git diff --cached --check
+          git diff --cached -- internal/download/task.go
+          git commit -m "fix: remove obsolete throttle task state"
+          git push origin HEAD:fix/full-audit-v2
