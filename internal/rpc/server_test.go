@@ -633,3 +633,36 @@ func TestServer_WSErrorEvent(t *testing.T) {
 		t.Fatalf("missing onDownloadError for a failing task; seen=%v", got)
 	}
 }
+
+// TestServer_AddUriRejectsAfterShutdown pins the fix for fake task IDs: addUri
+// after the scheduler is shutting down must return an RPC error instead of a
+// task ID that will never complete.
+func TestServer_AddUriRejectsAfterShutdown(t *testing.T) {
+	hs, srv, stop := startServer(t, "")
+	defer stop()
+	url := hs.URL + "/rpc"
+
+	// Shutdown the daemon.
+	r := jsonRPC(t, url, "odm.shutdown", nil, 1)
+	if r.Error != nil {
+		t.Fatalf("shutdown: %v", r.Error)
+	}
+
+	// Wait for daemon to be dead.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.Daemon().Dead() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !srv.Daemon().Dead() {
+		t.Fatal("daemon did not stop")
+	}
+
+	// addUri after shutdown must return an error, not a fake task ID.
+	r = jsonRPC(t, url, "odm.addUri", []any{"http://example.invalid/late.bin", 1}, 2)
+	if r.Error == nil {
+		t.Fatalf("addUri after shutdown must fail, got goid %v", r.Result)
+	}
+}

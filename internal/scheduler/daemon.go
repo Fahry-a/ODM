@@ -148,7 +148,9 @@ func (d *Daemon) AddURL(url string, conns int) (download.TaskID, error) {
 	}
 
 	// Hand the new task to the scheduler's queue so the next free slot admits it.
-	d.sch.Enqueue(st, ctx)
+	if err := d.sch.Enqueue(st, ctx); err != nil {
+		return "", err
+	}
 	return t.ID(), nil
 }
 

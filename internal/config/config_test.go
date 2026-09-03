@@ -160,6 +160,7 @@ func TestValidate(t *testing.T) {
 		{"chunk-size + both", func(o *Options) *Options {
 			o.Profile = "both"
 			o.changedFlag("chunk-size")
+			o.ChunkSize = "8M"
 			return o
 		}, false},
 		{"split + odm", func(o *Options) *Options {
@@ -169,10 +170,72 @@ func TestValidate(t *testing.T) {
 		}, false},
 		{"split + aria2c ok", func(o *Options) *Options { o.Profile = "aria2c"; o.Split = 4; return o }, true},
 		{"max-conn-per-server 0", func(o *Options) *Options { o.Profile = "aria2c"; o.MaxConnPerServer = 0; return o }, false},
+		{"sf=-1", func(o *Options) *Options { o.SplitFile = -1; return o }, false},
+		{"sf=-100", func(o *Options) *Options { o.SplitFile = -100; return o }, false},
+		{"listen-all no auth", func(o *Options) *Options {
+			o.RPCListenAll = true
+			return o
+		}, false},
+		{"listen-all with secret", func(o *Options) *Options {
+			o.RPCListenAll = true
+			o.RPCSecret = "tok"
+			return o
+		}, true},
+		{"listen-all with tls", func(o *Options) *Options {
+			o.RPCListenAll = true
+			o.RPCTLSCert = "/a/b.crt"
+			o.RPCTLSKey = "/a/b.key"
+			return o
+		}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.mut(DefaultPtr()).Validate()
+			if (err == nil) != c.ok {
+				t.Fatalf("ok=%v but err=%v", c.ok, err)
+			}
+		})
+	}
+}
+
+// TestValidate_ConfigFileValues enforces that validation checks final merged
+// values, not the source (CLI vs config-file). Values set via Apply() simulate
+// config-file entries — IsSet() returns false for them, but the semantic rules
+// must still apply.
+func TestValidate_ConfigFileValues(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(o *Options)
+		ok   bool
+	}{
+		{"both + chunk-size via config", func(o *Options) {
+			o.Profile = "both"
+			_ = o.Apply(map[string]string{"chunk-size": "8M"})
+		}, false},
+		{"odm + split via config", func(o *Options) {
+			o.Profile = "odm"
+			_ = o.Apply(map[string]string{"split": "4"})
+		}, false},
+		{"odm + min-split-size via config", func(o *Options) {
+			o.Profile = "odm"
+			_ = o.Apply(map[string]string{"min-split-size": "10M"})
+		}, false},
+		{"odm + max-conn-per-server via config", func(o *Options) {
+			o.Profile = "odm"
+			_ = o.Apply(map[string]string{"max-connection-per-server": "4"})
+		}, false},
+		{"listen-all via config no secret", func(o *Options) {
+			_ = o.Apply(map[string]string{"rpc-listen-all": "true"})
+		}, false},
+		{"sf=-1 via config", func(o *Options) {
+			_ = o.Apply(map[string]string{"split-file": "-1"})
+		}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := DefaultPtr()
+			c.mut(o)
+			err := o.Validate()
 			if (err == nil) != c.ok {
 				t.Fatalf("ok=%v but err=%v", c.ok, err)
 			}
