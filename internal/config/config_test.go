@@ -187,6 +187,16 @@ func TestValidate(t *testing.T) {
 			o.RPCTLSKey = "/a/b.key"
 			return o
 		}, true},
+		{"listen-all cert only", func(o *Options) *Options {
+			o.RPCListenAll = true
+			o.RPCTLSCert = "/a/b.crt"
+			return o
+		}, false},
+		{"listen-all key only", func(o *Options) *Options {
+			o.RPCListenAll = true
+			o.RPCTLSKey = "/a/b.key"
+			return o
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

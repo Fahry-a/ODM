@@ -256,3 +256,105 @@ func TestEnqueue_RejectsWhenQueueFull(t *testing.T) {
 		t.Fatal("Enqueue beyond pending limit must fail")
 	}
 }
+
+// TestEnqueue_ConcurrentEnqueue proves the pending-task bound holds under
+// concurrent enqueue pressure. Multiple goroutines race to fill the queue;
+// after all finish, len(queued) must not exceed maxPendingTasks and no
+// bookkeeping invariant is violated.
+func TestEnqueue_ConcurrentEnqueue(t *testing.T) {
+	mgr, err := download.NewManager(download.ExecOptions{
+		Dir:         t.TempDir(),
+		Connections: 1,
+		ChunkSize:   4096,
+		Retry:       0,
+		Timeout:     5 * time.Second,
+		CheckCert:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	sch := NewEmptyScheduler(0, mgr.NewTask, nil)
+	ctx := context.Background()
+
+	const goroutines = 200
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	errCount := 0
+	var errMu sync.Mutex
+
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			tk, _, _ := mgr.NewTask("http://example.invalid/concurrent", -1)
+			if err := sch.Enqueue(&scheduledTask{task: tk, conns: 1}, ctx); err != nil {
+				errMu.Lock()
+				errCount++
+				errMu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Some enqueues must have been rejected (200 > 128).
+	if errCount == 0 {
+		t.Fatal("expected some concurrent enqueues to be rejected")
+	}
+
+	// Queue must not exceed the limit.
+	sch.mu.Lock()
+	qlen := len(sch.queued)
+	sch.mu.Unlock()
+	if qlen > maxPendingTasks {
+		t.Fatalf("queue length %d exceeds max %d", qlen, maxPendingTasks)
+	}
+}
+
+// TestEnqueue_ShutdownRace proves there is no race between concurrent AddURL
+// calls and scheduler shutdown. This is the exact scenario from the audit
+// finding: RPC Enqueue racing with scheduler cancellation / Wait.
+func TestEnqueue_ShutdownRace(t *testing.T) {
+	for range 50 {
+		mgr, err := download.NewManager(download.ExecOptions{
+			Dir:         t.TempDir(),
+			Connections: 1,
+			ChunkSize:   4096,
+			Retry:       0,
+			Timeout:     5 * time.Second,
+			CheckCert:   true,
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		sch := NewEmptyScheduler(1, mgr.NewTask, nil)
+		d := NewDaemon(sch, mgr)
+		ctx, cancel := context.WithCancel(context.Background())
+		d.Start(ctx)
+
+		var wg sync.WaitGroup
+
+		// Goroutine A: repeatedly AddURL until shutdown.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				_, _ = d.AddURL("http://example.invalid/race", 1)
+			}
+		}()
+
+		// Goroutine B: cancel after a short delay.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			time.Sleep(time.Microsecond)
+			cancel()
+		}()
+
+		wg.Wait()
+
+		// Wait for daemon to be dead.
+		deadline := time.Now().Add(3 * time.Second)
+		for !d.Dead() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
+}

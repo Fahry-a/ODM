@@ -116,6 +116,13 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 	}
 }
 
+// retireIfAboveTarget attempts to retire this worker when the live connection
+// count exceeds the target (AdjustConns reduction). The retirement is a CAS
+// on t.conns: exactly the first (live - target) workers to call it win and
+// exit, and every loser re-reads the (now-decremented) count and keeps
+// working. This makes the drain exact regardless of how many workers check
+// simultaneously. Returns true when the caller should exit (the counter was
+// already decremented here).
 func (t *Task) retireIfAboveTarget() bool {
 	for {
 		live := t.conns.Load()
@@ -128,6 +135,8 @@ func (t *Task) retireIfAboveTarget() bool {
 	}
 }
 
+// isPermanent reports whether err is a retry-proof failure (a
+// transport.StatusError flagged permanent anywhere in its Unwrap chain).
 func isPermanent(err error) bool {
 	var se transport.StatusError
 	return errors.As(err, &se) && se.Permanent
@@ -139,16 +148,25 @@ func (t *Task) throttleOK() {
 	t.lim.ThrottleOK()
 }
 
+// statusErr classifies an HTTP status from a ranged/plain GET: permanent for
+// client errors except the two retryable ones (transport.IsPermanent),
+// transient otherwise.
 func statusErr(msg string, status int) error {
 	return transport.PermanentWrap(fmt.Errorf("%s: status %d", msg, status), status)
 }
 
+// downloadChunk fetches one chunk's byte-range (retrying up to opts.Retry times
+// with exponential RetryWait backoff) and writes it to disk at the chunk's
+// offset. `eng` supplies the region base (both profile) and transport client.
 func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView)) error {
 	var lastErr error
 	for attempt := range t.opts.Retry + 1 {
 		if attempt > 0 {
 			t.setState(StateRetrying)
 			t.retries.Add(1)
+			// Exponential backoff, capped so late attempts don't wait minutes:
+			// RetryWait << attempt, max 30s. RetryWait 0 (tests, unset) keeps
+			// zero wait — only a positive base is capped upward.
 			wait := t.opts.RetryWait << min(attempt, 30)
 			if t.opts.RetryWait > 0 && (wait > 30*time.Second || wait <= 0) {
 				wait = 30 * time.Second
@@ -160,6 +178,9 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 			}
 		}
 		t.setState(StateActive)
+		// Per-attempt hasher: every byte written to disk is fed through it, but
+		// the digest is only recorded on a fully-successful attempt — a hash is
+		// never stored for a partially-written chunk.
 		h := sha256.New()
 		var attemptDone int64
 		err := t.fetchAndWrite(ctx, eng, c, sink, h, func(delta int64) {
@@ -173,18 +194,29 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Roll back this attempt's progress delta: fetchAndWrite already counted
+		// the partial bytes via noteBytes, and the retry would count them AGAIN,
+		// pushing BytesDone past TotalSize (honest-metrics fix; data integrity
+		// is unaffected — the hasher is per-attempt too).
 		if attemptDone > 0 {
 			t.bytesDone.Add(-attemptDone)
 			if sink != nil {
 				sink(t.Snapshot())
 			}
 		}
+		// A 429 means the server is throttling THIS client's aggregate rate:
+		// halve the shared limiter so every worker eases off, not just this
+		// chunk's retries. The restore is cooldown-based (throttleOK), not
+		// per-chunk-success — one healthy worker must not undo the halving
+		// while others are still being 429'd.
 		var se transport.StatusError
 		if errors.As(err, &se) && se.Status == http.StatusTooManyRequests {
 			if t.lim.BackOffSignal() {
 				t.logf("warn", "server asked to slow down (429) — global rate halved")
 			}
 		}
+		// A permanent failure won't heal; skip the remaining attempts AND the
+		// worker-level requeue passes (the worker checks isPermanent too).
 		if isPermanent(err) {
 			return err
 		}
@@ -194,6 +226,8 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 	return lastErr
 }
 
+// chunkTimeoutCtx derives the per-chunk context: Timeout*10 (default 300s)
+// so a stalled connection can't hang a worker forever.
 func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	tmo := t.opts.Timeout * 10
 	if tmo <= 0 {
@@ -202,6 +236,9 @@ func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.Ca
 	return context.WithTimeout(ctx, tmo)
 }
 
+// contentRangeStartsWith reports whether a Content-Range header value
+// ("bytes S-E/T") declares S == want. A 206 without a parseable start is
+// treated as hostile — RFC 9110 requires the header on single-range 206s.
 func contentRangeStartsWith(cr string, want int64) bool {
 	rest, ok := strings.CutPrefix(cr, "bytes ")
 	if !ok {
@@ -212,15 +249,25 @@ func contentRangeStartsWith(cr string, want int64) bool {
 	return err == nil && start == want
 }
 
+// fetchAndWrite does a single ranged GET and copies the body to disk, throttled
+// by the global limiter and accounting bytes into progress. h receives every
+// byte written to disk so the caller can record the chunk's SHA-256 on success.
+// eng supplies the region base (both profile) and transport client.
 func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView), h hash.Hash, onAttemptBytes func(int64)) error {
+	// Per-chunk timeout prevents a stalled connection from hanging a worker
+	// forever (see chunkTimeoutCtx). If the timeout fires, the chunk is
+	// retried by the caller (downloadChunk).
 	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
 	defer chunkCancel()
 
 	pr := t.probe.Load()
+	// Sizeless single-stream chunk: plain GET, no Range.
 	if pr.TotalSize < 0 || (pr.SingleStream && c.Start == 0 && c.Index == 0) {
 		return t.fetchWhole(chunkCtx, c, sink, h, onAttemptBytes)
 	}
 
+	// Absolute offsets: region2 (both) starts at base, so Range and disk
+	// write use base+rel.
 	absStart := eng.AbsStart(c.Start)
 	absEnd := c.End
 	if absEnd >= 0 {
@@ -229,12 +276,19 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	if absEnd < 0 {
 		absEnd = -1
 	}
+	// Mirror rotation: each chunk request takes the next URL in the mirror
+	// list (round-robin across all workers), so a batch of chunks spreads over
+	// every source. The primary URL stays in the rotation too — it's slot 0.
 	url := pr.FinalURL
 	ifRange := t.resumeETag
 	if n := len(t.opts.Mirrors); n > 0 {
 		i := t.mirrorIdx.Add(1) % uint64(n+1)
 		if i > 0 {
 			url = t.opts.Mirrors[i-1]
+			// If-Range carries the PRIMARY's ETag — a mirror with a different
+			// ETag scheme would answer 200 and be misread as resource drift.
+			// Mirrors get no If-Range; their Content-Range validation still
+			// guards every response.
 			ifRange = ""
 			t.logf("info", "chunk %d from mirror %s", c.Index, url)
 		}
@@ -244,6 +298,13 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 		return err
 	}
 	defer resp.Body.Close()
+	// A 200 here means the server answered outside this run's byte layout:
+	// either it ignored Range entirely (writing the full body at the chunk's
+	// offset would corrupt the file — chunk 3's slot would hold bytes from
+	// position 0), or an If-Range resume detected that the resource changed
+	// since the interrupted run. Both are drift: retrying won't fix it, so
+	// this is classified PERMANENT explicitly (a plain statusErr would leave
+	// 200 retryable — the old behaviour caused a retry-storm before failing).
 	if resp.StatusCode != http.StatusPartialContent {
 		transport.SkipBody(resp.Body)
 		op := "server ignored range request"
@@ -256,6 +317,10 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 			Permanent: true,
 		}
 	}
+	// A 206 whose Content-Range doesn't start at the requested offset is the
+	// same corruption vector as a 200: the bytes belong somewhere else on
+	// disk. Verify before a single byte is written; like the 200 case, no
+	// amount of retrying fixes a server that lies about its own layout.
 	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, absStart) {
 		transport.SkipBody(resp.Body)
 		return transport.StatusError{
