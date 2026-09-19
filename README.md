@@ -41,9 +41,6 @@ Auto-detects prefix: writable `/usr/local` → system-wide, otherwise falls back
 ```bash
 # Pre-built binary (recommended)
 yay -S odm-bin
-
-# Or build from source
-yay -S odm
 ```
 
 ### Pre-built binaries
