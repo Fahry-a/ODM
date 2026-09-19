@@ -39,7 +39,6 @@ Auto-detects prefix: writable `/usr/local` → system-wide, otherwise falls back
 ### Arch Linux (AUR)
 
 ```bash
-# Pre-built binary (recommended)
 yay -S odm-bin
 ```
 
