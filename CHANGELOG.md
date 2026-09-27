@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-09-27
+
+### Changed
+
+- **Download engine hygiene** — filename helpers (`uniqueName`,
+  `sizeOrUnknown`, `formatSegSize`, `flattenFilename`, `deriveFilename`)
+  extracted from `task.go` into `task_filename.go` (move-only, no behavior
+  change); duplicate doc comments left over from the `task.go` split cleaned
+  up. (`internal/download`)
+- **Faster engine tests** — test-only timeout/delay trims (`Timeout` 30s→10s,
+  work-stealing throttle 120ms→60ms). `TestWorkStealing` now runs in ~0.6s
+  and stays stable across repeated `-race` runs; no production code touched.
+  (`internal/download`)
+
 ## [1.9.0] - 2026-09-03
 
 ### Fixed
@@ -963,7 +977,8 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/Fahry-a/ODM/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/Fahry-a/ODM/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/Fahry-a/ODM/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/Fahry-a/ODM/compare/v1.7.3...v1.8.0
