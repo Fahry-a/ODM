@@ -57,7 +57,7 @@ func TestLimitRate_StableAggregate(t *testing.T) {
 			RetryWait:   0,
 			Continue:    false,
 			ChunkSize:   chunk,
-			Timeout:     30 * time.Second,
+			Timeout:     10 * time.Second,
 			CheckCert:   true,
 			LimitRate:   capStr,
 		}, nil)
@@ -65,7 +65,7 @@ func TestLimitRate_StableAggregate(t *testing.T) {
 			t.Fatalf("NewManager(c=%d): %v", conns, err)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		start := time.Now()
 		if err := m.Run(ctx, srv.URL, conns); err != nil {

@@ -42,7 +42,7 @@ func TestWorkStealing_BeatsStaticEqualSplit(t *testing.T) {
 		numChunks     = 64        // total payload = 1 MiB across 64 chunks
 		S             = 4         // parallel workers/connections (also static-split parts)
 		slowCount     = 8         // last 8 chunks form the slow region (lives in one static slice)
-		perChunkDelay = 120 * time.Millisecond
+		perChunkDelay = 60 * time.Millisecond
 	)
 
 	payload := make([]byte, int64(chunk)*numChunks)
@@ -63,14 +63,14 @@ func TestWorkStealing_BeatsStaticEqualSplit(t *testing.T) {
 		RetryWait:   0,
 		Continue:    false,
 		ChunkSize:   chunk,
-		Timeout:     30 * time.Second,
+		Timeout:     10 * time.Second,
 		CheckCert:   true,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	wsCtx, wsCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	wsCtx, wsCancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer wsCancel()
 	wsStart := time.Now()
 	if err := m.Run(wsCtx, srv.URL, S); err != nil {

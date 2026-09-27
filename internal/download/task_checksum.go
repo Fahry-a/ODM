@@ -76,6 +76,3 @@ func (t *Task) verifyChecksum() error {
 	}
 	return verifyChecksum(t.outPath, algo, hexStr)
 }
-
-// finish flushes and persist/removes the control file; an error from the
-// caller already set the state.
