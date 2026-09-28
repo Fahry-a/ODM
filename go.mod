@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/spf13/pflag v1.0.10
-	golang.org/x/time v0.15.0
+	golang.org/x/time v0.16.0
 )
 
 require (
