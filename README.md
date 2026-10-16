@@ -58,6 +58,16 @@ tar -xzf odm_*.tar.gz
 sudo install -Dm755 odm /usr/local/bin/odm
 ```
 
+### Foenui Package Registry
+
+Release tarballs can also be mirrored to [Foenui PM](https://pm.foenui.net/). The release workflow publishes all six Linux/macOS targets to the `foenui/odm` organization namespace when the `FOENUI_UPLOAD_TOKEN` Actions secret is configured in this repository. Without that secret, normal GitHub Releases and AUR publishing continue as before.
+
+After a release is mirrored, its public artifact URL follows this pattern:
+
+`https://files.oryn.my.id/package/foenui/odm/<version>/<os>/<arch>/odm_<version>_<os>_<arch>.tar.gz`
+
+The upload action sends the local SHA-256 to Foenui PM and verifies the checksum returned by the server. Use an organization-scoped token with `package:write` access to `foenui/odm`; store it as the repository secret `FOENUI_UPLOAD_TOKEN`, never in the workflow file.
+
 ### From source
 
 Requires **Go 1.26+**.
