@@ -122,8 +122,8 @@ jobs:
         uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_386.tar.gz
-          owner: foenui
-          organization: "true"
+          owner: fahry-a
+          organization: "false"
           package: odm
           version: ${{ steps.tag.outputs.version }}
           os: linux
@@ -136,8 +136,8 @@ jobs:
         uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_amd64.tar.gz
-          owner: foenui
-          organization: "true"
+          owner: fahry-a
+          organization: "false"
           package: odm
           version: ${{ steps.tag.outputs.version }}
           os: linux
@@ -150,8 +150,8 @@ jobs:
         uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_arm.tar.gz
-          owner: foenui
-          organization: "true"
+          owner: fahry-a
+          organization: "false"
           package: odm
           version: ${{ steps.tag.outputs.version }}
           os: linux
@@ -164,8 +164,8 @@ jobs:
         uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_arm64.tar.gz
-          owner: foenui
-          organization: "true"
+          owner: fahry-a
+          organization: "false"
           package: odm
           version: ${{ steps.tag.outputs.version }}
           os: linux
@@ -178,8 +178,8 @@ jobs:
         uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_darwin_amd64.tar.gz
-          owner: foenui
-          organization: "true"
+          owner: fahry-a
+          organization: "false"
           package: odm
           version: ${{ steps.tag.outputs.version }}
           os: darwin
@@ -192,8 +192,8 @@ jobs:
         uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_darwin_arm64.tar.gz
-          owner: foenui
-          organization: "true"
+          owner: fahry-a
+          organization: "false"
           package: odm
           version: ${{ steps.tag.outputs.version }}
           os: darwin
