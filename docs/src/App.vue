@@ -12,6 +12,7 @@ const navLinks = [
   { href: 'https://github.com/Fahry-a/ODM', label: 'Source' },
 ]
 
+const foenuiLogo = `${import.meta.env.BASE_URL}foenui.webp`
 const routeHash = ref(window.location.hash)
 const route = computed(() => (routeHash.value === '#/docs' || routeHash.value.startsWith('#docs-') ? 'docs' : 'home'))
 
@@ -25,7 +26,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 
 <template>
 <header class="nav-slab">
-  <a class="slab-mark" href="#top">odm</a>
+  <a class="slab-mark" href="#top" aria-label="ODM home"><img :src="foenuiLogo" width="28" height="28" alt="" /><span>odm</span></a>
   <nav class="slab-nav" aria-label="Primary">
     <ul>
       <li v-for="link in navLinks" :key="link.href"><a :href="link.href">{{ link.label }}</a></li>
