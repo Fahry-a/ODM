@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-10-17
+
+### Changed
+
+- **Foenui PM release mirror** — the release workflow publishes all six cross-compiled ODM archives to the personal Foenui PM namespace (fahry-a/odm), providing a real end-to-end test of package upload during a release.
+
 ## [1.9.1] - 2026-09-27
 
 ### Changed
@@ -977,7 +983,8 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.9.1...HEAD
+[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.9.2...HEAD
+[1.9.2]: https://github.com/Fahry-a/ODM/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/Fahry-a/ODM/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/Fahry-a/ODM/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/Fahry-a/ODM/compare/v1.8.0...v1.8.1
