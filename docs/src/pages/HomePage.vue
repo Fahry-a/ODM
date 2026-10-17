@@ -106,7 +106,7 @@ import DownloadAnimation from '../components/DownloadAnimation.vue'
         <code>{{ cmd }}</code>
         <CopyButton :text="cmd" />
       </div>
-      <p class="note">Prefer a tarball? Grab one from the <a href="https://github.com/Fahry-a/ODM/releases/latest">releases page →</a></p>
+      <p class="note">Prefer a tarball? Grab one from the <a href="https://github.com/Fahry-a/ODM/releases/latest">releases page →</a> or browse the <a href="https://pm.foenui.net/" target="_blank" rel="noreferrer">Foenui registry ↗</a>.</p>
     </div>
   </div>
 </section>

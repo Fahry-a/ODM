@@ -79,7 +79,7 @@ jobs:
         run: bash .github/scripts/gen-checksums.sh "${{ steps.tag.outputs.version }}"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: v${{ steps.tag.outputs.version }}
           name: v${{ steps.tag.outputs.version }}
@@ -101,3 +101,102 @@ jobs:
           # suppressed for GITHUB_TOKEN-triggered runs.
           gh workflow run aur-publish.yml -f "tag=v${VERSION}" --ref main
           echo "Dispatched aur-publish.yml for v$VERSION"
+
+      # The registry mirror is opt-in so existing releases keep working
+      # until FOENUI_UPLOAD_TOKEN has been configured in repository settings.
+      - name: Check Foenui PM publishing configuration
+        id: foenui-pm
+        env:
+          FOENUI_UPLOAD_TOKEN: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
+        run: |
+          if [[ -n "$FOENUI_UPLOAD_TOKEN" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Foenui PM publishing is enabled."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Foenui PM mirror skipped::Add the FOENUI_UPLOAD_TOKEN repository secret to mirror future release tarballs."
+          fi
+
+      - name: Publish linux/386 to Foenui PM
+        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
+        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        with:
+          source: build/odm_${{ steps.tag.outputs.version }}_linux_386.tar.gz
+          owner: fahry-a
+          organization: "false"
+          package: odm
+          version: ${{ steps.tag.outputs.version }}
+          os: linux
+          arch: "386"
+          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
+
+      - name: Publish linux/amd64 to Foenui PM
+        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
+        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        with:
+          source: build/odm_${{ steps.tag.outputs.version }}_linux_amd64.tar.gz
+          owner: fahry-a
+          organization: "false"
+          package: odm
+          version: ${{ steps.tag.outputs.version }}
+          os: linux
+          arch: amd64
+          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
+
+      - name: Publish linux/arm to Foenui PM
+        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
+        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        with:
+          source: build/odm_${{ steps.tag.outputs.version }}_linux_arm.tar.gz
+          owner: fahry-a
+          organization: "false"
+          package: odm
+          version: ${{ steps.tag.outputs.version }}
+          os: linux
+          arch: arm
+          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
+
+      - name: Publish linux/arm64 to Foenui PM
+        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
+        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        with:
+          source: build/odm_${{ steps.tag.outputs.version }}_linux_arm64.tar.gz
+          owner: fahry-a
+          organization: "false"
+          package: odm
+          version: ${{ steps.tag.outputs.version }}
+          os: linux
+          arch: arm64
+          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
+
+      - name: Publish darwin/amd64 to Foenui PM
+        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
+        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        with:
+          source: build/odm_${{ steps.tag.outputs.version }}_darwin_amd64.tar.gz
+          owner: fahry-a
+          organization: "false"
+          package: odm
+          version: ${{ steps.tag.outputs.version }}
+          os: darwin
+          arch: amd64
+          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
+
+      - name: Publish darwin/arm64 to Foenui PM
+        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
+        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        with:
+          source: build/odm_${{ steps.tag.outputs.version }}_darwin_arm64.tar.gz
+          owner: fahry-a
+          organization: "false"
+          package: odm
+          version: ${{ steps.tag.outputs.version }}
+          os: darwin
+          arch: arm64
+          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
+          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}

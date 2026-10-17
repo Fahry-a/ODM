@@ -55,6 +55,9 @@ a:hover { color: var(--color-accent); }
   border-bottom: var(--rule-bold) solid var(--color-ink);
 }
 .slab-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   font-family: var(--font-display);
   font-size: var(--text-lg);
   letter-spacing: 0.04em;
@@ -62,7 +65,13 @@ a:hover { color: var(--color-accent); }
   text-decoration: none;
   white-space: nowrap;
 }
-.slab-mark::after { content: ""; display: inline-block; width: 0.28em; height: 0.28em; background: var(--color-accent); margin-inline-start: 0.18em; }
+.slab-mark img {
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
 .slab-nav ul {
   display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-md);
   list-style: none; margin: 0 0 0 auto; padding: 0;

@@ -26,9 +26,6 @@ func (t *Task) finish() error {
 // effectiveChunkSize is the chunk size the current layout was built with:
 // the aria2c segment size for that profile, else opts.ChunkSize. Persisted
 // in the control file so a resume can rebuild the identical layout.
-// effectiveChunkSize is the chunk size the current layout was built with:
-// the aria2c segment size for that profile, else opts.ChunkSize. Persisted
-// in the control file so a resume can rebuild the identical layout.
 func (t *Task) effectiveChunkSize() int64 {
 	if t.opts.Profile == "aria2c" && t.ariaSplit > 0 {
 		pr := t.probe.Load()
@@ -40,8 +37,6 @@ func (t *Task) effectiveChunkSize() int64 {
 	return t.opts.ChunkSize
 }
 
-// region2ChunkSize is the segment size of the both profile's second engine
-// (0 for other profiles / legacy control files).
 // region2ChunkSize is the segment size of the both profile's second engine
 // (0 for other profiles / legacy control files).
 func (t *Task) region2ChunkSize() int64 {
@@ -59,11 +54,6 @@ func (t *Task) region2ChunkSize() int64 {
 // persistMinInterval has elapsed since the last write. Serialized under t.mu
 // (the same lock persistControl takes) so the counters are race-free across
 // concurrent workers.
-// checkpoint returns true when the control file should be flushed: either
-// persistCheckpointInterval chunks have completed since the last flush, or
-// persistMinInterval has elapsed since the last write. Serialized under t.mu
-// (the same lock persistControl takes) so the counters are race-free across
-// concurrent workers.
 func (t *Task) checkpoint() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -75,10 +65,6 @@ func (t *Task) checkpoint() bool {
 	return !t.lastPersist.IsZero() && time.Since(t.lastPersist) >= persistMinInterval
 }
 
-// persistControl records completed chunk offsets so resume picks up. Mutex
-// guarded: several workers (and the error/cancel paths) can call it
-// concurrently, and SaveControl writes a shared temp path — concurrent writes
-// would interleave and risk a corrupt .odm file.
 // persistControl records completed chunk offsets so resume picks up. Mutex
 // guarded: several workers (and the error/cancel paths) can call it
 // concurrently, and SaveControl writes a shared temp path — concurrent writes
@@ -138,8 +124,3 @@ func (t *Task) persistControl() {
 		t.logf("warn", "could not persist resume state %s: %v", storage.ControlPath(t.outPath), err)
 	}
 }
-
-// unlimited. Used by RPC changeOption with "max-download-limit-per-task". Safe
-// for concurrent use: creates a new limiter atomically (readers snapshot
-// t.taskLim when wrapping the body, so an in-flight read finishes with the old
-// value; subsequent reads pick up the new one).

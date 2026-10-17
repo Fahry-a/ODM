@@ -9,9 +9,11 @@ const navLinks = [
   { href: '#profiles', label: 'Profiles' },
   { href: '#rpc', label: 'RPC' },
   { href: '#/docs', label: 'Docs' },
-  { href: 'https://github.com/Fahry-a/ODM', label: 'Source' },
+  { href: 'https://pm.foenui.net/', label: 'Registry', external: true },
+  { href: 'https://github.com/Fahry-a/ODM', label: 'Source', external: true },
 ]
 
+const foenuiLogo = `${import.meta.env.BASE_URL}foenui.webp`
 const routeHash = ref(window.location.hash)
 const route = computed(() => (routeHash.value === '#/docs' || routeHash.value.startsWith('#docs-') ? 'docs' : 'home'))
 
@@ -25,10 +27,10 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
 
 <template>
 <header class="nav-slab">
-  <a class="slab-mark" href="#top">odm</a>
+  <a class="slab-mark" href="#top" aria-label="ODM home"><img :src="foenuiLogo" width="28" height="28" alt="" /><span>odm</span></a>
   <nav class="slab-nav" aria-label="Primary">
     <ul>
-      <li v-for="link in navLinks" :key="link.href"><a :href="link.href">{{ link.label }}</a></li>
+      <li v-for="link in navLinks" :key="link.href"><a :href="link.href" :target="link.external ? '_blank' : undefined" :rel="link.external ? 'noreferrer' : undefined">{{ link.label }}</a></li>
     </ul>
   </nav>
 </header>
@@ -44,6 +46,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
       <a href="https://github.com/Fahry-a/ODM">GitHub</a>
       <a href="https://aur.archlinux.org/packages/odm-bin">AUR</a>
       <a href="https://github.com/Fahry-a/ODM/releases/latest">Releases</a>
+      <a href="https://pm.foenui.net/" target="_blank" rel="noreferrer">Foenui PM</a>
     </span>
     <span class="foot-stmt__fine">a Go program by Fahry-a · MIT · this page documents v1.7.0</span>
   </div>
