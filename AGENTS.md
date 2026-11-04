@@ -50,7 +50,7 @@ cmd/odm         → entry point, flag parsing, mode dispatch
 internal/config → CLI flags (pflag) + config file merge
 internal/version → single source of truth for the Version const
 internal/download → Task lifecycle, chunk queue (work-stealing), Manager, exit codes
-internal/transport → HTTP client, Probe (HEAD → ranged GET → single-stream fallback), proxy (http/https/socks5/socks5h)
+internal/transport → HTTP client, Probe (single ranged GET, with HEAD/plain-GET fallbacks), proxy (http/https/socks5/socks5h)
 internal/scheduler → Connection Balancer (allocation modes A/B/C), Daemon (RPC), Queue
 internal/ui → Pacman/ILoveCandy progress bar, confirmation prompt, terminal sizing
 internal/rpc → JSON-RPC 2.0 + WebSocket server, Broadcaster

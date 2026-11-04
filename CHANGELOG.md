@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One-request probe** — `transport.Probe` now starts with a single ranged GET
+  (`bytes=0-0`) and reads size, range support and HTTP/2 readiness from that one
+  response; HEAD and plain GET remain fallbacks only. This removes one round
+  trip per URL for range-capable servers, two for HEAD-blocked ones, and drops
+  the smart profile's second HEAD on a fresh h2 connection (which ran without a
+  timeout). Measured on a ~300ms IPv6 link: `--dry-run` 1.7–3.2s → 0.8–0.9s,
+  `--profile smart` 2.6–5.1s → 0.9–2.0s. (`internal/transport`,
+  `internal/download`, `cmd/odm`)
+
 ## [1.9.2] - 2026-10-17
 
 ### Changed

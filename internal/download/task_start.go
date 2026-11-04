@@ -36,8 +36,16 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	pr := t.probe.Load()
 	if pr == nil {
 		t.logf("info", "probing %s", t.url)
+		// Probe through the client the download will actually use: smart and
+		// the static-split engines ride the h2-enabled client, and probing
+		// through it reports the real ALPN outcome in ProbeResult.HTTP2 — no
+		// extra HEAD on a second connection for ChooseProfile.
+		probeClient := t.client
+		if t.h2Client != nil && t.opts.Profile != "odm" {
+			probeClient = t.h2Client
+		}
 		var perr error
-		pr, perr = t.client.Probe(ctx, t.url)
+		pr, perr = probeClient.Probe(ctx, t.url)
 		if perr != nil {
 			t.setState(StateError)
 			t.emitFinal(progressSink)
@@ -61,11 +69,10 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		t.logf("info", "checksum from %s: %s", t.opts.ChecksumURL, spec)
 	}
 	// Smart profile: decide the concrete engine now that the probe answered
-	// range support + size, and check h2 readiness through the h2 client.
-	// The CLI path already resolved smart to a concrete profile (SetProfile,
-	// after the probe pass) and injected it, so this only runs for tasks whose
-	// profile is still literally "smart" — the RPC daemon path where Start
-	// probes lazily.
+	// range support + size + HTTP/2 readiness. The CLI path already resolved
+	// smart to a concrete profile (SetProfile, after the probe pass) and
+	// injected it, so this only runs for tasks whose profile is still literally
+	// "smart" — the RPC daemon path where Start probes lazily.
 	if t.opts.Profile == "smart" {
 		// The scheduler applies the Balancer's per-file allocation via
 		// SetConns BEFORE Start runs, so t.conns holds this file's real budget
@@ -81,7 +88,7 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 			TotalSize:     pr.TotalSize,
 			SupportsRange: pr.SupportsRange,
 			SingleStream:  pr.SingleStream,
-			HTTP2Ready:    t.h2Client != nil && t.h2Client.SupportsHTTP2(ctx, t.url),
+			HTTP2Ready:    pr.HTTP2,
 			Conns:         perFile,
 		})
 		t.logf("info", "smart profile: chose %q (%s)", profile, reason)

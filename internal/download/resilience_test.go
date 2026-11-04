@@ -152,8 +152,9 @@ func TestConcurrentFailedAttemptRollbackOnlyOwnBytes(t *testing.T) {
 		w.Header().Set("Content-Range", "bytes "+itoaS(int(start))+"-"+itoaS(int(end))+"/"+itoaS(len(payload)))
 		w.Header().Set("Content-Length", itoaS(int(end-start+1)))
 		w.WriteHeader(http.StatusPartialContent)
-
-		if start == 0 && firstChunkAttempts.Add(1) == 1 {
+		// The probe now issues Range: bytes=0-0, so only a real chunk request
+		// (wider than one byte) counts as the first chunk attempt.
+		if start == 0 && end > start && firstChunkAttempts.Add(1) == 1 {
 			_, _ = w.Write(payload[:512])
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()

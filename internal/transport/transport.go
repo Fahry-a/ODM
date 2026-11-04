@@ -1,5 +1,5 @@
 // Package transport is the HTTP client layer of ODM. It owns the
-// range-support probe (HEAD → ranged GET → single-stream fallback), the
+// range-support probe (single ranged GET, with HEAD/plain-GET fallbacks), the
 // redirect limit, custom headers, proxy, and TLS verify toggle. Download
 // workers (internal/download) build per-chunk ranged requests on top of the
 // Client returned by NewClient.
@@ -31,6 +31,7 @@ type ProbeResult struct {
 	Filename      string // derived from URL/Content-Disposition (caller may refine)
 	StatusCode    int    // last response status used for the size decision
 	SingleStream  bool   // true → degrade to one plain sequential GET
+	HTTP2         bool   // true → the probe response arrived over HTTP/2 (ALPN)
 }
 
 // ClientConfig maps the handful of Options that govern HTTP behaviour. Keeping
@@ -278,6 +279,22 @@ func SkipBody(r io.ReadCloser) {
 	_ = r.Close()
 }
 
+// skipProbeBody discards at most one body byte and closes the response. The
+// probe asks for bytes=0-0, so a compliant 206 carries exactly one byte — read
+// it to let that connection return to the pool for the first chunk. A 200
+// (Range ignored) may carry the whole file, so it must never be drained; one
+// byte is the most the probe ever needs. The read error is surfaced when the
+// server never delivered a byte: a stalled server must fail the probe instead
+// of looking "range-capable" on the strength of its headers alone.
+func skipProbeBody(r *http.Response) error {
+	n, err := io.Copy(io.Discard, io.LimitReader(r.Body, 1))
+	_ = r.Body.Close()
+	if n == 0 && err != nil {
+		return err
+	}
+	return nil
+}
+
 // contentDispositionFilename extracts the filename parameter of a
 // Content-Disposition header via the stdlib (handles quoted, unquoted and
 // RFC 5987 filename*= forms).
@@ -291,89 +308,145 @@ func contentDispositionFilename(v string) string {
 	return ""
 }
 
-// Probe runs the three-step chain to determine size + range support for
-// rawURL. It never returns both SupportsRange=false *and* TotalSize known ≠ -1
-// in a way that contradicts: a server that reports size but refuses ranges sets
-// SingleStream=true and SupportsRange=false; a server that can't tell us the
-// size at all sets TotalSize=-1 and SingleStream=true.
+// Probe determines size + range support for rawURL with the fewest round
+// trips. The ranged GET (bytes=0-0) answers everything in one exchange:
+//
+//	206                        → ranges supported; total from Content-Range
+//	200                        → Range ignored: single-stream, size from
+//	                             Content-Length
+//	416 + "Content-Range: */N" → the server speaks ranges but has no byte 0
+//	                             (empty resource); the total is still known
+//
+// HEAD is a fallback for servers that refuse a ranged GET but answer HEAD, and
+// a plain GET is the last resort for size. HTTP/2 readiness is read from the
+// same response (ALPN), so the smart profile no longer needs a second HEAD on a
+// fresh connection. It never returns both SupportsRange=false *and* TotalSize
+// known ≠ -1 in a way that contradicts: a server that reports size but refuses
+// ranges sets SingleStream=true and SupportsRange=false; a server that can't
+// tell us the size at all sets TotalSize=-1 and SingleStream=true.
 func (c *Client) Probe(ctx context.Context, rawURL string) (*ProbeResult, error) {
 	pr := &ProbeResult{FinalURL: rawURL, TotalSize: -1}
 
-	// Step 1: HEAD. Many servers block it or misreport — fall through on any
-	// non-2xx (or transport error) to step 2.
-	if r, err := c.doHead(ctx, rawURL); err == nil && r != nil {
-		pr.FinalURL = r.Request.URL.String()
-		pr.StatusCode = r.StatusCode
-		pr.ETag = r.Header.Get("ETag")
-		pr.Filename = contentDispositionFilename(r.Header.Get("Content-Disposition"))
-		if r.StatusCode >= 200 && r.StatusCode < 300 {
-			if cl := r.Header.Get("Content-Length"); cl != "" {
-				if v, perr := strconv.ParseInt(cl, 10, 64); perr == nil {
-					pr.TotalSize = v
+	var lastErr error
+	if r, err := c.doRangeProbe(ctx, rawURL); err == nil {
+		applyProbeResponse(pr, r)
+		switch {
+		case r.StatusCode == http.StatusPartialContent:
+			pr.SupportsRange = true
+			pr.AcceptRanges = true
+			if v := parseRangeTotal(r.Header.Get("Content-Range")); v >= 0 {
+				pr.TotalSize = v
+			}
+			if err := skipProbeBody(r); err != nil {
+				return nil, fmt.Errorf("probe: %w", err)
+			}
+			return pr, nil
+		case r.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+			// RFC 9110 §15.5.17: a 416 on a byte-range request carries
+			// Content-Range: bytes */TOTAL, so an empty file (TOTAL=0) is
+			// still fully described by this one response.
+			_ = skipProbeBody(r) // no body is expected; tolerate silence
+			if v := parseRangeTotal(r.Header.Get("Content-Range")); v >= 0 {
+				pr.TotalSize = v
+				pr.SupportsRange = true
+				pr.AcceptRanges = true
+				return pr, nil
+			}
+		case r.StatusCode >= 200 && r.StatusCode < 300:
+			pr.SingleStream = true
+			pr.TotalSize = contentLength(r)
+			if err := skipProbeBody(r); err != nil {
+				return nil, fmt.Errorf("probe: %w", err)
+			}
+			return pr, nil
+		default:
+			retryAfter := ParseRetryAfter(r.Header.Get("Retry-After"))
+			_ = skipProbeBody(r)
+			// 429/5xx are transient server conditions, not "ranged GET is
+			// refused" — falling back to HEAD + plain GET would just add
+			// requests to an already-struggling server.
+			if r.StatusCode == http.StatusTooManyRequests || r.StatusCode >= 500 {
+				return nil, StatusError{
+					Err:        fmt.Errorf("probe: status %d for %s", r.StatusCode, rawURL),
+					Status:     r.StatusCode,
+					Permanent:  IsPermanent(r.StatusCode),
+					RetryAfter: retryAfter,
 				}
+			}
+			lastErr = fmt.Errorf("ranged GET: status %d", r.StatusCode)
+		}
+	} else {
+		lastErr = err
+	}
+
+	// Fallback 1: HEAD. Some servers 403/405 a ranged GET yet answer HEAD with
+	// size + Accept-Ranges. A HEAD-only size is already enough to start: no
+	// range → single-stream, so there is no third request in that case.
+	if r, err := c.doHead(ctx, rawURL); err == nil && r != nil {
+		applyProbeResponse(pr, r)
+		SkipBody(r.Body)
+		if r.StatusCode >= 200 && r.StatusCode < 300 {
+			if v := contentLength(r); v >= 0 {
+				pr.TotalSize = v
 			}
 			pr.AcceptRanges = strings.EqualFold(r.Header.Get("Accept-Ranges"), "bytes")
-			if cl := r.Header.Get("Content-Range"); cl != "" {
-				if v := parseRangeTotal(cl); v >= 0 {
-					pr.TotalSize = v
-				}
+			if v := parseRangeTotal(r.Header.Get("Content-Range")); v >= 0 {
+				pr.TotalSize = v
 				pr.AcceptRanges = true
 			}
-			SkipBody(r.Body)
 			if pr.AcceptRanges && pr.TotalSize > 0 {
 				pr.SupportsRange = true
 				return pr, nil
 			}
-		} else {
-			SkipBody(r.Body)
+			if pr.TotalSize >= 0 {
+				pr.SingleStream = true
+				return pr, nil
+			}
 		}
+	} else if err != nil {
+		lastErr = err
 	}
 
-	// Step 2: GET with Range: bytes=0-0. A 206 → ranges supported, total from
-	// Content-Range. A 200 → no range support (but we may still learn the size
-	// from Content-Length): single-stream fallback.
-	r, err := c.doRangeProbe(ctx, rawURL)
-	if err != nil {
-		// Could be a server that refuses ranged GET entirely; try a plain GET
-		// for size only as a last resort before declaring sizeless single-stream.
-		if pr2, perr := c.doPlainSizeProbe(ctx, rawURL); perr == nil {
-			mergeSize(pr, pr2)
-			pr.SingleStream = true
-			return pr, nil
-		}
-		return nil, fmt.Errorf("probe failed for %s: %w", rawURL, err)
+	// Fallback 2: plain GET for size only — a server that refuses ranged GETs
+	// but serves the whole file.
+	if pr2, perr := c.doPlainSizeProbe(ctx, rawURL); perr == nil {
+		mergeSize(pr, pr2)
+		pr.SingleStream = true
+		return pr, nil
+	} else if lastErr == nil {
+		lastErr = perr
 	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("status %d", pr.StatusCode)
+	}
+	return nil, fmt.Errorf("probe failed for %s: %w", rawURL, lastErr)
+}
+
+// applyProbeResponse copies the response metadata every probe path records.
+// Filename only overwrites an earlier value when the response actually carries
+// a Content-Disposition, so a fallback response without one can't erase it.
+func applyProbeResponse(pr *ProbeResult, r *http.Response) {
 	pr.FinalURL = r.Request.URL.String()
 	pr.StatusCode = r.StatusCode
 	pr.ETag = r.Header.Get("ETag")
-	if pr.Filename == "" {
-		pr.Filename = contentDispositionFilename(r.Header.Get("Content-Disposition"))
+	if fn := contentDispositionFilename(r.Header.Get("Content-Disposition")); fn != "" {
+		pr.Filename = fn
 	}
+	pr.HTTP2 = r.ProtoMajor == 2
+}
 
-	switch {
-	case r.StatusCode == http.StatusPartialContent:
-		pr.SupportsRange = true
-		pr.AcceptRanges = true
-		if cr := r.Header.Get("Content-Range"); cr != "" {
-			if v := parseRangeTotal(cr); v >= 0 {
-				pr.TotalSize = v
-			}
-		}
-	case r.StatusCode >= 200 && r.StatusCode < 300:
-		// No range support: single-stream. Still capture size if present.
-		pr.SingleStream = true
-		if cl := r.Header.Get("Content-Length"); cl != "" {
-			if v, perr := strconv.ParseInt(cl, 10, 64); perr == nil {
-				pr.TotalSize = v
-			}
-		}
-	default:
-		SkipBody(r.Body)
-		return nil, fmt.Errorf("probe: unexpected status %d for %s", r.StatusCode, rawURL)
+// contentLength parses Content-Length, or -1 when absent/invalid (chunked or
+// sizeless stream).
+func contentLength(r *http.Response) int64 {
+	cl := r.Header.Get("Content-Length")
+	if cl == "" {
+		return -1
 	}
-	// We requested 1 byte; read nothing more than needed before closing.
-	SkipBody(r.Body)
-	return pr, nil
+	v, err := strconv.ParseInt(cl, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return v
 }
 
 func (c *Client) doHead(ctx context.Context, rawURL string) (*http.Response, error) {
@@ -382,20 +455,6 @@ func (c *Client) doHead(ctx context.Context, rawURL string) (*http.Response, err
 		return nil, err
 	}
 	return c.HTTP.Do(req)
-}
-
-// SupportsHTTP2 reports whether this client (h2-enabled) actually negotiated
-// HTTP/2 with the server: one HEAD request whose response arrived with
-// ProtoMajor==2. false when the client is h1-only, the URL is plain http://,
-// or the server only speaks h1. Used by the smart profile to decide whether
-// an h2 engine would buy anything.
-func (c *Client) SupportsHTTP2(ctx context.Context, rawURL string) bool {
-	r, err := c.doHead(ctx, rawURL)
-	if err != nil {
-		return false
-	}
-	SkipBody(r.Body)
-	return r.ProtoMajor == 2
 }
 
 func (c *Client) doRangeProbe(ctx context.Context, rawURL string) (*http.Response, error) {
@@ -483,8 +542,14 @@ func (c *Client) GetRange(ctx context.Context, rawURL string, start, end int64, 
 		return nil, err
 	}
 	if r.StatusCode != http.StatusPartialContent && r.StatusCode != http.StatusOK {
+		retryAfter := ParseRetryAfter(r.Header.Get("Retry-After"))
 		SkipBody(r.Body)
-		return nil, PermanentWrap(fmt.Errorf("GetRange: status %d for %s", r.StatusCode, rawURL), r.StatusCode)
+		return nil, StatusError{
+			Err:        fmt.Errorf("GetRange: status %d for %s", r.StatusCode, rawURL),
+			Status:     r.StatusCode,
+			Permanent:  IsPermanent(r.StatusCode),
+			RetryAfter: retryAfter,
+		}
 	}
 	return r, nil
 }
@@ -498,10 +563,36 @@ type StatusError struct {
 	Err       error
 	Status    int
 	Permanent bool
+	// RetryAfter is the server-requested delay (429/503 + Retry-After), 0
+	// when the header is absent or unparseable. Callers sleep at least this
+	// long before retrying instead of guessing.
+	RetryAfter time.Duration
 }
 
 func (e StatusError) Error() string { return e.Err.Error() }
 func (e StatusError) Unwrap() error { return e.Err }
+
+// ParseRetryAfter parses a Retry-After header value: either delta-seconds
+// ("120") or an HTTP-date ("Wed, 21 Oct 2015 07:28:00 GMT"). Returns 0 for an
+// absent/past/unparseable value so callers fall back to their own backoff.
+func ParseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 // IsPermanent classifies an HTTP status: client errors are permanent except
 // 408 and 429 (both retryable by nature).

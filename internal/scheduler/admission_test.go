@@ -25,6 +25,23 @@ func serveSlowSized(t *testing.T, payload []byte, step int, drip time.Duration) 
 	t.Helper()
 	var cur, max atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", itoaX(len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// The probe is a single ranged GET (bytes=0-0). Answer it directly and
+		// cheaply: if it were streamed like a download, the handler would stay
+		// alive after the client closes the 1-byte body and skew the
+		// concurrency count below.
+		if r.Header.Get("Range") == "bytes=0-0" {
+			w.Header().Set("Content-Range", "bytes 0-0/"+itoaX(len(payload)))
+			w.Header().Set("Content-Length", "1")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[:1])
+			return
+		}
 		c := cur.Add(1)
 		for {
 			m := max.Load()
@@ -34,12 +51,6 @@ func serveSlowSized(t *testing.T, payload []byte, step int, drip time.Duration) 
 		}
 		defer cur.Add(-1)
 
-		w.Header().Set("Accept-Ranges", "bytes")
-		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", itoaX(len(payload)))
-			w.WriteHeader(http.StatusOK)
-			return
-		}
 		// Range is ignored on purpose: every GET serves the full body slowly.
 		w.Header().Set("Content-Length", itoaX(len(payload)))
 		w.WriteHeader(http.StatusOK)

@@ -158,7 +158,7 @@ func run(argv []string) error {
 	// profileReasons carries ChooseProfile's why (e.g. "no h2") for the prompt.
 	profiles := make(map[string]string, len(o.URLs))
 	profileReasons := make(map[string]string, len(o.URLs))
-	probeClient := mgr.Client()
+	probeClient := mgr.ClientFor(o.Profile)
 	// Probe up to 8 URLs in parallel: N URLs × 15s serial timeouts would stall
 	// a long -i batch before a single download starts. Each probe gets its own
 	// timeout so a slow/unresponsive server can't block the whole batch. On
@@ -236,7 +236,7 @@ func run(argv []string) error {
 		profiles = make(map[string]string, len(plan.Parallel)+len(plan.Queued))
 		for _, a := range append(append([]scheduler.Allocation{}, plan.Parallel...), plan.Queued...) {
 			if pr := probes[a.URL]; pr != nil {
-				p, reason := resolveProfile(o, pr, a.Connections, mgr.H2Client())
+				p, reason := resolveProfile(o, pr, a.Connections)
 				profiles[a.URL] = p
 				if reason != "" {
 					profileReasons[a.URL] = reason
@@ -440,23 +440,20 @@ func batchChecksumWarning(o *config.Options) string {
 // profiles it's just the flag. The reason (from ChooseProfile's matrix) lets
 // the prompt explain why a file landed on a given engine. The result is
 // injected into each task via SetProfile so Start doesn't re-resolve (and
-// re-probe h2) per file.
-func resolveProfile(o *config.Options, pr *transport.ProbeResult, conns int, h2 *transport.Client) (profile, reason string) {
+// re-probe h2) per file. HTTP/2 readiness comes from the probe response
+// (ProbeResult.HTTP2), which is why the CLI probes through ClientFor(profile).
+func resolveProfile(o *config.Options, pr *transport.ProbeResult, conns int) (profile, reason string) {
 	if o.Profile != "smart" {
 		return o.Profile, ""
 	}
 	if pr == nil {
 		return "odm", "probe failed"
 	}
-	h2Ready := false
-	if h2 != nil {
-		h2Ready = h2.SupportsHTTP2(context.Background(), pr.FinalURL)
-	}
 	profile, reason = download.ChooseProfile(download.ServerCapabilities{
 		TotalSize:     pr.TotalSize,
 		SupportsRange: pr.SupportsRange,
 		SingleStream:  pr.SingleStream,
-		HTTP2Ready:    h2Ready,
+		HTTP2Ready:    pr.HTTP2,
 		Conns:         conns,
 	})
 	return profile, reason
