@@ -25,13 +25,29 @@ import (
 // workQueue is the common surface the worker loop needs from a chunk source.
 // ChunkQueue (odm, work-stealing fixed chunks) and StaticQueue (aria2c, one
 // segment per worker) implement it, so the worker stays profile-agnostic.
+//
+// Tail-splitting is only possible on ChunkQueue; StaticQueue implements the
+// same completion interface with one segment == one root.
 type workQueue interface {
 	Next() (Chunk, bool)
 	Requeue(c Chunk, maxWorkerAttempts int) bool
-	MarkDone(c Chunk)
+	MarkDone(c Chunk) (rootStart, rootEnd int64, completed bool)
 	CompletedOffsets() []int64
 	CompletedSpans(chunkSize, totalSize int64, n int) []Chunk
 	ResetCompletedOffsets(done map[int64]struct{}, totalSize int64) (int64, bool)
+
+	// track returns the live in-flight record for the piece starting at
+	// start, or nil (static splits have none).
+	track(start int64) *activePiece
+	// splitDone records the boundary at which a piece stopped for a
+	// tail-split; the unwritten remainder goes back to the queue.
+	splitDone(c Chunk, written int64) (rootStart, rootEnd int64, completed bool)
+	// Release drops a piece's in-flight record; used so abandoned or finished
+	// pieces do not accumulate and so waiters get unblocked.
+	Release(c Chunk)
+	// wholeChunk reports whether the piece covers its layout chunk exactly
+	// (true for the static split and for sizeless single-stream chunks).
+	wholeChunk(c Chunk) bool
 }
 
 // Engine couples a workQueue with the transport client and byte-region base
@@ -45,14 +61,35 @@ type Engine struct {
 	base   int64 // absolute file offset this engine's chunks map to
 }
 
-// Next delegates to the queue.
 func (e *Engine) Next() (Chunk, bool) { return e.q.Next() }
 
 // Requeue delegates to the queue.
 func (e *Engine) Requeue(c Chunk, max int) bool { return e.q.Requeue(c, max) }
 
-// MarkDone delegates to the queue.
-func (e *Engine) MarkDone(c Chunk) { e.q.MarkDone(c) }
+// MarkDone reports the span of the root chunk the piece belongs to and whether
+// this call completed it (a static split always reports its own span).
+func (e *Engine) MarkDone(c Chunk) (rootStart, rootEnd int64, completed bool) {
+	return e.q.MarkDone(c)
+}
+
+// track returns the live in-flight record for the piece (nil for the static
+// split). The worker asks the queue to point its stop-at-request boundary at
+// the engine's copy loop; idle workers use it to carve the straggler's tail.
+func (e *Engine) Track(c Chunk) *activePiece { return e.q.track(c.Start) }
+
+// splitDone records the boundary at which a piece stopped for a tail-split;
+// the unwritten remainder goes back to the queue.
+func (e *Engine) SplitDone(c Chunk, written int64) (rootStart, rootEnd int64, completed bool) {
+	return e.q.splitDone(c, written)
+}
+
+// Release drops the piece's in-flight record.
+func (e *Engine) Release(c Chunk) { e.q.Release(c) }
+
+// WholeChunk reports whether the piece covers its layout chunk exactly (always
+// true for the static split). When true, the incremental hash the copy loop
+// already maintains for the piece is the root's hash.
+func (e *Engine) WholeChunk(c Chunk) bool { return e.q.wholeChunk(c) }
 
 // CompletedOffsets delegates to the queue.
 func (e *Engine) CompletedOffsets() []int64 { return e.q.CompletedOffsets() }
@@ -135,6 +172,19 @@ func NewStaticQueue(totalSize, n int64) *StaticQueue {
 	return q
 }
 
+// wholeChunk always reports true (one segment == the root); track/splitDone
+// are interface shims no-op for static splits; Release is a no-op.
+
+func (q *StaticQueue) wholeChunk(c Chunk) bool { return true }
+
+func (q *StaticQueue) track(int64) *activePiece { return nil }
+
+func (q *StaticQueue) splitDone(c Chunk, written int64) (int64, int64, bool) {
+	return c.Start, c.End, true
+}
+
+func (q *StaticQueue) Release(Chunk) {}
+
 // Next returns the next unclaimed segment, or ok=false when all have been
 // claimed (including segments pre-seeded as done by ResetCompletedOffsets).
 func (q *StaticQueue) Next() (Chunk, bool) {
@@ -160,11 +210,13 @@ func (q *StaticQueue) Next() (Chunk, bool) {
 // salvage the segments that did land.
 func (q *StaticQueue) Requeue(_ Chunk, _ int) bool { return false }
 
-// MarkDone records a completed segment. Idempotent.
-func (q *StaticQueue) MarkDone(c Chunk) {
+// MarkDone records a completed segment. Idempotent. The static split always
+// reports the segment's span and completion.
+func (q *StaticQueue) MarkDone(c Chunk) (rootStart, rootEnd int64, completed bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.done[c.Start] = struct{}{}
+	return c.Start, c.End, true
 }
 
 // CompletedOffsets returns the sorted offsets of completed segments.

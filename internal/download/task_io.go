@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -72,8 +73,22 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 		if !ok {
 			return // no more work
 		}
+		// Release the in-flight record on every exit from this iteration; the
+		// paths that finish/mark the piece delete the record themselves, so
+		// this only covers the early returns (error / ctx cancel).
+		deferRelease := func() { eng.Release(c) }
 
 		if err := t.downloadChunk(ctx, eng, c, sink); err != nil {
+			var sp *splitPointError
+			if errors.As(err, &sp) {
+				rs, re, rootDone := eng.SplitDone(c, sp.written)
+				deferRelease()
+				if rootDone {
+					t.hashCompleteRoot(eng, rs, re)
+				}
+				continue
+			}
+			deferRelease()
 			if ctx.Err() != nil {
 				t.errors.Add(1)
 				// Persist completed chunks so partial progress survives
@@ -103,7 +118,14 @@ func (t *Task) worker(ctx context.Context, eng *Engine, wg *sync.WaitGroup, sink
 			t.logf("error", "chunk %d (off %d) failed permanently: %v", c.Index, c.Start, err)
 			return
 		}
-		eng.MarkDone(c)
+		deferRelease()
+		rs, re, rootDone := eng.MarkDone(c)
+		if rootDone && !eng.WholeChunk(c) {
+			// A root chunk completed via sub-ranges (tail-split): hash the full
+			// span from disk so a later --continue verifies it instead of
+			// silently downgrading to server-side compare.
+			t.hashCompleteRoot(eng, rs, re)
+		}
 		if sink != nil {
 			sink(t.Snapshot())
 		}
@@ -148,61 +170,179 @@ func (t *Task) throttleOK() {
 	t.lim.ThrottleOK()
 }
 
-// statusErr classifies an HTTP status from a ranged/plain GET: permanent for
-// client errors except the two retryable ones (transport.IsPermanent),
-// transient otherwise.
-func statusErr(msg string, status int) error {
-	return transport.PermanentWrap(fmt.Errorf("%s: status %d", msg, status), status)
+// chunkResult reports one attempt's progress: written bytes are already on disk
+// and hashed. resumable says a retry may continue at start+written instead of
+// re-downloading the chunk from its beginning (false for single-stream bodies,
+// which have no byte-range to ask for).
+type chunkResult struct {
+	written   int64
+	resumable bool
+}
+
+// Retry timing: the first retry waits at most RetryWait (not 2× it), jitter
+// keeps workers from retrying in lockstep, backoff is capped at 10s, and a
+// server-provided Retry-After wins over the local backoff.
+const (
+	maxRetryBackoff = 10 * time.Second
+	maxRetryAfter   = 60 * time.Second
+)
+
+// retryDelay returns the wait before retry `attempt` (1-based): exponential
+// from base with equal jitter (half fixed, half random), capped at 10s. A base
+// of 0 means no wait (tests, --retry-wait 0).
+func retryDelay(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	d := base
+	for i := 1; i < attempt && d < maxRetryBackoff; i++ {
+		d *= 2
+	}
+	if d > maxRetryBackoff {
+		d = maxRetryBackoff
+	}
+	half := d / 2
+	if half <= 0 {
+		return d
+	}
+	return half + time.Duration(rand.Int64N(int64(half)+1))
+}
+
+// sleepCtx waits d or until ctx is cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// defaultIdleTimeout caps how long a stalled body read may stay silent. A total
+// per-chunk deadline is wrong on slow links (a 4 MiB chunk at 0.7 MB/s already
+// takes ~6s and a bigger chunk far longer), so only a silent socket counts as a
+// failure. Overridable in tests through TaskOptions.Timeout (min(timeout, 20s)).
+const defaultIdleTimeout = 20 * time.Second
+
+// copyBufSize is the per-chunk copy buffer for the hot read/write loop.
+// 256 KiB keeps Read/Write syscall and limiter-token overhead off the
+// critical path on fast links (4× fewer round trips than 64 KiB) while
+// remaining negligible against the connection budget (32 conns × 256 KiB).
+const copyBufSize = 256 << 10
+
+// idleReadTimeout derives the stall detector from the configured network
+// timeout: min(--timeout, 20s), with 20s as the fallback.
+func idleReadTimeout(tmo time.Duration) time.Duration {
+	if tmo <= 0 || tmo > defaultIdleTimeout {
+		return defaultIdleTimeout
+	}
+	return tmo
+}
+
+// idleReader cancels the attempt's context when a pending Read makes no
+// progress for d. The timer is armed on read entry and disarmed on return, so
+// it never fires while no read is pending (e.g. the rate limiter is waiting for
+// tokens and there is no socket at all).
+type idleReader struct {
+	r     io.Reader
+	timer *time.Timer
+	d     time.Duration
+}
+
+func (ir *idleReader) Read(p []byte) (int, error) {
+	ir.timer.Reset(ir.d)
+	n, err := ir.r.Read(p)
+	ir.timer.Stop()
+	return n, err
+}
+
+// guardIdle disarms an inactivity timer over r for the course of the attempt:
+// the timer is armed only while a socket read is in flight; if a pending read
+// goes silent for the idle timeout, cancel fires (aborting the HTTP body read)
+// so the retry loop can resume the chunk. Between reads (e.g. while the rate
+// limiter waits for tokens) no timer is armed — a slow-but-healthy transfer is
+// never aborted. The returned stop func must run when the attempt ends.
+func (t *Task) guardIdle(r io.Reader, cancel context.CancelFunc) (io.Reader, func()) {
+	d := idleReadTimeout(t.opts.Timeout)
+	timer := time.AfterFunc(d, cancel)
+	timer.Stop() // disarmed until the next read
+	return &idleReader{r: r, timer: timer, d: d}, func() { timer.Stop() }
 }
 
 // downloadChunk fetches one chunk's byte-range (retrying up to opts.Retry times
-// with exponential RetryWait backoff) and writes it to disk at the chunk's
-// offset. `eng` supplies the region base (both profile) and transport client.
+// with jittered backoff) and writes it to disk at the chunk's offset. A failed
+// attempt keeps the bytes it already wrote: the retry asks for the remaining
+// range instead of throwing away good progress. `eng` supplies the region base
+// (both profile) and transport client.
 func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView)) error {
 	var lastErr error
+	h := sha256.New()
+	var done int64 // bytes of this chunk already written and hashed
+	// rollback drops this chunk's partial progress from the byte counter. An
+	// abandoned chunk is never marked done (a requeue re-downloads it from 0,
+	// and the control file only lists completed chunks), so those bytes would
+	// otherwise be counted a second time by the next worker.
+	rollback := func() {
+		if done <= 0 {
+			return
+		}
+		t.bytesDone.Add(-done)
+		done = 0
+		if sink != nil {
+			sink(t.Snapshot())
+		}
+	}
 	for attempt := range t.opts.Retry + 1 {
 		if attempt > 0 {
 			t.setState(StateRetrying)
 			t.retries.Add(1)
-			// Exponential backoff, capped so late attempts don't wait minutes:
-			// RetryWait << attempt, max 30s. RetryWait 0 (tests, unset) keeps
-			// zero wait — only a positive base is capped upward.
-			wait := t.opts.RetryWait << min(attempt, 30)
-			if t.opts.RetryWait > 0 && (wait > 30*time.Second || wait <= 0) {
-				wait = 30 * time.Second
+			wait := retryDelay(t.opts.RetryWait, attempt)
+			var se transport.StatusError
+			if errors.As(lastErr, &se) && se.RetryAfter > 0 {
+				wait = min(se.RetryAfter, maxRetryAfter)
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
+			if err := sleepCtx(ctx, wait); err != nil {
+				return err
 			}
 		}
 		t.setState(StateActive)
-		// Per-attempt hasher: every byte written to disk is fed through it, but
-		// the digest is only recorded on a fully-successful attempt — a hash is
-		// never stored for a partially-written chunk.
-		h := sha256.New()
-		var attemptDone int64
-		err := t.fetchAndWrite(ctx, eng, c, sink, h, func(delta int64) {
-			attemptDone += delta
-		})
+		res, err := t.fetchAndWrite(ctx, eng, c, sink, h, done)
 		if err == nil {
-			t.storeChunkHash(eng.AbsStart(c.Start), hex.EncodeToString(h.Sum(nil)))
+			// Only a piece that covers the layout chunk in full carries the
+			// whole root's hash; split pieces contribute to a root that is
+			// hashed from disk once it is complete (nothing was discarded —
+			// see worker).
+			if eng.WholeChunk(c) {
+				t.storeChunkHash(eng.AbsStart(c.Start), hex.EncodeToString(h.Sum(nil)))
+			}
 			t.throttleOK()
 			return nil
+		}
+		if errors.Is(err, errChunkSplit) {
+			// The idle-tail split boundary was reached on purpose. Return a
+			// dedicated signal (not a failure) so the worker stops this piece
+			// and requeues the unwritten remainder.
+			return &splitPointError{written: done + res.written}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// Roll back this attempt's progress delta: fetchAndWrite already counted
-		// the partial bytes via noteBytes, and the retry would count them AGAIN,
-		// pushing BytesDone past TotalSize (honest-metrics fix; data integrity
-		// is unaffected — the hasher is per-attempt too).
-		if attemptDone > 0 {
-			t.bytesDone.Add(-attemptDone)
+		if res.resumable {
+			done += res.written
+		} else if res.written > 0 {
+			// A single-stream body has no range to resume from: the bytes must
+			// be read again, so roll the progress back and restart the hash.
+			t.bytesDone.Add(-res.written)
 			if sink != nil {
 				sink(t.Snapshot())
 			}
+			h = sha256.New()
+			done = 0
 		}
 		// A 429 means the server is throttling THIS client's aggregate rate:
 		// halve the shared limiter so every worker eases off, not just this
@@ -218,22 +358,14 @@ func (t *Task) downloadChunk(ctx context.Context, eng *Engine, c Chunk, sink fun
 		// A permanent failure won't heal; skip the remaining attempts AND the
 		// worker-level requeue passes (the worker checks isPermanent too).
 		if isPermanent(err) {
+			rollback()
 			return err
 		}
 		lastErr = err
 		t.logf("warn", "chunk %d attempt %d: %v", c.Index, attempt, err)
 	}
+	rollback()
 	return lastErr
-}
-
-// chunkTimeoutCtx derives the per-chunk context: Timeout*10 (default 300s)
-// so a stalled connection can't hang a worker forever.
-func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	tmo := t.opts.Timeout * 10
-	if tmo <= 0 {
-		tmo = 300 * time.Second
-	}
-	return context.WithTimeout(ctx, tmo)
 }
 
 // contentRangeStartsWith reports whether a Content-Range header value
@@ -249,21 +381,21 @@ func contentRangeStartsWith(cr string, want int64) bool {
 	return err == nil && start == want
 }
 
-// fetchAndWrite does a single ranged GET and copies the body to disk, throttled
-// by the global limiter and accounting bytes into progress. h receives every
-// byte written to disk so the caller can record the chunk's SHA-256 on success.
-// eng supplies the region base (both profile) and transport client.
-func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView), h hash.Hash, onAttemptBytes func(int64)) error {
-	// Per-chunk timeout prevents a stalled connection from hanging a worker
-	// forever (see chunkTimeoutCtx). If the timeout fires, the chunk is
-	// retried by the caller (downloadChunk).
-	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
+// fetchAndWrite does one ranged GET and copies the body to disk, throttled by
+// the global limiter and accounting bytes into progress. resumeFrom is the
+// number of bytes of this chunk already on disk, so a retry asks only for the
+// remaining range; h must already contain those bytes' hash. eng supplies the
+// region base (both profile) and transport client.
+func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink func(ProgressView), h hash.Hash, resumeFrom int64) (chunkResult, error) {
+	// The idle guard cancels this context when the socket goes silent, which
+	// aborts the body read and lets downloadChunk resume the chunk.
+	chunkCtx, chunkCancel := context.WithCancel(ctx)
 	defer chunkCancel()
 
 	pr := t.probe.Load()
 	// Sizeless single-stream chunk: plain GET, no Range.
 	if pr.TotalSize < 0 || (pr.SingleStream && c.Start == 0 && c.Index == 0) {
-		return t.fetchWhole(chunkCtx, c, sink, h, onAttemptBytes)
+		return t.fetchWhole(chunkCtx, c, sink, h)
 	}
 
 	// Absolute offsets: region2 (both) starts at base, so Range and disk
@@ -272,8 +404,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	absEnd := c.End
 	if absEnd >= 0 {
 		absEnd = eng.AbsStart(c.End)
-	}
-	if absEnd < 0 {
+	} else {
 		absEnd = -1
 	}
 	// Mirror rotation: each chunk request takes the next URL in the mirror
@@ -293,9 +424,17 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 			t.logf("info", "chunk %d from mirror %s", c.Index, url)
 		}
 	}
-	resp, err := eng.Client().GetRange(chunkCtx, url, absStart, absEnd, ifRange)
+	from := absStart + resumeFrom
+	if resumeFrom > 0 {
+		end := "EOF"
+		if absEnd >= 0 {
+			end = fmt.Sprintf("%d", absEnd+1)
+		}
+		t.logf("info", "chunk %d resuming at byte %d/%s", c.Index, from, end)
+	}
+	resp, err := eng.Client().GetRange(chunkCtx, url, from, absEnd, ifRange)
 	if err != nil {
-		return err
+		return chunkResult{resumable: true}, err
 	}
 	defer resp.Body.Close()
 	// A 200 here means the server answered outside this run's byte layout:
@@ -303,16 +442,17 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	// offset would corrupt the file — chunk 3's slot would hold bytes from
 	// position 0), or an If-Range resume detected that the resource changed
 	// since the interrupted run. Both are drift: retrying won't fix it, so
-	// this is classified PERMANENT explicitly (a plain statusErr would leave
-	// 200 retryable — the old behaviour caused a retry-storm before failing).
+	// this is classified PERMANENT explicitly (a generic status wrap would
+	// leave 200 retryable — the old behaviour caused a retry-storm before
+	// failing).
 	if resp.StatusCode != http.StatusPartialContent {
 		transport.SkipBody(resp.Body)
 		op := "server ignored range request"
 		if t.resumeETag != "" {
 			op = "resume target changed since last run (If-Range mismatch)"
 		}
-		return transport.StatusError{
-			Err:       fmt.Errorf("%s at offset %d (status %d)", op, absStart, resp.StatusCode),
+		return chunkResult{resumable: true}, transport.StatusError{
+			Err:       fmt.Errorf("%s at offset %d (status %d)", op, from, resp.StatusCode),
 			Status:    resp.StatusCode,
 			Permanent: true,
 		}
@@ -321,94 +461,120 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	// same corruption vector as a 200: the bytes belong somewhere else on
 	// disk. Verify before a single byte is written; like the 200 case, no
 	// amount of retrying fixes a server that lies about its own layout.
-	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, absStart) {
+	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, from) {
 		transport.SkipBody(resp.Body)
-		return transport.StatusError{
-			Err:       fmt.Errorf("server sent wrong range for offset %d (Content-Range %q)", absStart, cr),
+		return chunkResult{resumable: true}, transport.StatusError{
+			Err:       fmt.Errorf("server sent wrong range for offset %d (Content-Range %q)", from, cr),
 			Status:    http.StatusExpectationFailed,
 			Permanent: true,
 		}
 	}
 
-	body := resp.Body
+	var body io.Reader = resp.Body
+	body, stopIdle := t.guardIdle(body, chunkCancel)
+	defer stopIdle()
 	if !t.lim.Unlimited() {
-		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
+		body = t.lim.Reader(chunkCtx, body)
 	}
 	if tl := t.taskLim.Load(); tl != nil && !tl.Unlimited() {
-		body = io.NopCloser(tl.Reader(chunkCtx, body))
+		body = tl.Reader(chunkCtx, body)
 	}
 
-	buf := make([]byte, 64*1024)
-	var off int64
-	n, err := copyChunkFrom(body, t.disk, absStart, buf, &off, h, func(delta int64) {
-		if onAttemptBytes != nil {
-			onAttemptBytes(delta)
-		}
+	trk := eng.Track(c)
+	buf := make([]byte, copyBufSize)
+	off := resumeFrom
+	_, err = copyChunkFrom(body, t.disk, absStart, buf, &off, h, func(delta int64) {
 		t.noteBytes(delta, sink)
-	})
+	}, trk)
 	if err != nil {
-		return err
+		if errors.Is(err, errChunkSplit) {
+			return chunkResult{written: off - resumeFrom, resumable: true}, err
+		}
+		return chunkResult{written: off - resumeFrom, resumable: true}, err
 	}
 	if c.End >= 0 && pr.TotalSize > 0 && off != (c.End-c.Start+1) {
 		err := fmt.Errorf("chunk %d short read: got %d want %d", c.Index, off, c.End-c.Start+1)
-		return transport.PermanentWrap(err, http.StatusExpectationFailed)
+		return chunkResult{written: off - resumeFrom, resumable: true}, transport.PermanentWrap(err, http.StatusExpectationFailed)
 	}
-	_ = n
-	return nil
+	return chunkResult{written: off - resumeFrom, resumable: true}, nil
 }
 
-func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash, onAttemptBytes func(int64)) error {
-	chunkCtx, chunkCancel := t.chunkTimeoutCtx(ctx)
+func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView), h hash.Hash) (chunkResult, error) {
+	chunkCtx, chunkCancel := context.WithCancel(ctx)
 	defer chunkCancel()
 
 	pr := t.probe.Load()
 	req, err := t.client.NewGetRequest(chunkCtx, pr.FinalURL)
 	if err != nil {
-		return err
+		return chunkResult{}, err
 	}
 	resp, err := t.client.HTTP.Do(req)
 	if err != nil {
-		return err
+		return chunkResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		retryAfter := transport.ParseRetryAfter(resp.Header.Get("Retry-After"))
 		transport.SkipBody(resp.Body)
-		return statusErr(fmt.Sprintf("GET %s", pr.FinalURL), resp.StatusCode)
+		return chunkResult{}, transport.StatusError{
+			Err:        fmt.Errorf("GET %s: status %d", pr.FinalURL, resp.StatusCode),
+			Status:     resp.StatusCode,
+			Permanent:  transport.IsPermanent(resp.StatusCode),
+			RetryAfter: retryAfter,
+		}
 	}
-	body := resp.Body
+	var body io.Reader = resp.Body
+	body, stopIdle := t.guardIdle(body, chunkCancel)
+	defer stopIdle()
 	if !t.lim.Unlimited() {
-		body = io.NopCloser(t.lim.Reader(chunkCtx, body))
+		body = t.lim.Reader(chunkCtx, body)
 	}
 	if tl := t.taskLim.Load(); tl != nil && !tl.Unlimited() {
-		body = io.NopCloser(tl.Reader(chunkCtx, body))
+		body = tl.Reader(chunkCtx, body)
 	}
-	buf := make([]byte, 64*1024)
+	buf := make([]byte, copyBufSize)
 	var off int64
 	_, err = copyChunkFrom(body, t.disk, 0, buf, &off, h, func(delta int64) {
-		if onAttemptBytes != nil {
-			onAttemptBytes(delta)
-		}
 		t.noteBytes(delta, sink)
-	})
+	}, nil)
 	if err != nil {
-		return err
+		return chunkResult{written: off}, err
 	}
 	// A known-size single-stream resource must end exactly at its probed size.
 	// EOF before that point is a failed download, not a successful partial file.
 	if pr.TotalSize > 0 && off != pr.TotalSize {
-		return transport.PermanentWrap(
+		return chunkResult{written: off}, transport.PermanentWrap(
 			fmt.Errorf("short read: got %d bytes, want %d", off, pr.TotalSize),
 			http.StatusExpectationFailed,
 		)
 	}
-	return nil
+	return chunkResult{written: off}, nil
 }
 
-func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64)) (int64, error) {
+func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64), trk *activePiece) (int64, error) {
 	var total int64
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			if trk != nil {
+				// A requested tail-split boundary stops this piece: write at
+				// most up to the boundary, then re-enter the queue.
+				if stop := trk.stopAfter.Load(); stop > 0 {
+					remaining := stop - trk.written.Load()
+					if remaining <= 0 {
+						return total, errChunkSplit
+					}
+					if int64(n) > remaining {
+						n = int(remaining)
+					}
+				}
+			}
+			// Account for the bytes BEFORE they hit the disk: a concurrent
+			// tail-split decision reads trk.written right after its CAS and
+			// relies on it seeing in-flight bytes, not just landed ones.
+			if trk != nil {
+				trk.written.Add(int64(n))
+			}
 			if _, werr := w.WriteAt(buf[:n], base+*off); werr != nil {
 				return total, werr
 			}
@@ -420,6 +586,15 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 			if onProgress != nil {
 				onProgress(int64(n))
 			}
+			if trk != nil {
+				wbytes := trk.written.Load()
+				// A requested tail-split boundary stops this piece; the
+				// remainder re-enters the queue and the bytes already
+				// counted here are final progress, not to be rolled back.
+				if stop := trk.stopAfter.Load(); stop > 0 && wbytes >= stop {
+					return total, errChunkSplit
+				}
+			}
 		}
 		if err == io.EOF {
 			return total, nil
@@ -428,6 +603,34 @@ func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *in
 			return total, err
 		}
 	}
+}
+
+// hashCompleteRoot reads the full span [absStart, absEnd] (inclusive) from
+// disk and stores its SHA-256 as the root chunk's resume hash. Called when a
+// layout chunk completed via tail-split sub-ranges — the incremental hash the
+// copy loop keeps during the piece only covers a strict sub-range, so the
+// hash has to come from disk (this runs once per completed root, not on the
+// copy hot loop).
+func (t *Task) hashCompleteRoot(eng *Engine, rs, re int64) {
+	absStart, absEnd := eng.AbsStart(rs), eng.AbsStart(re)
+	if absEnd < absStart || t.disk == nil {
+		return
+	}
+	h := sha256.New()
+	buf := make([]byte, copyBufSize)
+	for off := absStart; off <= absEnd; {
+		n := int64(len(buf))
+		if off+n-1 > absEnd {
+			n = absEnd - off + 1
+		}
+		if _, err := t.disk.ReadAt(buf[:n], off); err != nil {
+			t.logf("warn", "could not hash resume span [%d,%d]: %v", rs, re, err)
+			return
+		}
+		_, _ = h.Write(buf[:n])
+		off += n
+	}
+	t.storeChunkHash(absStart, hex.EncodeToString(h.Sum(nil)))
 }
 
 func (t *Task) noteBytes(delta int64, sink func(ProgressView)) {

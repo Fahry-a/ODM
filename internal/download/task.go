@@ -2,7 +2,6 @@ package download
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -131,6 +130,13 @@ type Task struct {
 	engines     []*Engine
 	regionConns []int
 	splitAt     int64
+
+	// layoutChunk is the work-stealing chunk size the current layout was built
+	// with (opts.ChunkSize, tuned down for small files so every allocated
+	// connection has work). 0 before Start. Resume verification and the
+	// control file read it so the persisted layout matches the queue's actual
+	// split instead of assuming opts.ChunkSize.
+	layoutChunk int64
 
 	// single is the hoisted engine for single-profile tasks (odm/aria2c),
 	// cached on first currentEngine() call so workers don't allocate a fresh
@@ -545,14 +551,3 @@ func (t *Task) totalOrDone() int64 {
 // into an "algo:hex" spec. Accepted forms: "algo:<hash>", "<64-hex>" (sha256),
 // "<40-hex>" (sha1), "<32-hex>" (md5), optionally followed by whitespace and
 // the filename (sha256sum output format).
-
-func (q *ChunkQueue) CompletedOffsets() []int64 {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	out := make([]int64, 0, len(q.completed))
-	for k := range q.completed {
-		out = append(out, k)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
-}
