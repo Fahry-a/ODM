@@ -201,3 +201,65 @@ func TestFile_CloseIdempotent(t *testing.T) {
 		t.Fatalf("second close: %v", err)
 	}
 }
+
+func TestOpenForWrite_TruncatesStaleTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.bin")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("X"), 128), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenForWrite(dir, "existing.bin", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != 4 {
+		t.Fatalf("stale tail remains: size=%d want=4", st.Size())
+	}
+}
+
+func TestOpenForResume_PreservesPartialBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "partial.bin")
+	if err := os.WriteFile(path, []byte("partial-data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenForResume(dir, "partial.bin", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got := make([]byte, len("partial-data"))
+	if _, err := f.ReadAt(got, 0); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "partial-data" {
+		t.Fatalf("resume data changed: %q", got)
+	}
+}
+
+func TestFile_TruncateUnknownSizeTail(t *testing.T) {
+	dir := t.TempDir()
+	f, err := OpenForWrite(dir, "stream.bin", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteAt(bytes.Repeat([]byte("A"), 128), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(17); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(filepath.Join(dir, "stream.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != 17 {
+		t.Fatalf("size=%d want=17", st.Size())
+	}
+}

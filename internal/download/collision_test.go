@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,38 +135,6 @@ func TestCollision_SkipExisting(t *testing.T) {
 	}
 }
 
-// TestUniqueName pins the counter placement: filepath.Ext's last extension,
-// so "f.tar.gz" → "f.tar.1.gz" and "f.bin" → "f.1.bin".
-func TestUniqueName(t *testing.T) {
-	dir := t.TempDir()
-	mk := func(name string) {
-		if werr := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); werr != nil {
-			t.Fatal(werr)
-		}
-	}
-
-	mk("f.tar.gz")
-	if got := uniqueName(dir, "f.tar.gz"); got != "f.tar.1.gz" {
-		t.Fatalf("f.tar.gz -> %s, want f.tar.1.gz (counter before Ext)", got)
-	}
-	if got := uniqueName(dir, "f.bin"); got != "f.1.bin" {
-		t.Fatalf("f.bin -> %s, want f.1.bin", got)
-	}
-	// Fill 1..3, next must be 4.
-	for i := 1; i <= 3; i++ {
-		mk(string(rune('a'+i-1)) + ".bin") // placeholder to keep dir non-empty
-	}
-	if rerr := os.Remove(filepath.Join(dir, "f.bin")); rerr != nil && !os.IsNotExist(rerr) {
-		t.Fatal(rerr)
-	}
-	for _, n := range []string{"f.1.bin", "f.2.bin"} {
-		mk(n)
-	}
-	if got := uniqueName(dir, "f.bin"); got != "f.3.bin" {
-		t.Fatalf("third free slot -> %s, want f.3.bin", got)
-	}
-}
-
 // TestParseChecksumSidecar pins the sidecar digest parser: bare hashes by
 // length, algo-prefixed forms, sha256sum output with filename, and rejects.
 func TestParseChecksumSidecar(t *testing.T) {
@@ -197,5 +166,44 @@ func TestParseChecksumSidecar(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Errorf("parse(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
 		}
+	}
+}
+
+func TestReserveUniqueName_Concurrent(t *testing.T) {
+	dir := t.TempDir()
+	const workers = 32
+	names := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name, err := reserveUniqueName(dir, "same.bin")
+			if err != nil {
+				errs <- err
+				return
+			}
+			names <- name
+		}()
+	}
+	wg.Wait()
+	close(names)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for name := range names {
+		if seen[name] {
+			t.Fatalf("duplicate reservation: %s", name)
+		}
+		seen[name] = true
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("reservation missing: %s: %v", name, err)
+		}
+	}
+	if len(seen) != workers {
+		t.Fatalf("reserved %d names, want %d", len(seen), workers)
 	}
 }

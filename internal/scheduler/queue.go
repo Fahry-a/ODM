@@ -269,7 +269,7 @@ func (s *Scheduler) releaseIdle() {
 		if s.isIdle {
 			s.wg.Done()
 			s.isIdle = false
-	}
+		}
 	})
 }
 

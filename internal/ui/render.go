@@ -144,7 +144,8 @@ func renderTaskLine(v download.ProgressView, useColor bool, indeterminatePos int
 	connDisplay := strings.Repeat(" ", colConns)
 	if v.Connections > 0 && v.State != download.StateCompleted {
 		connStr := fmt.Sprintf("[x%d]", v.Connections)
-		connDisplay = connStr + strings.Repeat(" ", colConns-len(connStr))
+		// Never pad with a negative count: [x1000] is wider than colConns.
+		connDisplay = connStr + strings.Repeat(" ", max(colConns-len(connStr), 0))
 	}
 
 	bar := BarIndeterminate(v.BytesDone, v.TotalSize, barWidth, indeterminatePos, "")

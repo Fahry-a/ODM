@@ -13,6 +13,13 @@ import (
 // (completed or errored) or ctx is cancelled. progressSink receives periodic
 // snapshots for the UI/RPC aggregator; pass nil to opt out.
 func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressView)) error {
+	reservedPath := ""
+	keepReservation := false
+	defer func() {
+		if reservedPath != "" && !keepReservation {
+			_ = os.Remove(reservedPath)
+		}
+	}()
 	ctx, cancel := context.WithCancel(ctx)
 	t.cancel = cancel
 	defer cancel()
@@ -141,17 +148,22 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 				t.logf("warn", "--skip-existing: %s exists with a different size (%d ≠ %s), re-downloading", outName, st.Size(), sizeOrUnknown(pr.TotalSize))
 			}
 		case "rename":
-			if _, err := os.Stat(t.outPath); err == nil {
-				outName = uniqueName(dir, outName)
-				// Publish via a COPIED probe: pr is shared with Snapshot()
-				// readers (UI/RPC pollers), and mutating pr.Filename in place
-				// raced with them. Same for deriveFilename below.
-				pr2 := *pr
-				pr2.Filename = outName
-				t.probe.Store(&pr2)
-				pr = &pr2
-				t.outPath = filepath.Join(dir, outName)
-				t.logf("info", "%s exists — saving as %s", filepath.Base(t.outPath), outName)
+			reservedName, reserveErr := reserveUniqueName(dir, outName)
+			if reserveErr != nil {
+				t.setState(StateError)
+				t.emitFinal(progressSink)
+				return reserveErr
+			}
+			previousName := outName
+			outName = reservedName
+			reservedPath = filepath.Join(dir, outName)
+			pr2 := *pr
+			pr2.Filename = outName
+			t.probe.Store(&pr2)
+			pr = &pr2
+			t.outPath = filepath.Join(dir, outName)
+			if outName != previousName {
+				t.logf("info", "%s exists — saving as %s", previousName, outName)
 			}
 		}
 	}
@@ -292,13 +304,20 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		}
 	}
 
-	disk, err := storage.OpenForWrite(dir, outName, pr.TotalSize)
+	var disk *storage.File
+	var err error
+	if alreadyDone > 0 {
+		disk, err = storage.OpenForResume(dir, outName, pr.TotalSize)
+	} else {
+		disk, err = storage.OpenForWrite(dir, outName, pr.TotalSize)
+	}
 	if err != nil {
 		t.setState(StateError)
 		t.emitFinal(progressSink)
 		return err
 	}
 	t.disk = disk
+	keepReservation = true // the file now contains resumable task state
 	defer disk.Close()
 
 	if alreadyDone > 0 {
@@ -347,13 +366,19 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		return t.finish()
 	}
 
-	// 3. Launch workers.
-	// Don't clobber a connTarget an RPC changeOption already raised before
-	// Start ran: keep the larger of (param, current target).
-	if cur := t.connTarget.Load(); int(cur) > conns {
-		conns = int(cur)
+	// 3. Launch workers. Preserve a scheduler target raised while Start was
+	// building the probe/queue. CAS prevents a concurrent SetConns from being
+	// overwritten between the read and write.
+	for {
+		cur := t.connTarget.Load()
+		if int(cur) > conns {
+			conns = int(cur)
+			break
+		}
+		if t.connTarget.CompareAndSwap(cur, int32(conns)) {
+			break
+		}
 	}
-	t.connTarget.Store(int32(conns))
 	if pr.TotalSize <= 0 && pr.SingleStream {
 		// Single-stream fallback: exactly one worker on the single whole-file chunk.
 		conns = 1
@@ -370,6 +395,15 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 	// same) and at MaxConnPerServer for h1 (each stream is a separate TCP
 	// connection there). For h2 the -x cap is irrelevant: all streams share
 	// one connection.
+	t.adjustMu.Lock()
+	// A SetConns call may have arrived after the earlier CAS but before this
+	// initialization barrier. Read it under the same mutex, then publish ready.
+	if cur := int(t.connTarget.Load()); cur > conns {
+		conns = cur
+	}
+	if pr.TotalSize <= 0 && pr.SingleStream {
+		conns = 1
+	}
 	workerCount := conns
 	if isAria {
 		if t.ariaSplit > 0 && int64(workerCount) > t.ariaSplit {
@@ -378,13 +412,13 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		if pr.TotalSize > 0 && !t.profileUsesH2() && t.opts.MaxConnPerServer > 0 && workerCount > t.opts.MaxConnPerServer {
 			workerCount = t.opts.MaxConnPerServer
 		}
-		// The displayed/live connection count must reflect the CAP, not the raw
-		// budget: with 4 segments and -c 16 the UI used to show [x16] while only
-		// 4 workers existed.
+		// The displayed/live connection count must reflect the cap.
 		conns = workerCount
 	}
 	t.conns.Store(int32(conns))
 	t.connTarget.Store(int32(conns))
+	t.ready.Store(true)
+	t.adjustMu.Unlock()
 	if t.engines != nil {
 		// both profile: spawn per-region workers with the region's conns.
 		for ei, eng := range t.engines {
@@ -402,10 +436,16 @@ func (t *Task) Start(ctx context.Context, conns int, progressSink func(ProgressV
 		}
 	}
 	// progress ticker even in single-worker sizeless case.
-	t.workerWg.Wait()
+	// Close the spawn window BEFORE Wait: every AdjustConns increase passes
+	// the adjustDone check and the WaitGroup Add under adjustMu, so an Add
+	// that is accepted here happens-before Wait starts (when waiters==0).
+	// Setting the flag after Wait instead would let a concurrent Add land
+	// with Wait already registered as a waiter — the runtime panics with
+	// "sync: WaitGroup misuse: Add called concurrently with Wait".
 	t.adjustMu.Lock()
 	t.adjustDone = true
 	t.adjustMu.Unlock()
+	t.workerWg.Wait()
 
 	// A cancelled context (^C / SIGTERM) is not an error: partial bytes are
 	// preserved and --continue resumes. Paint the task as paused instead of

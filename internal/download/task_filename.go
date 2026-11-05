@@ -8,16 +8,31 @@ import (
 	"strings"
 )
 
-// uniqueName returns dir/name rewritten to base.N.ext with the lowest N≥1
-// that doesn't exist yet ("f.tar.gz" → "f.1.tar.gz"): the counter goes before
-// filepath.Ext's last extension, so compound extensions stay readable.
-func uniqueName(dir, name string) string {
+// reserveUniqueName atomically reserves a destination with O_EXCL.
+func reserveUniqueName(dir, name string) (string, error) {
+	if dir == "" {
+		dir = "."
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create output directory %s: %w", dir, err)
+	}
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
-	for i := 1; ; i++ {
-		candidate := fmt.Sprintf("%s.%d%s", base, i, ext)
-		if _, err := os.Stat(filepath.Join(dir, candidate)); err != nil {
-			return candidate
+	for i := 0; ; i++ {
+		candidate := name
+		if i > 0 {
+			candidate = fmt.Sprintf("%s.%d%s", base, i, ext)
+		}
+		f, err := os.OpenFile(filepath.Join(dir, candidate), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			if closeErr := f.Close(); closeErr != nil {
+				_ = os.Remove(filepath.Join(dir, candidate))
+				return "", closeErr
+			}
+			return candidate, nil
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("reserve output %s: %w", candidate, err)
 		}
 	}
 }

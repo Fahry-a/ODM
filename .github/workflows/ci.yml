@@ -52,3 +52,6 @@ jobs:
 
       - name: Test
         run: go test -race -count=1 ./...
+
+      - name: Install script checksum verification (sh test)
+        run: sh docs/public/install_test.sh

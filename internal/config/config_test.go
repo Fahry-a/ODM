@@ -112,10 +112,36 @@ func TestApplySplitFileEmptyUnsets(t *testing.T) {
 	}
 }
 
+// TestParseDuplicateKeyFails pins the silent last-wins fix: a config with the
+// same key twice must fail loudly instead of dropping one value unnoticed.
+func TestParseDuplicateKeyFails(t *testing.T) {
+	_, err := Parse(strings.NewReader("retry = 3\nconnections = 8\nretry = 5\n"))
+	if err == nil {
+		t.Fatal("duplicate key must fail")
+	}
+	if !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("error must name the duplicated key, got: %v", err)
+	}
+}
+
 func TestApplyInvalidInt(t *testing.T) {
 	o := DefaultPtr()
 	if err := o.Apply(map[string]string{"connections": "abc"}); err == nil {
 		t.Fatalf("want error for non-int connections")
+	}
+}
+
+// TestApplyUnknownKeyFails pins the boundary fix: a typo'd key
+// (`conections = 5`) must abort with the key named, not silently fall back
+// to defaults while the user believes the file applied.
+func TestApplyUnknownKeyFails(t *testing.T) {
+	o := DefaultPtr()
+	err := o.Apply(map[string]string{"conections": "5"})
+	if err == nil {
+		t.Fatal("unknown key must fail")
+	}
+	if !strings.Contains(err.Error(), "conections") {
+		t.Fatalf("error must name the key, got: %v", err)
 	}
 }
 
@@ -181,10 +207,17 @@ func TestValidate(t *testing.T) {
 			o.RPCSecret = "tok"
 			return o
 		}, true},
-		{"listen-all with tls", func(o *Options) *Options {
+		{"listen-all with tls but no secret", func(o *Options) *Options {
 			o.RPCListenAll = true
 			o.RPCTLSCert = "/a/b.crt"
 			o.RPCTLSKey = "/a/b.key"
+			return o
+		}, false},
+		{"listen-all with tls and secret", func(o *Options) *Options {
+			o.RPCListenAll = true
+			o.RPCTLSCert = "/a/b.crt"
+			o.RPCTLSKey = "/a/b.key"
+			o.RPCSecret = "tok"
 			return o
 		}, true},
 		{"listen-all cert only", func(o *Options) *Options {
@@ -407,6 +440,28 @@ func TestCookieHeader(t *testing.T) {
 	}
 }
 
+// TestCookieHeader_BlankExpiry pins the panic where a 7-field row whose
+// expiry column is empty (or all spaces) reached FieldsFunc(...)[0] on an
+// empty slice. Such rows must be tolerated: parsed as "no expiry", not a crash.
+func TestCookieHeader_BlankExpiry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cookies.txt")
+	content := ".example.com\tTRUE\t/\tFALSE\t\tsession\tabc123\n" +
+		".example.com\tTRUE\t/\tFALSE\t   \ttoken\tXYZ\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := cookieHeader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"session=abc123", "token=XYZ"} {
+		if !strings.Contains(hdr, want) {
+			t.Errorf("cookie header missing %q: %s", want, hdr)
+		}
+	}
+}
+
 // TestLoadCookies_InjectedIntoHeaders pins the Setup-level wiring: --load-cookies
 // appends the parsed Cookie header to Headers (the existing -H pipeline).
 func TestLoadCookies_InjectedIntoHeaders(t *testing.T) {
@@ -425,6 +480,60 @@ func TestLoadCookies_InjectedIntoHeaders(t *testing.T) {
 	o.Headers = append(o.Headers, hdr)
 	if len(o.Headers) != 1 || !strings.Contains(o.Headers[0], "sid=S1") {
 		t.Fatalf("cookie not injected into headers: %+v", o.Headers)
+	}
+}
+
+// TestParseMetalink_PriorityOrder pins RFC 5854: priority=1 is the highest;
+// URLs lacking a priority sort last. Document order only breaks ties.
+func TestParseMetalink_PriorityOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prio.meta4")
+	xmlDoc := `<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="example.iso">
+    <url location="de" priority="2">https://second.example/x.iso</url>
+    <url location="us">https://none.example/x.iso</url>
+    <url location="fr" priority="1">https://first.example/x.iso</url>
+  </file>
+</metalink>`
+	if err := os.WriteFile(path, []byte(xmlDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := DefaultPtr()
+	got, err := parseMetalink(path, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "https://first.example/x.iso" {
+		t.Fatalf("priority=1 must be primary, got %v", got)
+	}
+	if len(o.Mirrors) != 2 || o.Mirrors[0] != "https://second.example/x.iso" || o.Mirrors[1] != "https://none.example/x.iso" {
+		t.Fatalf("mirrors = %v (priority 2, then unprioritized)", o.Mirrors)
+	}
+}
+
+// TestParseMetalink_ExplicitChecksumWins pins that a user-supplied --checksum
+// (or config value) is not silently overwritten by the metalink's hash.
+func TestParseMetalink_ExplicitChecksumWins(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sum.meta4")
+	xmlDoc := `<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="example.iso">
+    <hash type="sha256">` + strings.Repeat("a", 64) + `</hash>
+    <url>https://mirror.example/x.iso</url>
+  </file>
+</metalink>`
+	if err := os.WriteFile(path, []byte(xmlDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := DefaultPtr()
+	o.Checksum = "sha256:" + strings.Repeat("b", 64)
+	if _, err := parseMetalink(path, o); err != nil {
+		t.Fatal(err)
+	}
+	if o.Checksum != "sha256:"+strings.Repeat("b", 64) {
+		t.Fatalf("explicit --checksum was overwritten: %q", o.Checksum)
 	}
 }
 

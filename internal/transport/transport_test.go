@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -532,5 +533,62 @@ func TestSocks5ProxyInvalidURL(t *testing.T) {
 		if _, err := NewClient(ClientConfig{Proxy: u}); err == nil {
 			t.Errorf("NewClient(Proxy=%q): expected an error, got nil", u)
 		}
+	}
+}
+
+func TestRedirectDoesNotForwardCustomCredentialsAcrossOrigins(t *testing.T) {
+	var leaked atomic.Bool
+	dst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "" {
+			leaked.Store(true)
+		}
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer dst.Close()
+	target, err := url.Parse(dst.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://localhost:"+target.Port()+"/secret", http.StatusFound)
+	}))
+	defer src.Close()
+	c, err := NewClient(ClientConfig{MaxRedirect: 3, Headers: []string{"X-API-Key: audit-secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Probe(context.Background(), src.URL)
+	if err != nil {
+		t.Fatalf("probe through redirect: %v", err)
+	}
+	if leaked.Load() {
+		t.Fatal("custom credential header leaked across origins")
+	}
+}
+
+func TestProbe_HEADRangeAdvertisementMustBeConfirmed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Length", "256")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// This origin advertises ranges but ignores Range on GET.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 256))
+	}))
+	defer srv.Close()
+	c, err := NewClient(ClientConfig{MaxRedirect: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := c.Probe(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if pr.SupportsRange || !pr.SingleStream || pr.TotalSize != 256 {
+		t.Fatalf("lying HEAD must degrade to single stream, got %+v", pr)
 	}
 }

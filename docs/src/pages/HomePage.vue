@@ -14,7 +14,7 @@ const navLinks = [
 ]
 
 const heroMeta = [
-  'manual · edition v1.7.0',
+  'manual · edition v1.9.2',
   'linux · single static binary',
   'AUR · odm-bin',
   'MIT licence',
@@ -55,6 +55,14 @@ const rpcRows = [
   { method: 'odm.changeOption', what: 'rate limits + connections, mid-flight' },
   { method: 'odm.getGlobalStat · getVersion', what: 'counts and capabilities' },
   { method: 'odm.shutdown', what: 'wind the daemon down' },
+]
+
+const exits = [
+  { code: '0', what: 'all downloads succeeded' },
+  { code: '1', what: 'invalid argument' },
+  { code: '2', what: 'network error' },
+  { code: '3', what: 'partial failure' },
+  { code: '4', what: 'cancelled by user' },
 ]
 
 const flags = [

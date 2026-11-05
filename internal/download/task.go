@@ -176,6 +176,7 @@ type Task struct {
 
 	// mid-flight reallocation
 	connTarget atomic.Int32 // desired connection count (≤ conns for drain)
+	ready      atomic.Bool  // queue/engines are fully initialized for live rebalancing
 	baseCtx    context.Context
 	sink       func(ProgressView)
 	workerWg   sync.WaitGroup
@@ -293,7 +294,12 @@ func NewTask(id TaskID, url string, opts TaskOptions, client *transport.Client, 
 	if opts.RetryWait < 0 {
 		opts.RetryWait = 0
 	}
-	taskLim, _ := ratelimit.New(opts.TaskLimitRate)
+	// Boundary-validated at config.Validate; the error path stays for direct
+	// engine users and must be loud, never a silently missing cap.
+	taskLim, limErr := ratelimit.New(opts.TaskLimitRate)
+	if limErr != nil && logf != nil {
+		logf("warn", "--limit-rate-per-task %q ignored: %v", opts.TaskLimitRate, limErr)
+	}
 	t := &Task{
 		id:          id,
 		url:         url,
@@ -354,7 +360,23 @@ func (t *Task) State() TaskState { return TaskState(t.state.Load()) }
 // apply the Balancer's per-file allocation, which may differ from the global
 // default returned by the TaskMaker.
 
-func (t *Task) SetConns(n int) { t.conns.Store(int32(n)); t.connTarget.Store(int32(n)) }
+func (t *Task) SetConns(n int) {
+	if n < 1 {
+		n = 1
+	}
+	t.adjustMu.Lock()
+	if !t.ready.Load() {
+		// Start serializes publication of readiness with this pre-start target.
+		t.conns.Store(int32(n))
+		t.connTarget.Store(int32(n))
+		t.adjustMu.Unlock()
+		return
+	}
+	t.adjustMu.Unlock()
+	// Once workers are live, resize through the guarded path so increases
+	// actually launch workers and cannot race WaitGroup.Wait.
+	_ = t.AdjustConns(n, t.baseCtx, t.sink)
+}
 
 // SetH2Client attaches the HTTP/2 transport client used for the both
 // profile's region2 (and re-probe). Must be called before Start.
@@ -412,7 +434,7 @@ func (t *Task) AdjustConns(target int, ctx context.Context, sink func(ProgressVi
 	// the increase path below would spawn workers on a nil context (panic).
 	// Start reads connTarget when it launches, so an early adjustment still
 	// takes effect; we just can't spawn goroutines for it yet.
-	if ctx == nil {
+	if ctx == nil || !t.ready.Load() {
 		return false
 	}
 	old := t.connTarget.Swap(int32(target))
@@ -430,9 +452,15 @@ func (t *Task) AdjustConns(target int, ctx context.Context, sink func(ProgressVi
 		t.adjustMu.Unlock()
 		return false
 	}
+	eng := t.currentEngine()
+	if eng == nil || eng.q == nil {
+		t.adjustMu.Unlock()
+		return false
+	}
+	t.conns.Add(int32(target - int(old)))
 	for i := 0; i < target-int(old); i++ {
 		t.workerWg.Add(1)
-		go t.worker(ctx, t.currentEngine(), &t.workerWg, sink)
+		go t.worker(ctx, eng, &t.workerWg, sink)
 	}
 	t.adjustMu.Unlock()
 	return true
@@ -461,8 +489,11 @@ func (t *Task) profileUsesH2() bool {
 func (t *Task) currentEngine() *Engine {
 	t.layoutMu.Lock()
 	defer t.layoutMu.Unlock()
-	if t.engines != nil {
+	if len(t.engines) > 0 {
 		return t.engines[0]
+	}
+	if t.queue == nil {
+		return nil
 	}
 	if t.single == nil {
 		t.single = &Engine{q: t.queue, client: t.engineClient(isStaticQueue(t.queue)), base: 0}

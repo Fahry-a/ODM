@@ -4,6 +4,7 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,11 +17,11 @@ import (
 )
 
 const (
-	repoOwner       = "Fahry-a"
-	repoName        = "odm"
-	githubAPI       = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
-	hintCacheFile   = ".last-update-check"
-	hintCacheDir    = ".config/odm"
+	repoOwner        = "Fahry-a"
+	repoName         = "odm"
+	githubAPI        = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
+	hintCacheFile    = ".last-update-check"
+	hintCacheDir     = ".config/odm"
 	hintCacheMaxAge  = 24 * time.Hour
 	installScriptURL = "https://odm.orynix.id/install.sh"
 )
@@ -29,7 +30,9 @@ const (
 // Returns the bare version string (e.g. "1.8.0") and the tarball download URL.
 // Uses curl to avoid TLS/DNS issues with Go's pure-Go resolver on Android/Termux.
 func CheckLatest() (ver string, downloadURL string, err error) {
-	cmd := exec.Command("curl", "-fsSL", githubAPI)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "curl", "-fsSL", "--max-time", "4", githubAPI)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("GitHub API (curl): %w", err)
@@ -231,7 +234,7 @@ func runInstallScript() error {
 
 	// Download install.sh via curl (uses system DNS/certs, works on all platforms).
 	fmt.Println("downloading install script...")
-	cmd := exec.Command("curl", "-fsSL", "-o", tmpPath, installScriptURL)
+	cmd := exec.Command("curl", "-fsSL", "--connect-timeout", "5", "--max-time", "20", "-o", tmpPath, installScriptURL)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

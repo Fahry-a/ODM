@@ -25,6 +25,15 @@ type File struct {
 // land at any offset without the file growing mid-write. size<0 keeps
 // it as a plain grow-as-you-write file for sizeless streams.
 func OpenForWrite(dir, name string, size int64) (*File, error) {
+	return openForWrite(dir, name, size, false)
+}
+
+// OpenForResume opens an existing partial destination without truncating it.
+func OpenForResume(dir, name string, size int64) (*File, error) {
+	return openForWrite(dir, name, size, true)
+}
+
+func openForWrite(dir, name string, size int64, preserve bool) (*File, error) {
 	if name == "" {
 		return nil, errors.New("no output filename")
 	}
@@ -35,7 +44,11 @@ func OpenForWrite(dir, name string, size int64) (*File, error) {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	flags := os.O_RDWR | os.O_CREATE
+	if !preserve {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flags, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
@@ -69,6 +82,14 @@ func (w *File) WriteAt(b []byte, off int64) (int, error) {
 // ReadAt is used by checksum verify after the download completes.
 func (w *File) ReadAt(p []byte, off int64) (int, error) {
 	return w.f.ReadAt(p, off)
+}
+
+// Truncate sets the exact final length, removing stale tail bytes.
+func (w *File) Truncate(size int64) error {
+	if size < 0 {
+		return fmt.Errorf("negative file size: %d", size)
+	}
+	return w.f.Truncate(size)
 }
 
 // Sync flushes pending writes to disk (called once when a task completes).

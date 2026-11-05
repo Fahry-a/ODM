@@ -101,7 +101,7 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 			fmt.Fprintf(out, "    %s[%d]%s %s %s%s%s%s\n",
 				colorGreen, i+1, colorReset,
 				padToCells(truncateNameTo(r.Name, 40), 40),
-				colorCyan, strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr, colorReset,
+				colorCyan, strings.Repeat(" ", max(14-displayWidth(sizeStr), 0))+sizeStr, colorReset,
 				profileSuffix(r.Profile, r.Reason))
 		}
 		fmt.Fprintln(out)
@@ -119,7 +119,7 @@ func ConfirmBatch(in io.Reader, out io.Writer, rows []FileRow, connsPerFile, par
 		fmt.Fprintf(out, "  [%d] %s %s%s\n",
 			i+1,
 			padToCells(truncateNameTo(r.Name, 40), 40),
-			strings.Repeat(" ", 14-displayWidth(sizeStr))+sizeStr,
+			strings.Repeat(" ", max(14-displayWidth(sizeStr), 0))+sizeStr,
 			profileSuffix(r.Profile, r.Reason))
 	}
 	fmt.Fprintln(out)

@@ -236,17 +236,27 @@ func (t *Task) chunkTimeoutCtx(ctx context.Context) (context.Context, context.Ca
 	return context.WithTimeout(ctx, tmo)
 }
 
-// contentRangeStartsWith reports whether a Content-Range header value
-// ("bytes S-E/T") declares S == want. A 206 without a parseable start is
-// treated as hostile — RFC 9110 requires the header on single-range 206s.
-func contentRangeStartsWith(cr string, want int64) bool {
+// contentRangeMatches validates the complete byte interval and representation
+// size before accepting a 206 response. A correct start alone is insufficient:
+// a server can otherwise claim a truncated or differently-sized range.
+func contentRangeMatches(cr string, wantStart, wantEnd, wantTotal int64) bool {
 	rest, ok := strings.CutPrefix(cr, "bytes ")
 	if !ok {
 		return false
 	}
-	startStr, _, _ := strings.Cut(rest, "-")
-	start, err := strconv.ParseInt(startStr, 10, 64)
-	return err == nil && start == want
+	span, totalText, ok := strings.Cut(rest, "/")
+	if !ok {
+		return false
+	}
+	startText, endText, ok := strings.Cut(span, "-")
+	if !ok {
+		return false
+	}
+	start, err1 := strconv.ParseInt(startText, 10, 64)
+	end, err2 := strconv.ParseInt(endText, 10, 64)
+	total, err3 := strconv.ParseInt(totalText, 10, 64)
+	return err1 == nil && err2 == nil && err3 == nil &&
+		start == wantStart && end == wantEnd && total == wantTotal && end >= start
 }
 
 // fetchAndWrite does a single ranged GET and copies the body to disk, throttled
@@ -321,7 +331,7 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 	// same corruption vector as a 200: the bytes belong somewhere else on
 	// disk. Verify before a single byte is written; like the 200 case, no
 	// amount of retrying fixes a server that lies about its own layout.
-	if cr := resp.Header.Get("Content-Range"); !contentRangeStartsWith(cr, absStart) {
+	if cr := resp.Header.Get("Content-Range"); !contentRangeMatches(cr, absStart, absEnd, pr.TotalSize) {
 		transport.SkipBody(resp.Body)
 		return transport.StatusError{
 			Err:       fmt.Errorf("server sent wrong range for offset %d (Content-Range %q)", absStart, cr),
@@ -340,7 +350,11 @@ func (t *Task) fetchAndWrite(ctx context.Context, eng *Engine, c Chunk, sink fun
 
 	buf := make([]byte, 64*1024)
 	var off int64
-	n, err := copyChunkFrom(body, t.disk, absStart, buf, &off, h, func(delta int64) {
+	chunkMax := int64(-1)
+	if c.End >= 0 {
+		chunkMax = c.End - c.Start + 1
+	}
+	n, err := copyChunkFrom(body, t.disk, absStart, chunkMax, buf, &off, h, func(delta int64) {
 		if onAttemptBytes != nil {
 			onAttemptBytes(delta)
 		}
@@ -384,7 +398,11 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 	}
 	buf := make([]byte, 64*1024)
 	var off int64
-	_, err = copyChunkFrom(body, t.disk, 0, buf, &off, h, func(delta int64) {
+	wholeMax := int64(-1)
+	if pr.TotalSize > 0 {
+		wholeMax = pr.TotalSize
+	}
+	_, err = copyChunkFrom(body, t.disk, 0, wholeMax, buf, &off, h, func(delta int64) {
 		if onAttemptBytes != nil {
 			onAttemptBytes(delta)
 		}
@@ -401,14 +419,28 @@ func (t *Task) fetchWhole(ctx context.Context, _ Chunk, sink func(ProgressView),
 			http.StatusExpectationFailed,
 		)
 	}
+	if pr.TotalSize <= 0 {
+		if err := t.disk.Truncate(off); err != nil {
+			return fmt.Errorf("truncate unknown-size output to %d bytes: %w", off, err)
+		}
+	}
 	return nil
 }
 
-func copyChunkFrom(r io.Reader, w *storage.File, base int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64)) (int64, error) {
+// copyChunkFrom copies from r to w at base offset. maxBytes caps how many
+// bytes may be consumed; a server that streams more than the requested range
+// is rejected BEFORE the surplus is written anywhere (writing it would scribble
+// over the next chunk's region — silent corruption).
+func copyChunkFrom(r io.Reader, w *storage.File, base, maxBytes int64, buf []byte, off *int64, h hash.Hash, onProgress func(int64)) (int64, error) {
 	var total int64
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			if maxBytes >= 0 && total+int64(n) > maxBytes {
+				return total, transport.PermanentWrap(
+					fmt.Errorf("server sent more than the requested %d bytes at offset %d", maxBytes, base),
+					http.StatusExpectationFailed)
+			}
 			if _, werr := w.WriteAt(buf[:n], base+*off); werr != nil {
 				return total, werr
 			}

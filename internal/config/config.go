@@ -16,10 +16,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
+
+	"odm/internal/ratelimit"
 
 	"odm/internal/version"
 )
@@ -194,6 +197,15 @@ func Parse(r io.Reader) (map[string]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("config %d: invalid line (no '='): %q", lineNo, raw)
 		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("config %d: empty key: %q", lineNo, raw)
+		}
+		if _, exists := out[key]; exists {
+			// Repeated keys would silently last-win; every supported key is
+			// scalar, so a repeat is always a mistake — fail loudly.
+			return nil, fmt.Errorf("config %d: duplicate key %q", lineNo, key)
+		}
 		// Inline comments: strip a " #" (space-then-hash) tail that appears
 		// after the value. This lets the example config annotate defaults
 		// inline (`connections = 5  # budget`). We only strip a `#` that is
@@ -201,7 +213,7 @@ func Parse(r io.Reader) (map[string]string, error) {
 		// '#' (rare here — config keys are scalars, URLs come from the CLI)
 		// is preserved as long as it isn't " #". A leading '#' (full-line
 		// comment) was already handled above.
-		out[strings.TrimSpace(key)] = strings.TrimSpace(stripInlineComment(val))
+		out[key] = strings.TrimSpace(stripInlineComment(val))
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
@@ -220,8 +232,8 @@ func stripInlineComment(val string) string {
 	return val
 }
 
-// Apply merges parsed config-file keys onto o. Only known keys are applied; an
-// unknown key is skipped (forward-compat). A key the user explicitly set on the
+// Apply merges parsed config-file keys onto o. Only known keys are accepted; an
+// unknown key is fatal and names the key. A key the user explicitly set on the
 // CLI is NOT overwritten — Apply honours (CLI > user config > system
 // config > defaults) by skipping any key recorded in o.changed (populated by
 // CaptureChanged). This is what makes a defaulted CLI flag never wipe a value
@@ -232,12 +244,19 @@ func stripInlineComment(val string) string {
 // that case nothing is marked changed and every file key applies, which is the
 // correct behaviour for the pure file-stack test path.
 func (o *Options) Apply(kv map[string]string) error {
-	for k, v := range kv {
+	// Sorted keys: a file with multiple invalid entries must name the same
+	// key on every run (Go map iteration order is randomized).
+	keys := make([]string, 0, len(kv))
+	for k := range kv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		if o.IsSet(k) {
 			// CLI explicitly set this flag; config must not override it.
 			continue
 		}
-		if err := o.setFromKey(k, v); err != nil {
+		if err := o.setFromKey(k, kv[k]); err != nil {
 			return fmt.Errorf("config key %q: %w", k, err)
 		}
 	}
@@ -329,7 +348,11 @@ func (o *Options) setFromKey(key, val string) error {
 	case "log-level":
 		o.LogLevel = val
 	default:
-		// Unknown key: skip (forward-compatible), but ignore safely.
+		// Unknown key: fail loudly. A typo like `conections = 5` must not
+		// silently fall back to defaults while the user believes the file
+		// applied. Trade-off: a config written for a newer ODM errors on an
+		// older binary — acceptable, the message names the offending key.
+		return fmt.Errorf("unknown key %q (see /etc/odm/config.conf.example)", key)
 	}
 	return nil
 }
@@ -487,7 +510,7 @@ func (o *Options) Validate() error {
 	if o.Profile == "both" && o.ChunkSize != "4M" {
 		return errors.New("--chunk-size is not supported with --profile both (fixed 50/50 split)")
 	}
-	if o.Split < 0 || o.MaxConnPerServer < 1 {
+	if o.Split < 1 || o.MaxConnPerServer < 1 {
 		return errors.New("--split and --max-connection-per-server must be ≥ 1")
 	}
 	// A negative retry makes downloadChunk's `range Retry+1` run zero
@@ -500,8 +523,26 @@ func (o *Options) Validate() error {
 	if o.Profile == "odm" && (o.Split != DefaultSplit || o.MinSplitSize != DefaultMinSplitSize || o.MaxConnPerServer != DefaultMaxConnPerServer) {
 		return errors.New("--split / --min-split-size / --max-connection-per-server are only valid with --profile aria2c|both|smart")
 	}
-	if o.RPCListenAll && o.RPCSecret == "" && o.RPCTLSCert == "" && o.RPCTLSKey == "" {
-		return errors.New("--rpc-listen-all requires --rpc-secret or TLS (--rpc-tls-cert/--rpc-tls-key) for authentication")
+	if o.Timeout < 1 {
+		return fmt.Errorf("--timeout must be ≥ 1 second (got %d)", o.Timeout)
+	}
+	if o.MaxConnection < 1 {
+		return fmt.Errorf("--max-connections must be ≥ 1 (got %d)", o.MaxConnection)
+	}
+	// Limit strings are validated here so a typo fails at startup with a
+	// clear message instead of silently running unlimited.
+	if o.LimitRate != "" {
+		if _, err := ratelimit.ParseRate(o.LimitRate); err != nil {
+			return fmt.Errorf("--limit-rate: %w", err)
+		}
+	}
+	if o.TaskLimitRate != "" {
+		if _, err := ratelimit.ParseRate(o.TaskLimitRate); err != nil {
+			return fmt.Errorf("--limit-rate-per-task: %w", err)
+		}
+	}
+	if o.RPCListenAll && o.RPCSecret == "" {
+		return errors.New("--rpc-listen-all requires --rpc-secret; TLS encrypts traffic but does not authenticate RPC clients")
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -86,6 +87,11 @@ func NewManager(opts ExecOptions, logf LogFn) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	for i, murl := range opts.Mirrors {
+		if err := validateDownloadURL(murl); err != nil {
+			return nil, fmt.Errorf("--mirror #%d: %w", i+1, err)
+		}
+	}
 	lim, err := ratelimit.New(opts.LimitRate)
 	if err != nil {
 		return nil, err
@@ -144,7 +150,27 @@ func (m *Manager) Limiter() *ratelimit.Limiter { return m.lim }
 // can enumerate tellActive/tellWaiting/etc. The returned conns is a default;
 // the Scheduler overrides it with the Balancer's per-file allocation value
 // passed through the plan.
+// validateDownloadURL rejects non-HTTP(S) and hostless URLs at the boundary,
+// so a bad argument fails fast with a clear message instead of a confusing
+// transport error mid-run (and so RPC callers can't smuggle odd schemes).
+func validateDownloadURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid URL %q: unsupported scheme %q (want http|https)", raw, u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("invalid URL %q: missing host", raw)
+	}
+	return nil
+}
+
 func (m *Manager) NewTask(url string, _ int) (*Task, int, error) {
+	if err := validateDownloadURL(url); err != nil {
+		return nil, 0, err
+	}
 	id := TaskID(fmt.Sprintf("odm-%03d", m.nextID.Add(1)))
 	conns := m.opts.Connections
 	profile := m.opts.Profile

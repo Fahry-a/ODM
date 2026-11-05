@@ -21,8 +21,13 @@ import (
 )
 
 // serveRangeSlices serves the payload with full Range support via ServeContent.
+// A delay per range request ensures the test can cancel mid-flight.
 func serveRangeSlices(payload []byte) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			// Delay so a 150ms cancel lands mid-download (4 conns, 8 chunks = 2 rounds).
+			time.Sleep(100 * time.Millisecond)
+		}
 		http.ServeContent(w, r, "file.bin", time.Time{}, bytes.NewReader(payload))
 	}))
 }
@@ -118,7 +123,9 @@ func TestBothProfile_ResumeMid(t *testing.T) {
 	go func() { done <- task.Start(ctx, 4, nil) }()
 	time.Sleep(150 * time.Millisecond)
 	cancel()
-	<-done
+	if err := <-done; err == nil {
+		t.Fatal("cancelled download unexpectedly returned nil")
+	}
 
 	// Pass 2: resume with the same profile params.
 	task2 := buildBothTask(t, dir, srv.URL, 4)

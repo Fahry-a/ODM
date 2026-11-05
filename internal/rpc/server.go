@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -91,7 +93,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if err := s.bc.addWS(w, r); err != nil {
+	if err := s.bc.addWS(w, r, s.secret); err != nil {
 		http.Error(w, "ws upgrade failed: "+err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -107,14 +109,60 @@ func (s *Server) checkQuerySecret(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("secret")), []byte(s.secret)) == 1
 }
 
+// originAllowed is the Origin/Host gate for /rpc and /ws. Native clients
+// omit Origin and pass; browsers must present a same-origin Origin (scheme
+// http/https, no userinfo/path/query, Host == r.Host case-insensitively).
+// With no secret configured the Host must ALSO be loopback: otherwise a page
+// on attacker.example (DNS-rebound to 127.0.0.1) would pass a plain
+// Host==Origin equality check against an unauthenticated daemon.
+func originAllowed(r *http.Request, secret string) bool {
+	if raw := r.Header.Get("Origin"); raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || u.User != nil ||
+			u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return false
+		}
+		if !strings.EqualFold(u.Host, r.Host) ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return false
+		}
+	}
+	if secret == "" {
+		return isLoopbackHost(r.Host)
+	}
+	return true
+}
+
+func isLoopbackHost(hostport string) bool {
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostport)), ".")
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = strings.TrimSuffix(host, ".")
+	}
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
+	if !originAllowed(r, s.secret) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
 	if err != nil {
 		writeErr(w, nil, codeParseError, "parse: "+err.Error())
+		return
+	}
+	if len(body) > 1<<20 {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -436,6 +484,13 @@ func (s *Server) methodChangeOption(req *jsonRPCRequest, resp *jsonRPCResponse) 
 			// bytes missing and its control file deleted. Reject at the boundary.
 			if nc < 1 {
 				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be at least 1"}
+				return *resp
+			}
+			// An unauthenticated loopback caller must not spawn an unbounded
+			// worker/socket pool per request. 256 is far above any sane
+			// per-task budget.
+			if nc > 256 {
+				resp.Error = &rpcError{Code: codeInvalidParams, Message: "connections must be at most 256"}
 				return *resp
 			}
 			if !s.daemon.ChangeConns(download.TaskID(gid), nc) {
