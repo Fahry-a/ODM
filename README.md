@@ -53,7 +53,7 @@ Download from [GitHub Releases](https://github.com/Fahry-a/odm/releases). Availa
 
 ```bash
 # Example: Linux amd64
-curl -LO https://github.com/Fahry-a/odm/releases/latest/download/odm_1.7.0_linux_amd64.tar.gz
+curl -LO https://github.com/Fahry-a/odm/releases/latest/download/odm_1.9.2_linux_amd64.tar.gz
 tar -xzf odm_*.tar.gz
 sudo install -Dm755 odm /usr/local/bin/odm
 ```

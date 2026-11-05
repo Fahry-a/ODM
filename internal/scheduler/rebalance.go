@@ -84,7 +84,7 @@ func (s *Scheduler) rebalanceLive(ctx context.Context) {
 			view := in.task.Snapshot()
 			if view.State != download.StateCompleted && view.State != download.StateError {
 				in.task.SetConns(targets[i])
-		}
+			}
 		}
 
 		s.mu.Lock()

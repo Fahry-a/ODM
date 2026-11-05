@@ -71,10 +71,12 @@ func New(level Level, logFile string) (*Logger, error) {
 		from:  log.New(os.Stderr, "", log.LstdFlags),
 	}
 	if logFile != "" {
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("--log %q: %w", logFile, err)
 		}
+		// Tighten an already-existing mirror too — it may carry signed URLs.
+		_ = f.Chmod(0o600)
 		l.file = f
 		l.fileLog = log.New(f, "", log.LstdFlags)
 	}
@@ -136,11 +138,19 @@ func (l *Logger) TaskLogFn() func(string, string, ...any) {
 
 // Close releases the mirror file handle, if any. Idempotent: a second Close
 // is a no-op, matching the engine's defensive close-on-shutdown pattern.
+// The mutex keeps it from racing an in-flight logf (which would otherwise
+// see the file torn down halfway through a write and drop the line).
 func (l *Logger) Close() error {
-	if l == nil || l.file == nil {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
 		return nil
 	}
 	f := l.file
 	l.file = nil
+	l.fileLog = nil
 	return f.Close()
 }

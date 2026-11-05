@@ -1,7 +1,7 @@
 #!/bin/sh
 # ODM (Oryn Download Manager) install script
 # Usage: curl -fsSL https://odm.orynix.id/install.sh | sh
-#        curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --version 1.7.0
+#        curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --version 1.9.2
 #        curl -fsSL https://odm.orynix.id/install.sh | sh -s -- --update
 set -e
 
@@ -74,13 +74,13 @@ need uname
 need mktemp
 need install
 
-# sha256sum is on Linux; macOS ships shasum instead
+# Checksum verification is mandatory; never install an unverified archive.
 if command -v sha256sum >/dev/null 2>&1; then
     sha256_check() { sha256sum -c "$1"; }
 elif command -v shasum >/dev/null 2>&1; then
     sha256_check() { shasum -a 256 -c "$1"; }
 else
-    sha256_check() { warn "no sha256 tool found — skipping checksum verification"; }
+    err "required: sha256sum or shasum (cannot verify downloaded binary)"
 fi
 
 # --- detect platform ---------------------------------------------------------
@@ -170,19 +170,11 @@ curl -fSL -o "$TARBALL" "$DOWNLOAD_URL" || err "download failed — check if v${
 # verify checksum
 info "verifying checksum..."
 CHECKSUM_FILE="${TMPDIR}/checksums.txt"
-curl -fsSL -o "$CHECKSUM_FILE" "$CHECKSUM_URL" 2>/dev/null || true
-
-if [ -s "$CHECKSUM_FILE" ]; then
-    grep "$TARBALL_NAME" "$CHECKSUM_FILE" > "${TMPDIR}/checksum.txt" 2>/dev/null || true
-    if [ -s "${TMPDIR}/checksum.txt" ]; then
-        (cd "$TMPDIR" && sha256_check "${TMPDIR}/checksum.txt") || err "checksum verification failed"
-        ok "checksum verified"
-    else
-        warn "tarball not found in checksums.txt — skipping verification"
-    fi
-else
-    warn "could not fetch checksums.txt — skipping verification"
-fi
+curl -fsSL --retry 2 --max-time 20 -o "$CHECKSUM_FILE" "$CHECKSUM_URL" 2>/dev/null || err "could not fetch checksums.txt — refusing to install an unverified archive"
+awk -v name="$TARBALL_NAME" '$2 == name || $2 == "*" name { print; found=1 } END { exit !found }' "$CHECKSUM_FILE" > "$TMPDIR/checksum.txt" || err "tarball missing from checksums.txt"
+[ -s "$TMPDIR/checksum.txt" ] || err "empty checksum entry"
+(cd "$TMPDIR" && sha256_check "$TMPDIR/checksum.txt") || err "checksum verification failed"
+ok "checksum verified"
 
 # --- extract -----------------------------------------------------------------
 info "extracting..."

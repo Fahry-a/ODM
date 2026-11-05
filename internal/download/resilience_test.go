@@ -153,6 +153,12 @@ func TestConcurrentFailedAttemptRollbackOnlyOwnBytes(t *testing.T) {
 		w.Header().Set("Content-Length", itoaS(int(end-start+1)))
 		w.WriteHeader(http.StatusPartialContent)
 
+		// The transport's probe is a distinct one-byte Range request. It must
+		// complete immediately rather than entering the injected chunk failure.
+		if start == 0 && end == 0 {
+			_, _ = w.Write(payload[:1])
+			return
+		}
 		if start == 0 && firstChunkAttempts.Add(1) == 1 {
 			_, _ = w.Write(payload[:512])
 			if f, ok := w.(http.Flusher); ok {

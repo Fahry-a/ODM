@@ -48,7 +48,7 @@ onUnmounted(() => window.removeEventListener('hashchange', syncRoute))
       <a href="https://github.com/Fahry-a/ODM/releases/latest">Releases</a>
       <a href="https://pm.foenui.net/" target="_blank" rel="noreferrer">Foenui PM</a>
     </span>
-    <span class="foot-stmt__fine">a Go program by Fahry-a · MIT · this page documents v1.7.0</span>
+    <span class="foot-stmt__fine">a Go program by Fahry-a · MIT · this page documents v1.9.2</span>
   </div>
 </footer>
 </template>

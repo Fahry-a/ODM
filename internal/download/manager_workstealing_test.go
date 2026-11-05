@@ -42,7 +42,7 @@ func TestWorkStealing_BeatsStaticEqualSplit(t *testing.T) {
 		numChunks     = 64        // total payload = 1 MiB across 64 chunks
 		S             = 4         // parallel workers/connections (also static-split parts)
 		slowCount     = 8         // last 8 chunks form the slow region (lives in one static slice)
-		perChunkDelay = 60 * time.Millisecond
+		perChunkDelay = 150 * time.Millisecond
 	)
 
 	payload := make([]byte, int64(chunk)*numChunks)

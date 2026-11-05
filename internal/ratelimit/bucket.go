@@ -125,6 +125,7 @@ func (l *Limiter) SetRate(spec string) error {
 		l.lr.Store(nil)
 		l.bytes.Store(0)
 		l.cooldownUntil.Store(0)
+		l.configured.Store(0)
 		return nil
 	}
 	bps, err := ParseRate(spec)
@@ -135,6 +136,7 @@ func (l *Limiter) SetRate(spec string) error {
 		l.lr.Store(nil)
 		l.bytes.Store(0)
 		l.cooldownUntil.Store(0)
+		l.configured.Store(0)
 		return nil
 	}
 	if bps > int64(maxInt()) {
@@ -161,8 +163,17 @@ func (l *Limiter) Acquire(ctx context.Context, n int) error {
 	if lr == nil {
 		return nil
 	}
-	if err := lr.WaitN(ctx, min(n, lr.Burst())); err != nil {
-		return fmt.Errorf("rate: %w", err)
+	// Wait for the FULL n in burst-sized steps. A single WaitN(ctx, n) fails
+	// immediately when n exceeds the bucket (rate < read-chunk size), and the
+	// old min(n, burst) truncation silently under-counted against the bucket —
+	// a configured 1 KB/s then flowed at a 64 KiB/s floor.
+	remaining := n
+	for remaining > 0 {
+		step := min(remaining, lr.Burst())
+		if err := lr.WaitN(ctx, step); err != nil {
+			return fmt.Errorf("rate: %w", err)
+		}
+		remaining -= step
 	}
 	return nil
 }
@@ -241,5 +252,5 @@ func ParseRate(spec string) (int64, error) {
 	return bps, nil
 }
 
-func maxInt() int { return int(^uint(0) >> 1) }
+func maxInt() int     { return int(^uint(0) >> 1) }
 func maxInt64() int64 { return int64(^uint64(0) >> 1) }

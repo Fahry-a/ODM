@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,18 +17,23 @@ import (
 //
 // Hermetic: the system + user config file layers are neutralized so only
 // defaults + the CLI flags influence o.URLs. XDG_CONFIG_HOME points at an empty
-// temp dir (kills the user-config layer), and --config points at a nonexistent
-// path (kills the system-config layer — ParseFile's os.IsNotExist is tolerated
-// by LoadLayers). HOME is also pinned so os.UserConfigDir is deterministic.
+// temp dir (kills the user-config layer), the system-config layer is pinned to
+// a nonexistent path, and --config points at an existing but empty file.
+// HOME is also pinned so os.UserConfigDir is deterministic.
 func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 	// Isolate from the host's real ~/.config/odm/config.conf and /etc config.
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	t.Setenv("HOME", t.TempDir()) // belt-and-suspenders for os.UserConfigDir
+	systemConfigPath = filepath.Join(t.TempDir(), "no-system.conf")
+	t.Cleanup(func() { systemConfigPath = DefaultConfigPath })
 
-	// A --config path that doesn't exist; LoadLayers tolerates its absence
-	// (os.IsNotExist) so only defaults + CLI flags survive.
-	missingConfig := filepath.Join(t.TempDir(), "does-not-exist.conf")
+	// An --config that exists but is empty: the explicit layer parses fine
+	// and applies nothing, so only defaults + CLI flags survive.
+	emptyConfig := filepath.Join(t.TempDir(), "empty.conf")
+	if err := os.WriteFile(emptyConfig, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
@@ -36,31 +42,31 @@ func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 	}{
 		{
 			name: "space-separated positional args (canonical)",
-			argv: []string{"-c", "16", "--config", missingConfig,
+			argv: []string{"-c", "16", "--config", emptyConfig,
 				"https://files.test.xyz/a.tar.gz", "https://files.test.xyz/b.tar.gz", "https://files.test.xyz/c.tar.gz"},
 			want: []string{"https://files.test.xyz/a.tar.gz", "https://files.test.xyz/b.tar.gz", "https://files.test.xyz/c.tar.gz"},
 		},
 		{
 			name: "single comma-containing arg stays ONE URL (legacy split removed)",
-			argv: []string{"-c", "16", "--config", missingConfig,
+			argv: []string{"-c", "16", "--config", emptyConfig,
 				"https://files.test.xyz/a.tar.gz,https://files.test.xyz/b.tar.gz,https://files.test.xyz/c.tar.gz"},
 			want: []string{"https://files.test.xyz/a.tar.gz,https://files.test.xyz/b.tar.gz,https://files.test.xyz/c.tar.gz"},
 		},
 		{
 			name: "URLs with literal commas via space-separated form (comma-safe)",
-			argv: []string{"-c", "16", "--config", missingConfig,
+			argv: []string{"-c", "16", "--config", emptyConfig,
 				"https://h/x?ids=1,2,3", "https://h/y?ids=4,5,6"},
 			want: []string{"https://h/x?ids=1,2,3", "https://h/y?ids=4,5,6"},
 		},
 		{
 			name: "single URL with internal comma is NOT split (comma protected)",
-			argv: []string{"-c", "16", "--config", missingConfig,
+			argv: []string{"-c", "16", "--config", emptyConfig,
 				"https://h/path?ids=1,2,3"},
 			want: []string{"https://h/path?ids=1,2,3"},
 		},
 		{
 			name: "-sf flag rewrites to --split-file and URLs still resolve (Mode C inputs)",
-			argv: []string{"-c", "16", "-sf", "4", "--config", missingConfig,
+			argv: []string{"-c", "16", "-sf", "4", "--config", emptyConfig,
 				"https://files.test.xyz/a.tar.gz", "https://files.test.xyz/b.tar.gz"},
 			want: []string{"https://files.test.xyz/a.tar.gz", "https://files.test.xyz/b.tar.gz"},
 		},
@@ -91,7 +97,7 @@ func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 		if err := os.WriteFile(list, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		o, _, err := Setup([]string{"-c", "8", "-i", list, "--config", missingConfig})
+		o, _, err := Setup([]string{"-c", "8", "-i", list, "--config", emptyConfig})
 		if err != nil {
 			t.Fatalf("Setup -i: %v", err)
 		}
@@ -113,7 +119,7 @@ func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 		if err := os.WriteFile(list, []byte("https://fromfile/a\nhttps://fromfile/b\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		o, _, err := Setup([]string{"-c", "4", "-i", list, "--config", missingConfig,
+		o, _, err := Setup([]string{"-c", "4", "-i", list, "--config", emptyConfig,
 			"https://positional/a"})
 		if err != nil {
 			t.Fatalf("Setup: %v", err)
@@ -130,6 +136,74 @@ func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 	})
 }
 
+// TestSetup_ExplicitConfigMissing pins the failure mode where a typo'd
+// --config was silently ignored and odm ran on defaults (dropping any
+// proxy/auth settings in the intended file without a word).
+func TestSetup_ExplicitConfigMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	systemConfigPath = filepath.Join(t.TempDir(), "no-system.conf")
+	t.Cleanup(func() { systemConfigPath = DefaultConfigPath })
+
+	missing := filepath.Join(t.TempDir(), "confg.conf") // typo
+	_, _, err := Setup([]string{"--config", missing, "https://files.test.xyz/x.bin"})
+	if err == nil {
+		t.Fatal("explicit --config pointing at a missing file must fail")
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("error must name the offending path, got: %v", err)
+	}
+}
+
+// TestSetup_BrokenConfigSurfaces pins the silently-swallowed Apply error:
+// a config line like `retry = banana` now aborts with the offending key in
+// the message instead of running on a nondeterministic partial merge.
+func TestSetup_BrokenConfigSurfaces(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	systemConfigPath = filepath.Join(t.TempDir(), "no-system.conf")
+	t.Cleanup(func() { systemConfigPath = DefaultConfigPath })
+
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "bad.conf")
+	if err := os.WriteFile(cfg, []byte("connections = 8\nretry = banana\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Setup([]string{"--config", cfg, "https://files.test.xyz/x.bin"})
+	if err == nil {
+		t.Fatal("an invalid key in the explicit config must fail")
+	}
+	if !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("error must name the invalid key, got: %v", err)
+	}
+}
+
+// TestSetup_BrokenUserConfigSurfaces pins the user-config counterpart:
+// a present-but-corrupt ~/.config/odm/config.conf errors instead of being
+// skipped without a word.
+func TestSetup_BrokenUserConfigSurfaces(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	systemConfigPath = filepath.Join(t.TempDir(), "no-system.conf")
+	t.Cleanup(func() { systemConfigPath = DefaultConfigPath })
+
+	uc := filepath.Join(xdg, "odm")
+	if err := os.MkdirAll(uc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uc, "config.conf"), []byte("retry = banana\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Setup([]string{"https://files.test.xyz/x.bin"})
+	if err == nil {
+		t.Fatal("an invalid key in the user config must fail")
+	}
+	if !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("error must name the invalid key, got: %v", err)
+	}
+}
+
 // TestSetup_LayeredConfigMergedWithURLs confirms Setup honors both the file
 // layer and CLI flags simultaneously, then resolves URLs — the integration that
 // the isolated Apply/resolveURLs tests can't show on their own. A user --config
@@ -138,6 +212,8 @@ func TestSetup_BatchURLParsing_Integration(t *testing.T) {
 func TestSetup_LayeredConfigMergedWithURLs(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	systemConfigPath = filepath.Join(t.TempDir(), "no-system.conf")
+	t.Cleanup(func() { systemConfigPath = DefaultConfigPath })
 
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "my.conf")

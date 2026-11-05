@@ -702,9 +702,17 @@ func (r *Renderer) RunLoop(ctx context.Context, interval time.Duration,
 			// interleaved lines seen on ^C. The caller's Frame(nil,nil) renders
 			// the retained cache as the single final screen.
 			return
-		case s := <-snapshots:
+		case s, ok := <-snapshots:
+			if !ok {
+				snapshots = nil
+				continue
+			}
 			r.Frame(s, r.cur.lastQueue)
-		case s := <-qSnapshots:
+		case s, ok := <-qSnapshots:
+			if !ok {
+				qSnapshots = nil
+				continue
+			}
 			r.Frame(r.cur.lastLive, s)
 		case <-t.C:
 			// Re-render last-seen slices; updateCache reconciles the cache and

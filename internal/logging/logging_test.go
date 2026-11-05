@@ -154,6 +154,52 @@ func TestLogger_FileMirror(t *testing.T) {
 	}
 }
 
+// TestLogger_FileMirrorPermissions pins owner-only permissions: the mirror
+// may carry signed URLs, so it must not be world-readable — including when
+// the file already exists with loose permissions.
+func TestLogger_FileMirrorPermissions(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "odm.log")
+	if err := os.WriteFile(logPath, []byte("previous\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := New(LevelInfo, logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	st, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := st.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("log file permission = %o, want 600", perm)
+	}
+}
+
+// TestLogger_CloseRaceFree: Close must not race an in-flight logf (the race
+// detector covers the goroutines; the contract is that neither panics nor
+// silently corrupts the mirror).
+func TestLogger_CloseRaceFree(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		dir := t.TempDir()
+		l, err := New(LevelInfo, filepath.Join(dir, "odm.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for j := 0; j < 50; j++ {
+				l.Infof("line %d", j)
+			}
+		}()
+		_ = l.Close()
+		<-done
+		_ = l.Close()
+	}
+}
+
 // TestLogger_New_BadPath: an un-openable --log path must surface as an error
 // rather than silently swallowing the problem (otherwise the user thinks
 // they're capturing logs when they aren't).

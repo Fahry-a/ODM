@@ -56,12 +56,30 @@ type Client struct {
 	baseHdr http.Header // User-Agent, Referer, custom headers — applied to every request
 }
 
-// NewClient builds an HTTP client honouring MaxRedirect, CheckCertificate and
-// Proxy. Proxy parsing accepts http:// and https:// (wired through
-// Transport.Proxy, i.e. HTTP CONNECT) plus socks5:// and socks5h:// (real
-// SOCKS5 via golang.org/x/net/proxy, wired through DialContext — see
-// socks5Dialer for the DNS semantics). Unsupported or malformed proxy URLs
-// error out here rather than silently falling back to CONNECT tunnelling.
+// sameOrigin compares scheme, hostname, and effective port so credentials
+// cannot cross protocol or port boundaries.
+func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil || !strings.EqualFold(a.Scheme, b.Scheme) ||
+		!strings.EqualFold(a.Hostname(), b.Hostname()) {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		if strings.EqualFold(u.Scheme, "https") {
+			return "443"
+		}
+		if strings.EqualFold(u.Scheme, "http") {
+			return "80"
+		}
+		return ""
+	}
+	return port(a) == port(b)
+}
+
+// NewClient validates proxy URLs and builds the configured HTTP transport.
+// Unsupported or malformed proxy URLs fail rather than silently falling back.
 func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.MaxRedirect < 0 {
 		cfg.MaxRedirect = 0
@@ -141,6 +159,21 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	checkRedirect := func(req *http.Request, via []*http.Request) error {
 		if len(via) > cfg.MaxRedirect {
 			return fmt.Errorf("max redirects (%d) exceeded", cfg.MaxRedirect)
+		}
+		if len(via) > 0 && !sameOrigin(via[len(via)-1].URL, req.URL) {
+			// Go strips a few standard credentials itself, but arbitrary
+			// --header values (X-API-Key, X-Auth-Token, etc.) are not covered.
+			// Never forward caller-supplied credentials to another origin.
+			for _, raw := range cfg.Headers {
+				key, _, ok := strings.Cut(raw, ":")
+				if ok {
+					req.Header.Del(strings.TrimSpace(key))
+				}
+			}
+			req.Header.Del("Authorization")
+			req.Header.Del("Proxy-Authorization")
+			req.Header.Del("Cookie")
+			req.Header.Del("Referer")
 		}
 		return nil
 	}
@@ -319,11 +352,10 @@ func (c *Client) Probe(ctx context.Context, rawURL string) (*ProbeResult, error)
 				}
 				pr.AcceptRanges = true
 			}
+			// Accept-Ranges on HEAD is advisory only. Some origins advertise
+			// it but ignore Range on GET; confirm with the actual ranged probe
+			// below before enabling parallel workers.
 			SkipBody(r.Body)
-			if pr.AcceptRanges && pr.TotalSize > 0 {
-				pr.SupportsRange = true
-				return pr, nil
-			}
 		} else {
 			SkipBody(r.Body)
 		}
@@ -352,11 +384,24 @@ func (c *Client) Probe(ctx context.Context, rawURL string) (*ProbeResult, error)
 
 	switch {
 	case r.StatusCode == http.StatusPartialContent:
-		pr.SupportsRange = true
-		pr.AcceptRanges = true
-		if cr := r.Header.Get("Content-Range"); cr != "" {
-			if v := parseRangeTotal(cr); v >= 0 {
-				pr.TotalSize = v
+		cr := r.Header.Get("Content-Range")
+		if !validRangeProbe(cr) {
+			// A malformed 206 cannot establish safe byte offsets. Fall back to
+			// a single sequential GET rather than risk writing misaligned data.
+			pr.SupportsRange = false
+			pr.SingleStream = true
+			if pr.TotalSize <= 0 {
+				if v := parseRangeTotal(cr); v > 0 {
+					pr.TotalSize = v
+				}
+			}
+		} else {
+			pr.SupportsRange = true
+			pr.AcceptRanges = true
+			pr.TotalSize = parseRangeTotal(cr)
+			if pr.TotalSize <= 0 {
+				pr.SupportsRange = false
+				pr.SingleStream = true
 			}
 		}
 	case r.StatusCode >= 200 && r.StatusCode < 300:
@@ -438,6 +483,21 @@ func mergeSize(dst, src *ProbeResult) {
 	}
 	dst.FinalURL = src.FinalURL
 	dst.StatusCode = src.StatusCode
+}
+
+// validRangeProbe accepts only the exact one-byte interval requested by
+// doRangeProbe and a concrete positive representation length.
+func validRangeProbe(cr string) bool {
+	rest, ok := strings.CutPrefix(cr, "bytes ")
+	if !ok {
+		return false
+	}
+	span, totalText, ok := strings.Cut(rest, "/")
+	if !ok || span != "0-0" {
+		return false
+	}
+	total, err := strconv.ParseInt(totalText, 10, 64)
+	return err == nil && total > 0
 }
 
 // parseRangeTotal extracts the total-byte field of a "Content-Range: bytes 0-0/12345".

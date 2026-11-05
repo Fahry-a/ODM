@@ -15,7 +15,7 @@ const navLinks = [
 ]
 
 const heroMeta = [
-  'manual · edition v1.7.0',
+  'manual · edition v1.9.2',
   'linux · single static binary',
   'AUR · odm-bin',
   'MIT licence',
@@ -120,8 +120,8 @@ const cliGroups = [
   {
     title: 'Input and output',
     rows: [
-      ['URL...', 'Download one or more URLs. Multiple URLs trigger the scheduler modes described below. Space-separated positional args are the recommended form; a comma inside a URL (e.g. ?ids=1,2,3) is ambiguous in the legacy comma form.'],
-      ['-i, --input-file', 'Read a URL list from FILE — one per line, # comments and blanks skipped. Local .meta4 / .metalink Metalink4 files and remote Metalink documents are supported.'],
+      ['URL...', 'Download one or more URLs. Multiple URLs trigger the scheduler modes described below. Positional arguments are passed through verbatim, so a comma inside a URL is literal.'],
+      ['-i, --input-file', 'Read a URL list from FILE — one per line, # comments and blanks skipped. Local .meta4 / .metalink Metalink4 documents are supported (the first <file> entry; its URLs become primary + mirrors).'],
       ['-d, --dir', 'Destination directory for final files and .odm resume sidecars. Defaults to the current working directory.'],
       ['-o, --output', 'Override the output filename. Single-file mode only; batches use server names or Metalink names.'],
       ['--auto-rename', 'Keep an existing destination and save as name.<N>.ext instead. Mutually exclusive with --skip-existing.'],
@@ -212,9 +212,9 @@ const configKeys = [
   ['connections / max-connections / split-file', 'the balancer budget (defaults 5 / 32 / unset)'],
   ['dir / output', 'destination directory (default cwd) / output name (single-file only)'],
   ['max-redirect / retry / retry-wait / timeout', '5 / 3 / 2 / 30'],
-  ['user-agent / header / load-cookies / referer', 'request identity and custom headers'],
+  ['user-agent / load-cookies / referer', 'request identity (--header is CLI-only)'],
   ['proxy / check-certificate', 'proxy URL / TLS verification (default true)'],
-  ['checksum / checksum-url / mirror', 'final verification and alternate sources (mirror repeatable)'],
+  ['checksum / checksum-url / mirror', 'final verification and alternate source (--mirror is CLI-repeatable)'],
   ['limit-rate / limit-rate-per-task', 'global and per-task token-bucket caps'],
   ['chunk-size', 'work-stealing chunk size (default 4M)'],
   ['profile / split / min-split-size / max-connection-per-server', 'engine profile and aria2c tuning (odm / 5 / 20M / 1)'],
@@ -235,7 +235,7 @@ const exits = [
 <template>
 <main id="docs" class="docs-page">
   <section class="docs-hero" aria-labelledby="docs-title">
-    <p class="label">Reference manual · v1.7.0</p>
+    <p class="label">Reference manual · v1.9.2</p>
     <h1 id="docs-title">ODM Documentation</h1>
     <p class="docs-lead">A detailed field guide for installing, configuring, scripting, and operating ODM: the Go download manager that treats connections as one budget and then splits that budget across files, chunks, profiles, mirrors, and RPC clients.</p>
     <DownloadAnimation compact />
@@ -342,7 +342,7 @@ odm -l 5M --limit-rate-per-task 2M https://files.test.xyz/a.iso https://files.te
         <p>Run <code>odm --rpc</code> to act as a daemon exposing JSON-RPC 2.0 + WebSocket, so third-party GUIs and scripts can drive it without parsing terminal output:</p>
         <pre class="block"><code>POST  http://127.0.0.1:6900/rpc   (JSON-RPC 2.0)
  WS   ws://127.0.0.1:6900/ws      (event notifications)</code></pre>
-        <p>The default bind is <code>127.0.0.1</code> — safe for local automation. <code>--rpc-listen-all</code> binds <code>0.0.0.0</code>; pair that with <code>--rpc-secret</code>. Auth is aria2-style: the first JSON-RPC param is <code>token:&lt;secret&gt;</code> (or <code>?secret=&lt;value&gt;</code> on the WebSocket upgrade).</p>
+        <p>The default bind is <code>127.0.0.1</code>. <code>--rpc-listen-all</code> binds <code>0.0.0.0</code> and <i>requires</i> <code>--rpc-secret</code> (TLS alone does not authenticate clients). Auth is aria2-style: the first JSON-RPC param is <code>token:&lt;secret&gt;</code> (or <code>?secret=&lt;value&gt;</code> on the WebSocket upgrade). Browser requests with a foreign <code>Origin</code> are rejected on both endpoints; with no secret set, non-loopback <code>Host</code> headers are rejected too (DNS-rebinding guard).</p>
         <p>TLS is available via <code>--rpc-tls-cert</code> and <code>--rpc-tls-key</code> (PEM). When both are provided the server switches to HTTPS/WSS and prints an <code>https://</code> URL.</p>
         <pre class="block"><code>odm --rpc --rpc-secret hunter2 -d ~/Downloads
 curl -s http://127.0.0.1:6900/rpc \
@@ -364,9 +364,9 @@ curl -s http://127.0.0.1:6900/rpc \
         <p>Configuration files mirror CLI behavior for defaults you do not want to repeat; CLI flags remain the clearest place to express one-off choices in scripts. Key names match the CLI long-flags without the leading <code>--</code>.</p>
         <p><b>Precedence</b> (a defaulted flag never overwrites a value the user put in a file):</p>
         <pre class="block"><code>CLI args &gt; ~/.config/odm/config.conf &gt; /etc/odm/config.conf &gt; defaults</code></pre>
-        <p>Format is <code>key = value</code>, one option per line, <code>#</code> starts a comment. The shipped template lives at <code>configs/odm.conf.example</code> (or <code>/etc/odm/config.conf.example</code> once installed).</p>
-        <pre class="block"><code># common pattern
-dir = ~/Downloads
+        <p>Format is <code>key = value</code>, one option per line, <code>#</code> starts a comment. Unknown keys abort startup with the offending key named — a typo never silently falls back to defaults. The shipped template lives at <code>configs/odm.conf.example</code> (or <code>/etc/odm/config.conf.example</code> once installed).</p>
+        <pre class="block"><code># common pattern (no tilde expansion in config files — use an absolute path)
+dir = /home/me/Downloads
 connections = 16
 profile = smart
 continue = true
@@ -386,7 +386,7 @@ limit-rate = 0</code></pre>
           <li><b>x&lt;N&gt;</b> — the number of parallel connections currently used by that file (e.g. <code>[x4-----c  o  o  o  o]</code>). <code>c</code> is the pacman icon moving left to right; <code>o</code> is a dot not yet eaten; blank/<code>-</code> is already eaten. At 100% the whole bar is blank/dashes.</li>
           <li><b>Colors</b> (when the terminal supports ANSI): completed = green, downloading = yellow, retrying after an error = red, queued/waiting = dim/grey. Disabled automatically on non-TTY.</li>
         </ul>
-        <p>If stdout is not a terminal — <code>-q/--quiet</code> or output redirected to a file/pipe — the progress bar is replaced with periodic log lines without ANSI cursor control. <code>--session-log FILE</code> appends JSONL lifecycle events (start, progress, complete, error, pause) for wrappers and GUIs.</p>
+        <p>If stdout is not a terminal — <code>-q/--quiet</code> or output redirected to a file/pipe — the progress bar is replaced with periodic log lines without ANSI cursor control. <code>--session-log FILE</code> appends JSONL lines for wrappers and GUIs: one <code>{"event":"progress",…}</code> object per progress frame plus a final <code>{"event":"summary",…}</code> object.</p>
         <div class="docs-callout"><b>Environment</b><span><code>NO_COLOR</code> — if set, disables colored progress output even when writing to a TTY.</span></div>
       </section>
 
@@ -431,7 +431,8 @@ odm --rpc --rpc-secret hunter2 --rpc-listen-port 6900 -d ~/Downloads</code></pre
         <p>ODM is a downloader, so most hardening choices are about source trust, TLS, auth, and output paths. Leave certificate checking enabled unless you are testing a private endpoint, keep RPC on loopback unless there is a real remote-control requirement, and never expose an unauthenticated daemon to a shared network.</p>
         <ul class="docs-list">
           <li><b>TLS</b> — <code>--check-certificate</code> defaults to true. Disabling it makes man-in-the-middle replacement possible and should be temporary.</li>
-          <li><b>RPC auth</b> — when using <code>--rpc-listen-all</code>, also set <code>--rpc-secret</code>; clients pass <code>token:&lt;secret&gt;</code> as the first JSON-RPC param.</li>
+          <li><b>RPC auth</b> — when using <code>--rpc-listen-all</code>, always set <code>--rpc-secret</code> (required, and TLS alone does not authenticate clients); clients pass <code>token:&lt;secret&gt;</code> as the first JSON-RPC param.</li>
+          <li><b>Browsers and the local daemon</b> — <code>/rpc</code> and <code>/ws</code> reject browser requests whose <code>Origin</code> does not match the RPC host exactly, so a web page cannot drive (or, with no secret set, read events from) a loopback daemon. With no <code>--rpc-secret</code> configured the daemon additionally demands a loopback <code>Host</code> header — a page on a domain that rebinds its DNS to 127.0.0.1 is rejected outright. Native clients that send no <code>Origin</code> are unaffected.</li>
           <li><b>Output collisions</b> — use <code>--auto-rename</code> to preserve existing files or <code>--skip-existing</code> to make reruns idempotent.</li>
           <li><b>Untrusted lists</b> — review URL lists and Metalink files before running them; they control what hosts are contacted and which destination names are proposed.</li>
         </ul>
@@ -451,8 +452,8 @@ odm --rpc --rpc-secret hunter2 --rpc-listen-port 6900 -d ~/Downloads</code></pre
         <h2>Known limitations</h2>
         <ul class="docs-list">
           <li><b>Mid-flight connection reallocation</b> — <code>odm.changeOption</code> with key <code>connections</code> is partially supported: graceful drain works (excess workers finish their current chunk and retire), but dynamic rebalancing of already-dispatched chunks across tasks is a roadmap item.</li>
-          <li><b>HTTP/2 / HTTP/3 multiplexing is deliberately not a core feature</b> — odm’s value proposition is opening many independent TCP connections. Against HTTP/2-only servers it falls back to single-stream.</li>
-          <li><b>Legacy comma form</b> — <code>"url1,url2,..."</code> still works, but a comma <i>inside</i> a URL (e.g. <code>?ids=1,2,3</code>) is ambiguous; use space-separated positional args or <code>-i</code> for such URLs.</li>
+          <li><b>HTTP/3 is not implemented</b> — HTTP/2 is supported and backs the <code>aria2c</code> / <code>both</code> / <code>smart</code> profiles. The default <code>odm</code> profile still opens independent HTTP/1.1 TCP connections by design. HTTP/3 is deliberately out of scope.</li>
+          <li><b>No comma-separated multi-URL form</b> — each positional argument is exactly one URL; a comma inside it is literal (e.g. <code>?ids=1,2,3</code>). Use space-separated arguments or <code>-i</code>.</li>
         </ul>
       </section>
 

@@ -54,12 +54,13 @@ func (b *Broadcaster) Broadcast(e Event) {
 // addWS attaches a WebSocket connection to the fan-out set and pumps events to
 // it until the connection closes. Resource limits protect the RPC daemon from
 // clients that hold connections open indefinitely or send unbounded frames.
-func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request) error {
+func (b *Broadcaster) addWS(w http.ResponseWriter, r *http.Request, secret string) error {
 	up := websocket.Upgrader{
-		// Authentication is enforced by the HTTP auth wrapper. Origin checks
-		// remain disabled intentionally because browser GUIs may connect from
-		// a different local development origin.
-		CheckOrigin: func(*http.Request) bool { return true },
+		// Browser WebSocket handshakes carry cookies and can be initiated by
+		// hostile sites (CSWSH). Permit non-browser clients without Origin, but
+		// browser origins must match the RPC host exactly; with no secret
+		// configured the Host must also be loopback (DNS-rebinding guard).
+		CheckOrigin: func(r *http.Request) bool { return originAllowed(r, secret) },
 	}
 	c, err := up.Upgrade(w, r, nil)
 	if err != nil {

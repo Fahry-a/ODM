@@ -97,6 +97,29 @@ func TestReader_Throttles(t *testing.T) {
 	}
 }
 
+// TestAcquire_SubChunkRateEnforced pins the regression where a configured
+// rate smaller than the engine's 64 KiB read chunk silently flowed at a
+// ~64 KiB/s floor: Acquire used to wait for min(n, burst) tokens instead of
+// the full n. Three burst-units must cost about three refill periods, not one.
+func TestAcquire_SubChunkRateEnforced(t *testing.T) {
+	l, err := New("1K") // 1024 B/s, burst 1024
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := l.Acquire(context.Background(), 3*1024); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	// 1024 tokens are free at t=0; the remaining 2048 must wait ~2 refills.
+	if elapsed < 1500*time.Millisecond {
+		t.Fatalf("under-throttled: 3 KiB at 1 KiB/s waited only %v (want ≥1.5s)", elapsed)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("over-throttled: %v", elapsed)
+	}
+}
+
 func TestAdaptiveBackOff(t *testing.T) {
 	l, err := New("1M")
 	if err != nil {

@@ -1,4 +1,4 @@
-.TH ODM 1 "2026-07-21" "odm" "User Commands"
+.TH ODM 1 "2026-11-05" "odm 1.9.2" "User Commands"
 .SH NAME
 odm \- Oryn Download Manager, an aria2c-inspired CLI download manager with a Connection Balancer
 .SH SYNOPSIS
@@ -9,16 +9,14 @@ odm \- Oryn Download Manager, an aria2c-inspired CLI download manager with a Con
 .br
 .B odm
 .RI [ OPTIONS ]
-.RB " \fI" URL1,URL2,... "\fR"
-.br
-.B odm
-.RI [ OPTIONS ]
 .B \-i
 .I file-list.txt
 .br
 .B odm
 .B \-\-rpc
 .RI [ OPTIONS ]
+.br
+.B odm update
 .SH DESCRIPTION
 .B odm
 is a CLI download manager written in Go and inspired by
@@ -166,6 +164,24 @@ control file
 work-stealing chunk size, e.g.
 .B 4M
 .RI ( default " 4M" )
+.SS "Engine profiles"
+.TP
+.BR \-\-profile " \fINAME\fR"
+engine profile:
+.BR odm " (default) | " aria2c " | " both " | " smart
+.TP
+.BR \-\-split " \fIN\fR"
+aria2c profile: number of segments per file
+.RI ( default " 5" )
+.TP
+.BR \-\-min-split-size " \fISIZE\fR"
+aria2c profile: do not split ranges smaller than 2x this size
+.RI ( default " 20M" )
+.TP
+.BR \-\-max-connection-per-server " \fIN\fR"
+aria2c profile: cap connections per server in HTTP/1.1 (the aria2c \-x cap);
+irrelevant over HTTP/2
+.RI ( default " 1" )
 .SS "HTTP / network"
 .TP
 .BR -n ", " \-\-max\-redirect " \fIN\fR"
@@ -240,10 +256,10 @@ run as the RPC server (daemon)
 .RI ( default " 6900" )
 .TP
 .BR \-\-rpc\-listen\-all
-bind 0.0.0.0 (default 127.0.0.1)
+bind 0.0.0.0 (default 127.0.0.1); requires \fB\-\-rpc\-secret\fR
 .TP
 .BR \-\-rpc\-secret " \fITOKEN\fR"
-auth for RPC (token:<secret> param or ?secret=)
+require aria2-style auth for RPC (token:<secret> param or ?secret=)
 .TP
 .BR \-\-rpc\-tls\-cert " \fIFILE\fR"
 TLS certificate path (PEM); enables HTTPS
@@ -311,16 +327,10 @@ log-level           = info
 .RE
 .PP
 .B Comma note:
-the legacy
-.RB \(dq url1,url2,... \(dq
-single-argument form is still supported, but a comma
-.I inside
-a URL (e.g.
-.BR ?ids=1,2,3 )
-is ambiguous, so
-.B space-separated positional args
-are the recommended form. URLs with a literal comma must use either
-space-separated form or
+there is no comma-separated multi-URL form — each positional argument is
+exactly one URL and a comma inside it is literal (e.g.
+.BR ?ids=1,2,3 ).
+Pass URLs space-separated or use
 .BR \-i .
 .SH "RATE LIMITING"
 .BR \-\-limit\-rate
@@ -402,13 +412,18 @@ POST  http://127.0.0.1:6900/rpc   (JSON-RPC 2.0)
 .RE
 .PP
 Default bind is
-.B 127.0.0.1
-(safe).
+.B 127.0.0.1 .
 .B \-\-rpc\-listen\-all
 binds
 .B 0.0.0.0
-\(em pair that with
-.BR \-\-rpc\-secret .
+and \fBrequires\fR \fB\-\-rpc\-secret\fR (TLS encryption alone does not
+authenticate RPC clients). Both endpoints reject browser requests whose
+.B Origin
+header does not match the RPC host exactly; with no secret configured the
+daemon additionally demands a loopback
+.B Host
+header (DNS-rebinding guard). Native clients that send no Origin are
+unaffected.
 .PP
 TLS encryption can be enabled with
 .B \-\-rpc\-tls\-cert
@@ -480,6 +495,17 @@ Each event's
 carries the same field set as
 .BR odm.tellStatus 's
 result.
+.SH "SELF UPDATE"
+Running
+.B odm update
+checks the latest GitHub release and upgrades the binary in place using the
+detected install method (AUR helpers for .B odm-bin
+installations, otherwise the official install script). It never downgrades
+and exits without changes when already up to date. A cached version hint
+(.I ~/.config/odm/.last-update-check ,
+24 h TTL) is also shown on
+.B odm -h
+when a newer release exists.
 .SH "EXIT CODES"
 .TS
 allbox tab(@);
@@ -555,9 +581,12 @@ Mid-flight connection reallocation (\fBchangeOption\fR with key
 finish their current chunk and retire) is implemented; dynamic rebalancing
 of already-dispatched chunks across tasks is a roadmap item.
 .LP
-HTTP/2 / HTTP/3 multiplexing is deliberately not a core feature: odm's
-value proposition is opening many independent TCP connections; against
-HTTP/2-only servers it falls back to single-stream.
+HTTP/2 is implemented and backs the
+.BR aria2c " / " both " / " smart
+engine profiles. HTTP/3 is not implemented (deliberately out of scope).
+The default
+.B odm
+profile still opens independent HTTP/1.1 TCP connections by design.
 .SH AUTHOR
 .LP
 The odm project \(em see the source repository.

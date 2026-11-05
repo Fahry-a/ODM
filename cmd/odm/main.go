@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,8 +32,8 @@ import (
 	"odm/internal/scheduler"
 	"odm/internal/transport"
 	"odm/internal/ui"
-	"odm/internal/version"
 	"odm/internal/update"
+	"odm/internal/version"
 )
 
 func main() {
@@ -814,23 +815,32 @@ func runRPC(o *config.Options, engineLog download.LogFn, logger *logging.Logger)
 	} else {
 		logger.Infof("odm RPC listening on http://%s (secret:%s)", addr, secretWord(o.RPCSecret))
 	}
+	httpServer := &http.Server{
+		Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20,
+		// WriteTimeout stays zero for long-lived WebSocket connections.
+	}
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {
-			serveErr <- http.ServeTLS(ln, mux, o.RPCTLSCert, o.RPCTLSKey)
+			serveErr <- httpServer.ServeTLS(ln, o.RPCTLSCert, o.RPCTLSKey)
 		} else {
-			serveErr <- http.Serve(ln, mux)
+			serveErr <- httpServer.Serve(ln)
 		}
 	}()
 
 	select {
 	case <-shutdown:
 		_ = ln.Close()
-		<-serveErr
+		if err := <-serveErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		_ = ln.Close()
-		<-serveErr
+		if err := <-serveErr; err != nil && !errors.Is(err, net.ErrClosed) {
+			return err
+		}
 		return errExit{code: download.ExitCancelled, msg: "rpc server interrupted"}
 	case err := <-serveErr:
 		return err
@@ -869,8 +879,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintf(w, `odm %s — Oryn Download Manager (Connection Balancer + pacman bar)
 
 Usage:
-  odm [OPTIONS] <URL> [URL ...]        # space-separated URLs (recommended)
-  odm [OPTIONS] "URL1,URL2,..."        # legacy comma form (http://-prefixed)
+  odm [OPTIONS] <URL> [URL ...]        # space-separated URLs (commas are literal)
   odm [OPTIONS] -i <file-list.txt>     # URLs from a file, one per line
   odm --rpc [OPTIONS]                  # JSON-RPC + WebSocket daemon
   odm update                           # self-update to the latest version
@@ -911,7 +920,7 @@ HTTP / network:
       --load-cookies FILE  load Netscape cookies.txt as a Cookie header
       --referer URL      set the Referer header
   -p, --proxy URL        http/https/socks5 proxy
-      --check-cert BOOL  verify TLS                       (default true)
+      --check-certificate BOOL  verify TLS certs              (default true)
       --checksum algo:hash  verify md5/sha1/sha256
       --checksum-url URL  fetch the checksum from a sidecar URL (sha256sum-style file)
       --mirror URL       alternate URL serving the SAME file; chunks rotate (repeatable)

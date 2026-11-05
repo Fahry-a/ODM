@@ -666,3 +666,224 @@ func TestServer_AddUriRejectsAfterShutdown(t *testing.T) {
 		t.Fatalf("addUri after shutdown must fail, got goid %v", r.Result)
 	}
 }
+
+func TestWebSocketRejectsForeignOrigin(t *testing.T) {
+	hs, _, cleanup := startServer(t, "")
+	defer cleanup()
+	dialer := websocket.Dialer{HandshakeTimeout: time.Second}
+	header := http.Header{"Origin": []string{"https://attacker.example"}}
+	conn, resp, err := dialer.Dial("ws"+strings.TrimPrefix(hs.URL, "http")+"/ws", header)
+	if conn != nil {
+		_ = conn.Close()
+		t.Fatal("foreign origin unexpectedly upgraded")
+	}
+	if err == nil {
+		t.Fatal("expected foreign Origin rejection")
+	}
+	if resp != nil && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+// TestOriginAllowed_DNSRebinding pins the guard against a web page on an
+// attacker domain whose DNS was rebound to 127.0.0.1: it presents Host and
+// Origin equal to the attacker domain, which a plain host-equality check
+// accepts. With no secret configured the daemon must reject it.
+func TestOriginAllowed_DNSRebinding(t *testing.T) {
+	req := func(host, origin string) *http.Request {
+		r, err := http.NewRequest(http.MethodPost, "http://127.0.0.1/rpc", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Host = host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+	cases := []struct {
+		name   string
+		host   string
+		origin string
+		secret string
+		want   bool
+	}{
+		{"no secret, loopback host, no origin", "127.0.0.1:6900", "", "", true},
+		{"no secret, localhost host", "localhost:6900", "", "", true},
+		{"no secret, ipv6 loopback", "[::1]:6900", "", "", true},
+		{"no secret, attacker host", "attacker.example", "", "", false},
+		{"no secret, rebinding host+origin equal", "attacker.example", "http://attacker.example", "", false},
+		{"no secret, rebinding https origin", "attacker.example", "https://attacker.example", "", false},
+		{"no secret, same-origin localhost page", "localhost:6900", "http://localhost:6900", "", true},
+		{"secret set, attacker host allowed (auth gates)", "attacker.example", "", "tok", true},
+		{"secret set, rebinding still rejected on origin mismatch", "a.example", "http://b.example", "tok", false},
+		{"no secret, foreign origin rejected", "127.0.0.1:6900", "https://attacker.example", "", false},
+		{"trailing-dot loopback", "localhost.:6900", "", "", true},
+	}
+	for _, c := range cases {
+		got := originAllowed(req(c.host, c.origin), c.secret)
+		if got != c.want {
+			t.Errorf("%s: originAllowed = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1:6900":   true,
+		"127.1.2.3":        true,
+		"localhost":        true,
+		"localhost:6900":   true,
+		"LOCALHOST:6900":   true,
+		"[::1]:6900":       true,
+		"::1":              true,
+		"10.0.0.5":         false,
+		"192.168.1.1":      false,
+		"0.0.0.0":          false, // unspecified is not loopback
+		"attacker.example": false,
+	}
+	for in, want := range cases {
+		if got := isLoopbackHost(in); got != want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestRPCRejectsNonLoopbackHost drives the DNS-rebinding guard end-to-end:
+// an unauthenticated daemon seeing a foreign Host (with or without a matching
+// foreign Origin) answers 403 instead of executing the method.
+func TestRPCRejectsNonLoopbackHost(t *testing.T) {
+	hs, _, cleanup := startServer(t, "")
+	defer cleanup()
+	for _, host := range []string{"attacker.example", "attacker.example:6900"} {
+		body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"system.listMethods","params":[]}`)
+		req, err := http.NewRequest(http.MethodPost, hs.URL+"/rpc", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("Host %q: status=%d want=%d", host, resp.StatusCode, http.StatusForbidden)
+		}
+	}
+}
+
+// TestServer_AddBatch pins odm.addBatch: a list of URLs yields one goid per
+// successfully enqueued URL; a malformed params[0] is an invalid-params error;
+// an empty list is a harmless no-op (empty id list), mirroring aria2.
+func TestServer_AddBatch(t *testing.T) {
+	hs, _, cleanup := startServer(t, "")
+	defer cleanup()
+
+	// Not a list.
+	r := jsonRPC(t, hs.URL+"/rpc", "odm.addBatch", []any{"not-a-list"}, 1)
+	if r.Error == nil {
+		t.Fatal("params[0] must be a url list")
+	}
+	// Empty list: no-op, aria2-compatible (empty id list, no error).
+	r = jsonRPC(t, hs.URL+"/rpc", "odm.addBatch", []any{[]any{}}, 2)
+	if r.Error != nil {
+		t.Fatal(r.Error)
+	}
+	if ids, ok := r.Result.([]any); !ok || len(ids) != 0 {
+		t.Fatalf("empty addBatch result = %v, want empty list", r.Result)
+	}
+	// Two URLs → two ids (both are unresolvable hosts; the queue still accepts them).
+	r = jsonRPC(t, hs.URL+"/rpc", "odm.addBatch", []any{[]any{"http://example.invalid/a.bin", "http://example.invalid/b.bin"}}, 3)
+	if r.Error != nil {
+		t.Fatal(r.Error)
+	}
+	ids, ok := r.Result.([]any)
+	if !ok || len(ids) != 2 {
+		t.Fatalf("addBatch result = %v, want 2 ids", r.Result)
+	}
+}
+
+// TestServer_PauseUnpauseRemoveFlow pins the control methods against a real
+// downloaded task: addUri → pause → unpause → remove all return OK for a live
+// task, and garbage ids are clean errors rather than silent no-ops.
+func TestServer_PauseUnpauseRemoveFlow(t *testing.T) {
+	payload := make([]byte, 512*1024)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	fsrv := serveRangePayloadRC(t, payload)
+	defer fsrv.Close()
+
+	hs, _, cleanup := startServer(t, "")
+	defer cleanup()
+	add := jsonRPC(t, hs.URL+"/rpc", "odm.addUri", []any{fsrv.URL + "/file.bin", 1}, 1)
+	if add.Error != nil {
+		t.Fatal(add.Error)
+	}
+	goid, _ := add.Result.(string)
+	if goid == "" {
+		t.Fatalf("addUri returned no goid: %v", add.Result)
+	}
+
+	for _, tc := range []struct{ method, id string; wantOK bool }{
+		{"odm.pause", goid, true},
+		{"odm.pauseAll", "", true},
+		{"odm.unpause", goid, true},
+		{"odm.unpauseAll", "", true},
+		{"odm.remove", goid, true},
+		{"odm.pause", "odm-999", false},
+		{"odm.unpause", "odm-999", false},
+		{"odm.remove", "odm-999", false},
+	} {
+		args := []any{}
+		if tc.id != "" {
+			args = append(args, tc.id)
+		}
+		r := jsonRPC(t, hs.URL+"/rpc", tc.method, args, 2)
+		if tc.wantOK && r.Error != nil {
+			t.Fatalf("%s: %v", tc.method, r.Error)
+		}
+		if !tc.wantOK && r.Error == nil {
+			t.Fatalf("%s with unknown id must error, got result %v", tc.method, r.Result)
+		}
+	}
+}
+
+func TestRPCRejectsForeignOrigin(t *testing.T) {
+	hs, _, cleanup := startServer(t, "")
+	defer cleanup()
+	body := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"system.listMethods\",\"params\":[]}")
+	req, err := http.NewRequest(http.MethodPost, hs.URL+"/rpc", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Origin", "https://attacker.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestRPCRejectsOversizedBody(t *testing.T) {
+	hs, _, cleanup := startServer(t, "")
+	defer cleanup()
+	body := strings.NewReader(strings.Repeat(" ", (1<<20)+1))
+	req, err := http.NewRequest(http.MethodPost, hs.URL+"/rpc", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want=%d", resp.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+}

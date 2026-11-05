@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 
-defineProps({ text: { type: String, required: true } })
+const props = defineProps({ text: { type: String, required: true } })
 
 const label = ref('Copy')
 
@@ -22,9 +22,15 @@ async function copy() {
       ta.style.opacity = '0'
       document.body.appendChild(ta)
       ta.select()
-      try { document.execCommand('copy'); done() } finally { document.body.removeChild(ta) }
+      try {
+        if (!document.execCommand('copy')) throw new Error('clipboard copy was rejected')
+        done()
+      } finally { document.body.removeChild(ta) }
     }
-  } catch {}
+  } catch {
+    label.value = 'Failed'
+    setTimeout(() => { label.value = 'Copy' }, 1600)
+  }
 }
 </script>
 
