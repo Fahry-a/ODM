@@ -3,7 +3,7 @@ module odm
 go 1.26.5
 
 require (
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	golang.org/x/time v0.16.0
 )
 
