@@ -9,9 +9,8 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use transport::{self, StatusError};
 
-use openssl::hash::{Hasher, MessageDigest};
-
 use crate::chunkqueue::Chunk;
+use crate::csha256::FastSha256;
 use crate::engine::Engine;
 use crate::task::{is_permanent, status_err, Error, Task, TaskState, Ctx};
 
@@ -25,28 +24,6 @@ async fn rate_acquire(lim: &ratelimit::Limiter, n: i64, ctx: &Ctx) -> Result<(),
 }
 
 /// `hex_encode` — sha256 → lowercase hex (matches Go hex.EncodeToString).
-/// SHA-256 via OpenSSL's assembly backend. Verified ~2x faster than the
-/// portable `sha2` backend on x86-64 CPUs without SHA-NI (Go uses a similar
-/// AVX2 path), which was the engine's dominant CPU cost per downloaded byte.
-struct FastSha256(Hasher);
-
-impl FastSha256 {
-    fn new() -> Self {
-        FastSha256(Hasher::new(MessageDigest::sha256()).expect("SHA-256 available"))
-    }
-
-    fn update(&mut self, b: &[u8]) {
-        let _ = self.0.update(b);
-    }
-
-    fn finalize(mut self) -> [u8; 32] {
-        let out = self.0.finish().expect("SHA-256 finalize");
-        let mut buf = [0u8; 32];
-        buf.copy_from_slice(&out);
-        buf
-    }
-}
-
 fn hex_encode(h: FastSha256) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }

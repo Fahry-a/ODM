@@ -319,6 +319,7 @@ name = "download"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "cc",
  "futures-util",
  "md5",
  "openssl",

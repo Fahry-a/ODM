@@ -6,13 +6,12 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use sha2::{Digest, Sha256};
-
 use crate::chunkqueue::Chunk;
+use crate::csha256::FastSha256;
 use crate::task::{Error, Task, Ctx, RESUME_PROBE_LEN, RESUME_VERIFY_CHUNKS};
 
-fn hex_of(h: &Sha256) -> String {
-    h.clone().finalize().iter().map(|b| format!("{b:02x}")).collect()
+fn hex_of(h: FastSha256) -> String {
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Task {
@@ -180,7 +179,7 @@ impl Task {
             if end < start {
                 return Err(Error::msg(format!("resume hash check at {off}: invalid span [{start}, {end}]")));
             }
-            let mut h = Sha256::new();
+            let mut h = FastSha256::new();
             let mut pos = start;
             while pos <= end {
                 let n = ((end - pos + 1) as usize).min(buf.len()) as i64;
@@ -191,7 +190,7 @@ impl Task {
                 h.update(&buf[..n as usize]);
                 pos += n;
             }
-            if hex_of(&h) != want {
+            if hex_of(h) != want {
                 return Err(Error::msg(format!("resume hash check at {off}: on-disk data differs from recorded hash")));
             }
         }
