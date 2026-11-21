@@ -132,6 +132,19 @@ async fn get_version_and_unknown_method_over_http() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn get_version_advertises_tls_only_when_enabled() {
+    let (srv, _ctx) = start_server("");
+    let (base, _h) = spawn_http(srv.clone()).await;
+    let r = rpc(&base, "odm.getVersion", json!([]), 1).await;
+    let features = r["result"]["enabledFeatures"].as_array().unwrap();
+    assert!(!features.iter().any(|f| f == "TLS"), "TLS advertised while serving plain HTTP: {features:?}");
+    srv.set_tls(true);
+    let r = rpc(&base, "odm.getVersion", json!([]), 2).await;
+    let features = r["result"]["enabledFeatures"].as_array().unwrap();
+    assert!(features.iter().any(|f| f == "TLS"), "TLS missing after enabling: {features:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn add_uri_appears_in_tell_lists() {
     let (srv, _ctx) = start_server("");
     let (base, _h) = spawn_http(srv).await;

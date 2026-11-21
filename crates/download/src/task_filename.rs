@@ -85,3 +85,24 @@ pub fn derive_filename(final_url: &str, override_: &str) -> String {
     }
     "download.bin".to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_name_inserts_counter_before_last_extension() {
+        let dir = std::env::temp_dir().join(format!("odm-unique-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("file.1.bin"));
+        let _ = std::fs::remove_file(dir.join("file.2.bin"));
+        std::fs::write(dir.join("file.bin"), b"x").unwrap();
+        std::fs::write(dir.join("file.1.bin"), b"x").unwrap();
+
+        let d = dir.to_str().unwrap();
+        assert_eq!(unique_name(d, "file.bin"), "file.2.bin");
+        assert_eq!(unique_name(d, "noext"), "noext.1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

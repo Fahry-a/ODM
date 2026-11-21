@@ -87,6 +87,15 @@ impl Renderer {
         Renderer::build(Box::new(std::io::stdout()), tty, use_color, quiet, fd)
     }
 
+    /// Render the live bar to stderr (Go: stderr is the fallback when stdout
+    /// is piped but stderr is still a terminal).
+    pub fn new_stderr(quiet: bool) -> Renderer {
+        let tty = !quiet && std::io::stderr().is_terminal();
+        let use_color = tty && std::env::var_os("NO_COLOR").is_none();
+        let fd = if tty { Some(2) } else { None };
+        Renderer::build(Box::new(std::io::stderr()), tty, use_color, quiet, fd)
+    }
+
     /// Inject a writer (tests capture output in a buffer). `tty` is explicit:
     /// generic writers can't be probed for terminal-ness in Rust.
     pub fn new_with_writer<W: Write + Send + 'static>(writer: W, tty: bool, quiet: bool) -> Renderer {
@@ -483,7 +492,7 @@ pub fn layout_for(term_width: usize) -> (usize, usize, usize, LineLayout) {
         let min = COL_GLYPH + super::render::INFO_FIXED_WIDTH + bar + 1;
         (bar, name, min, LineLayout::Full)
     } else if term_width >= 66 {
-        let bar = 20usize.max(10);
+        let bar = 20usize;
         let name = term_width.saturating_sub((COL_GLYPH + 2 + 14 + 2 + 6 + 1 + bar + 1 + 2 + 4) + 1);
         let min = COL_GLYPH + (2 + 14 + 2 + 6 + 1 + 1 + 2 + 4) + bar + 1;
         (bar, name, min, LineLayout::NoSpeedEta)

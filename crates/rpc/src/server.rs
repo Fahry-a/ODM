@@ -2,6 +2,7 @@
 //! HTTP routes, auth, response shaping and the WebSocket upgrade handler.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::body::to_bytes;
@@ -27,6 +28,7 @@ pub struct Server {
     daemon: Arc<Daemon>,
     bc: Arc<Broadcaster>,
     secret: String,
+    tls: AtomicBool,
 }
 
 impl Server {
@@ -43,7 +45,13 @@ impl Server {
         secret: impl Into<String>,
         bc: Arc<Broadcaster>,
     ) -> Arc<Server> {
-        Arc::new(Server { daemon, bc, secret: secret.into() })
+        Arc::new(Server { daemon, bc, secret: secret.into(), tls: AtomicBool::new(false) })
+    }
+
+    /// `set_tls` — record whether the daemon serves HTTPS so getVersion only
+    /// advertises TLS when it is actually enabled.
+    pub fn set_tls(&self, tls: bool) {
+        self.tls.store(tls, Ordering::Relaxed);
     }
 
     /// `OnTaskComplete` — maps a terminal snapshot onto the matching event.
@@ -187,14 +195,13 @@ impl Server {
                     "stopped": self.daemon.tell_stopped().len(),
                 }),
             ),
-            "odm.getVersion" => JsonRpcResponse::ok(
-                id,
-                json!({
-                    "version": VERSION,
-                    "enabledFeatures": ["Multi-Connection", "Range-Download", "Resume", "Batch",
-                                        "Checksum", "RateLimit-Agent", "TLS"],
-                }),
-            ),
+            "odm.getVersion" => {
+                let mut features = vec!["Multi-Connection", "Range-Download", "Resume", "Batch", "Checksum", "RateLimit-Agent"];
+                if self.tls.load(Ordering::Relaxed) {
+                    features.push("TLS");
+                }
+                JsonRpcResponse::ok(id, json!({ "version": VERSION, "enabledFeatures": features }))
+            },
             // The real stop happens in handle_rpc after the reply is built;
             // reaching dispatch here only produces the OK response.
             "odm.shutdown" | "odm.noop" => JsonRpcResponse::ok(id, json!("OK")),

@@ -88,7 +88,10 @@ impl Logger {
             return;
         }
         let line = format!("{}{}: {}\n", timestamp_header(), lvl, msg);
-        let _ = self.out.lock().unwrap().write_all(line.as_bytes());
+        // Hold the lock across both writers: File::append uses len()+WriteAt,
+        // so two loggers writing together would overwrite each other's line.
+        let mut out = self.out.lock().unwrap();
+        let _ = out.write_all(line.as_bytes());
         if let Some(f) = &self.file {
             let _ = f.append(line.as_bytes());
         }

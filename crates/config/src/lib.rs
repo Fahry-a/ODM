@@ -601,13 +601,15 @@ pub fn user_config_path() -> Result<PathBuf, String> {
 /// BindFlags. Returns (changed_flags, args_after_flags).
 fn cli_parse(args: &[String], o: &mut Options) -> Result<(BTreeSet<String>, Vec<String>), String> {
     // Go binds these with BoolVar: `--flag` means true and `--flag=false` is
-    // valid. clap's SetTrue rejects the `=false` form, so accept an optional
-    // bool value defaulting to true when the flag is bare.
+    // valid. accept an optional bool value defaulting to true when the flag is
+    // bare. require_equals keeps `--flag <url>` from swallowing the URL as a
+    // bool value — pflag never consumes a positional after a bool flag.
     let bool_arg = |id: &'static str, short: Option<char>, long: &'static str| {
         let mut a = Arg::new(id)
             .long(long)
             .action(clap::ArgAction::Set)
             .num_args(0..=1)
+            .require_equals(true)
             .default_missing_value("true")
             .value_parser(clap::value_parser!(bool));
         if let Some(s) = short {
@@ -1304,6 +1306,25 @@ mod tests {
         let mut o2 = default_ptr();
         super::cli_parse(&["--continue".to_string()], &mut o2).unwrap();
         assert!(o2.continue_);
+    }
+
+    #[test]
+    fn bool_flag_does_not_consume_following_url() {
+        let url = "http://127.0.0.1:8801/file.bin";
+        let flags = [
+            "-y", "-q", "-x", "--yes", "--quiet", "--continue", "--dry-run",
+            "--auto-rename", "--skip-existing", "--check-certificate", "--rpc",
+            "--rpc-listen-all",
+        ];
+        for flag in flags {
+            let mut o = default_ptr();
+            let (_, positional) =
+                super::cli_parse(&[flag.to_string(), url.to_string()], &mut o).unwrap();
+            assert_eq!(positional, vec![url.to_string()], "{flag} swallowed the URL");
+        }
+        let mut o = default_ptr();
+        super::cli_parse(&["-y".to_string(), url.to_string()], &mut o).unwrap();
+        assert!(o.yes, "bare -y must still set yes=true");
     }
 
 }

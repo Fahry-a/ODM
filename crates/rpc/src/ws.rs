@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::time::MissedTickBehavior;
+use tokio::time::{sleep_until, Instant, MissedTickBehavior};
 
 use crate::types::Event;
 
@@ -20,6 +20,8 @@ use crate::types::Event;
 const WS_SUB_BUFFER: usize = 64;
 /// 60s pong wait × 9/10 (Go: `wsPingPeriod`).
 const WS_PING_PERIOD: Duration = Duration::from_secs(54);
+/// Drop clients that send nothing for 60s (Go's `pongWait` read deadline).
+const WS_PONG_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `Broadcaster` fans WebSocket events out to all connected subscribers.
 pub struct Broadcaster {
@@ -77,13 +79,15 @@ impl Broadcaster {
         let mut ticker = tokio::time::interval(WS_PING_PERIOD);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         ticker.tick().await; // first tick is immediate — skip it
+        let mut pong_deadline = Instant::now() + WS_PONG_TIMEOUT;
 
         loop {
             tokio::select! {
                 msg = stream.next() => match msg {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                    // axum handles ping→pong internally while the read half is polled.
-                    Some(Ok(_)) => {},
+                    // Any client frame proves liveness; Go resets the read
+                    // deadline on each successful read, not just on pongs.
+                    Some(Ok(_)) => pong_deadline = Instant::now() + WS_PONG_TIMEOUT,
                 },
                 ev = rx.recv() => match ev {
                     Some(ev) => {
@@ -99,6 +103,7 @@ impl Broadcaster {
                         break;
                     }
                 },
+                _ = sleep_until(pong_deadline) => break,
                 else => break,
             }
         }

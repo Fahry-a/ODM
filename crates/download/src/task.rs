@@ -580,7 +580,7 @@ impl Task {
         return single.clone().unwrap();
     }
 
-    /// `estimate_eta` — bytes-left / speed (nanoseconds).
+    /// `estimate_eta` — seconds-left = bytes-left / bytes-per-second.
     pub fn estimate_eta(&self) -> Duration {
         let (total, done, sp) = {
             let probe = self.probe.lock().unwrap();
@@ -590,11 +590,7 @@ impl Task {
         if total <= 0 || done >= total || sp <= 0 {
             return Duration::ZERO;
         }
-        let eta = Duration::from_nanos(((total - done) as f64 / sp as f64) as u64);
-        if eta < Duration::ZERO {
-            return Duration::ZERO;
-        }
-        eta
+        Duration::from_secs(((total - done) as f64 / sp as f64) as u64)
     }
 
     /// `total_or_done` — total size, or bytes done if total unknown.
@@ -641,5 +637,25 @@ mod tests {
         let c = eng.next().expect("engine must expose the chunks from Task::queue");
         assert_eq!(c.start, 0);
         assert_eq!(c.end, 511);
+    }
+
+    #[test]
+    fn estimate_eta_is_seconds_not_nanoseconds() {
+        let client = Arc::new(transport::new_client(transport::ClientConfig::default()).unwrap());
+        let t = Task::new(
+            "odm-eta".to_string(),
+            "http://example.invalid/f.bin",
+            TaskOptions::default(),
+            client,
+            Arc::new(ratelimit::Limiter::default()),
+            None,
+        );
+        *t.probe.lock().unwrap() = Some(ProbeResult {
+            total_size: 1_000,
+            ..Default::default()
+        });
+        t.bytes_done.store(200, Ordering::SeqCst);
+        t.speed.store(100, Ordering::SeqCst); // 800 bytes / 100 B/s = 8 s
+        assert_eq!(t.estimate_eta(), Duration::from_secs(8));
     }
 }

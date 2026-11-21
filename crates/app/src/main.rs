@@ -207,7 +207,11 @@ async fn run_inner(argv: &[String]) -> Result<i32, AppErr> {
 
     // Progress renderer + snapshot channels. The scheduler's ProgressCB pushes
     // into them; RunLoop redraws at ~100ms and owns the final frame.
-    let renderer = Arc::new(Renderer::new_stdout(o.quiet));
+    let renderer = Arc::new(if std::io::stdout().is_terminal() || !std::io::stderr().is_terminal() {
+        Renderer::new_stdout(o.quiet)
+    } else {
+        Renderer::new_stderr(o.quiet)
+    });
     if renderer.live() {
         logger.set_output(Some(Box::new(renderer.interject_writer())));
     }
@@ -334,15 +338,41 @@ async fn run_rpc(o: &config::Options, logf: Option<download::LogFn>) -> Result<i
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e.to_string() })?;
     let app: Router = srv.routes();
     let signalled = ctx.clone();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
+    let tls = !o.rpc_tls_cert.is_empty() && !o.rpc_tls_key.is_empty();
+    srv.set_tls(tls);
+    if tls {
+        // axum-server uses rustls' process-default provider; install one so
+        // ServerConfig::builder() cannot panic with tls-rustls-no-provider.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(&o.rpc_tls_cert, &o.rpc_tls_key)
+            .await
+            .map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: format!("rpc TLS: {e}") })?;
+        let std_listener = listener.into_std().map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e.to_string() })?;
+        let handle = axum_server::Handle::new();
+        let (shutdown, sig, h) = (shutdown_rx, signalled.clone(), handle.clone());
+        tokio::spawn(async move {
             tokio::select! {
-                _ = shutdown_rx => {},
-                _ = signalled.wait() => {},
+                _ = shutdown => {},
+                _ = sig.wait() => {},
             }
-        })
-        .await
-        .map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e.to_string() })?;
+            h.graceful_shutdown(None);
+        });
+        axum_server::from_tcp_rustls(std_listener, cfg)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e.to_string() })?;
+    } else {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                tokio::select! {
+                    _ = shutdown_rx => {},
+                    _ = signalled.wait() => {},
+                }
+            })
+            .await
+            .map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e.to_string() })?;
+    }
     daemon.stop();
     // A ^C/SIGTERM is reported as cancelled (4), not success — Go's runRPC
     // returns ExitCancelled on ctx.Done; wrappers depend on that code.

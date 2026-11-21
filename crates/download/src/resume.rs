@@ -19,6 +19,9 @@ impl Task {
     /// compare, with absolute offsets and per-region chunk size.
     fn resume_sample_spans(&self, n: usize) -> Vec<Chunk> {
         let pr = self.probe.lock().unwrap().clone().unwrap_or_default();
+        // region2_chunk_size() locks `engines` itself — compute it BEFORE
+        // taking that guard (std Mutex is not reentrant).
+        let seg2 = self.region2_chunk_size();
         let engines = self.engines.lock().unwrap();
         if engines.is_empty() {
             drop(engines);
@@ -32,8 +35,7 @@ impl Task {
         }
         let mut out: Vec<Chunk> = Vec::new();
         out.extend(engines[0].completed_spans(self.options().chunk_size, self.split_at.load(Ordering::SeqCst), n));
-        let seg = self.region2_chunk_size();
-        let seg = if seg < 1 { self.options().chunk_size } else { seg };
+        let seg = if seg2 < 1 { self.options().chunk_size } else { seg2 };
         let split_at = self.split_at.load(Ordering::SeqCst);
         for s in engines[1].completed_spans(seg, pr.total_size - split_at, n) {
             out.push(Chunk { start: split_at + s.start, end: split_at + s.end, index: -1 });
@@ -216,13 +218,13 @@ impl Task {
     /// in the CURRENT layout (opts.ChunkSize for odm, aria2c segment size for
     /// aria2c/both-region2).
     fn layout_chunk_size(&self, start: i64) -> i64 {
+        // Compute this BEFORE holding `engines` — region2_chunk_size() locks
+        // the same non-reentrant mutex (same deadlock as persist_control).
+        let seg2 = self.region2_chunk_size();
         let engines = self.engines.lock().unwrap();
         let split_at = self.split_at.load(Ordering::SeqCst);
-        if !engines.is_empty() && start >= split_at {
-            let seg = self.region2_chunk_size();
-            if seg > 0 {
-                return seg;
-            }
+        if !engines.is_empty() && start >= split_at && seg2 > 0 {
+            return seg2;
         }
         drop(engines);
         if self.options().profile == "aria2c" {

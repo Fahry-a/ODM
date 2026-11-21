@@ -233,22 +233,56 @@ fn drop_terminal_tasks(m: &mut HashMap<TaskID, Arc<Task>>, n: usize) {
 /// `verify_checksum` — shared checksum core: hash the file at path and
 /// compare against expect_hex.
 pub fn verify_checksum(path: &str, algo: &str, expect_hex: &str) -> Result<(), Error> {
-    use sha1::Sha1;
-    use sha2::{Digest, Sha256};
+    use sha2::Digest;
+    use std::io::{Read, Write};
+
+    // Stream the file in 64 KiB blocks (Go's io.Copy) instead of loading the
+    // whole payload into RAM. Every hasher implements io::Write.
+    fn feed_file<H: Write>(path: &str, mut hasher: H) -> Result<H, Error> {
+        let mut file = std::fs::File::open(path).map_err(Error::from)?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = file.read(&mut buf).map_err(Error::from)?;
+            if n == 0 {
+                break;
+            }
+            hasher.write_all(&buf[..n]).map_err(Error::from)?;
+        }
+        Ok(hasher)
+    }
     fn hex_of(h: &[u8]) -> String {
         h.iter().map(|b| format!("{b:02x}")).collect()
     }
-    let data = std::fs::read(path).map_err(Error::from)?;
     let got = match algo.to_lowercase().as_str() {
-        "md5" => hex_of(&md5::compute(&data).0),
-        "sha1" => hex_of(&Sha1::digest(&data).as_slice()),
-        "sha256" => hex_of(&Sha256::digest(&data).as_slice()),
+        "md5" => hex_of(&feed_file(path, md5::Context::new())?.compute().0),
+        "sha1" => hex_of(&feed_file(path, sha1::Sha1::new())?.finalize()),
+        "sha256" => hex_of(&feed_file(path, sha2::Sha256::new())?.finalize()),
         _ => return Err(Error::msg(format!("unsupported checksum algo {algo:?}"))),
     };
-    if got != expect_hex.trim() {
+    // Go uses strings.EqualFold(got, strings.TrimSpace(expectHex)).
+    if !got.eq_ignore_ascii_case(expect_hex.trim()) {
         return Err(Error::msg(format!("checksum mismatch: got {got} want {expect_hex}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_checksum_streams_and_compares_case_insensitively() {
+        let dir = std::env::temp_dir().join(format!("odm-checksum-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blob.bin");
+        std::fs::write(&path, b"hello world").unwrap();
+        let p = path.to_str().unwrap();
+        let sha256 = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        verify_checksum(p, "sha256", sha256).unwrap();
+        verify_checksum(p, "SHA256", &sha256.to_uppercase()).unwrap();
+        assert!(verify_checksum(p, "sha256", &"0".repeat(64)).is_err());
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Exit codes from internal/download/manager.go (manager.go consts).

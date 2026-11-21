@@ -213,7 +213,6 @@ impl Scheduler {
         loop {
             tokio::select! {
                 _ = &mut done => {
-                    eprintln!("run: done fired");
                     // Everything (live + queued) finished without cancellation.
                     // Drain completion reports still sitting in the buffer
                     // (launch posts AFTER wg.done, so with two tasks
@@ -222,7 +221,6 @@ impl Scheduler {
                     while let Ok(st) = compl_rx.try_recv() {
                         self.handle_complete(&st);
                     }
-                    eprintln!("run: returning");
                     return (self.succeeded.load(Ordering::SeqCst), self.failed.load(Ordering::SeqCst));
                 }
                 r = compl_rx.recv() => {
@@ -260,7 +258,6 @@ impl Scheduler {
                             None => break,
                         }
                     }
-                    eprintln!("run: cancel path returning");
                     return (self.succeeded.load(Ordering::SeqCst), self.failed.load(Ordering::SeqCst));
                 }
             }
@@ -323,7 +320,6 @@ impl Scheduler {
             let _ = task.start(&ctx2, conns, sink).await;
             let _ = tx.send(st);
             wg.done();
-            eprintln!("launch: wg.done");
         });
     }
 

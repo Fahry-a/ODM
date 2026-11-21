@@ -97,17 +97,20 @@ impl Task {
     }
 
     /// `chunk_timeout_ctx` — spawn a canceller (Go: context.WithTimeout).
+    /// Derives a CHILD ctx: on timeout we cancel only this chunk. Cancelling
+    /// the shared task ctx here would kill every worker (one slow chunk).
     fn chunk_timeout_ctx(&self, ctx: &Ctx) -> (Ctx, tokio::task::JoinHandle<()>) {
         let tmo = self.opts.lock().unwrap().timeout;
         let tmo = if tmo.is_zero() { Duration::from_secs(300) } else { tmo * 10 };
+        let child = Ctx::with_parent(ctx);
         let h = tokio::spawn({
-            let c = ctx.clone();
+            let c = child.clone();
             async move {
                 tokio::time::sleep(tmo).await;
                 c.cancel();
             }
         });
-        (ctx.clone(), h)
+        (child, h)
     }
 
     /// `download_chunk` — fetch + write one chunk with per-attempt retry.
@@ -179,9 +182,6 @@ impl Task {
         attempt_done: &mut i64,
     ) -> Option<Error> {
         let (chunk_ctx, timer) = self.chunk_timeout_ctx(ctx);
-        let _ = &chunk_ctx; // Go: per-chunk WithTimeout ctx — wired via fetch_whole
-        let _ = timer; // Go: cancel after chunk completes — see Go comment.
-
 
         let (final_url, total_size, single_stream) = {
             let probe = self.probe.lock().unwrap();
@@ -222,13 +222,22 @@ impl Task {
         } else {
             self.resume_etag.lock().unwrap().clone()
         };
-        let resp = match eng.client().get_range(&url, abs_start, abs_end, &resume_etag).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Some(match e {
-                    transport::GetRangeError::Status(se) => Error::from(se),
-                    transport::GetRangeError::Transport(m) => Error::msg(m),
-                })
+        // Bind the chunk ctx to the ranged GET: a timeout aborts only this
+        // chunk's request (the shared task ctx stays alive for other workers).
+        let resp = tokio::select! {
+            _ = chunk_ctx.wait() => {
+                timer.abort();
+                return Some(Error::msg("chunk timed out"));
+            }
+            r = eng.client().get_range(&url, abs_start, abs_end, &resume_etag) => match r {
+                Ok(r) => r,
+                Err(e) => {
+                    timer.abort();
+                    return Some(match e {
+                        transport::GetRangeError::Status(se) => Error::from(se),
+                        transport::GetRangeError::Transport(m) => Error::msg(m),
+                    })
+                }
             }
         };
         let status = resp.status().as_u16();
@@ -239,7 +248,6 @@ impl Task {
             } else {
                 "server ignored range request"
             };
-            let _ = abs_end;
             return Some(StatusError {
                 err: format!("{op} at offset {abs_start} (status {status})"),
                 status,
@@ -259,7 +267,7 @@ impl Task {
         }
 
         let mut off: i64 = 0;
-        let r = self.copy_stream(ctx, resp.bytes_stream(), eng, c, h, attempt_done, &mut off).await;
+        let r = self.copy_stream(&chunk_ctx, resp.bytes_stream(), eng, c, h, attempt_done, &mut off).await;
         timer.abort();
         if let Err(e) = r {
             return Some(e);
@@ -296,7 +304,6 @@ impl Task {
         let dummy_eng = Engine::new(Arc::new(crate::chunkqueue::ChunkQueue::new(0, 0)), self.client.clone(), 0);
         let whole = Chunk { index: 0, start: 0, end: -1 };
         let r = self.copy_stream(ctx, resp.bytes_stream(), &dummy_eng, whole, h, attempt_done, &mut off).await;
-        let _ = &whole; // ensure whole is consumed by copy_stream above
         timer.abort();
         if let Err(e) = r {
             return Some(e);
@@ -328,6 +335,11 @@ impl Task {
         // blocked tokio threads; positioned writes are already non-overlap.
         let disk = self.disk.lock().unwrap().clone();
         let tl = self.task_lim.lock().unwrap().clone();
+        // Limiter::unlimited() locks a Mutex; polling it per 8 KiB hyper frame
+        // cost two lock acquisitions per frame. Go checks once per 64 KiB Read.
+        // Cache it and acquire at the 64 KiB flush instead.
+        let lim_off = self.lim.unlimited();
+        let tl_off = tl.as_ref().map(|l| l.unlimited()).unwrap_or(true);
         const WRITE_BUF: usize = 64 * 1024; // Go's copyChunkFrom copy buffer
         let mut buf: Vec<u8> = Vec::with_capacity(WRITE_BUF);
 
@@ -348,42 +360,56 @@ impl Task {
             }};
         }
 
-        while let Some(item) = stream.next().await {
+        macro_rules! limit_and_flush {
+            () => {{
+                if !buf.is_empty() {
+                    let n = buf.len() as i64;
+                    if !lim_off {
+                        rate_acquire(&self.lim, n, ctx).await?;
+                    }
+                    if let Some(tl) = tl.as_ref() {
+                        if !tl_off {
+                            rate_acquire(tl, n, ctx).await?;
+                        }
+                    }
+                    flush_buf!();
+                }
+            }};
+        }
+
+        // Bind ctx (the per-chunk child) to the body stream too: a stalled
+        // mid-stream transfer is aborted for this chunk alone, not the task.
+        loop {
+            let item = tokio::select! {
+                _ = ctx.wait() => return Err(Error::msg("context canceled")),
+                item = stream.next() => match item {
+                    Some(item) => item,
+                    None => break,
+                },
+            };
             let data = item.map_err(|e| Error::msg(e.to_string()))?;
             if data.is_empty() {
                 continue;
             }
-            let delta = data.len() as i64;
-            // Rate limiting stays per-frame (Go Acquire before each copy).
-            if !self.lim.unlimited() {
-                rate_acquire(&self.lim, delta, ctx).await?;
-            }
-            if let Some(tl) = tl.as_ref() {
-                if !tl.unlimited() {
-                    rate_acquire(tl, delta, ctx).await?;
-                }
-            }
             buf.extend_from_slice(&data);
             if buf.len() >= WRITE_BUF {
-                flush_buf!();
+                limit_and_flush!();
             }
         }
-        flush_buf!();
+        limit_and_flush!();
         Ok(())
     }
 
     /// `note_bytes` — adds bytes to progress + rolling-rate measure.
     fn note_bytes(&self, delta: i64) {
         self.bytes_done.fetch_add(delta, Ordering::SeqCst);
-        let (flushed, speed) = {
+        let flushed = {
             let mut rm = self.rm.lock().unwrap();
             let flushed = rm.tick(delta);
             let speed = rm.bps;
             self.speed.store(speed, Ordering::SeqCst);
-            (flushed, speed)
+            flushed
         };
-        let _ = speed;
-        let _ = speed;
         if flushed {
             if let Some(sink) = self.sink_snapshot() {
                 sink(self.snapshot());

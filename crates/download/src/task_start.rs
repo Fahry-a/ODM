@@ -19,6 +19,16 @@ impl Task {
         self.cancel_ctx.lock().unwrap().replace(ctx.clone());
         self.base_ctx.lock().unwrap().replace(ctx.clone());
         *self.sink.lock().unwrap() = progress_sink.clone();
+
+        // Fail fast if RPC Cancel fired while the task was still queued: there
+        // was no cancel ctx to signal then. Mirrors Go's Start() entry check.
+        if self.cancelled.load(Ordering::SeqCst) {
+            ctx.cancel();
+            self.set_state(TaskState::Error);
+            self.emit_final(progress_sink.clone());
+            return Err(Error::msg("task cancelled before start"));
+        }
+
         self.set_state(TaskState::Active);
 
         // 1. Probe. The CLI one-shot path already probed every URL and
@@ -131,6 +141,7 @@ impl Task {
                 "rename" => {
                     if std::fs::metadata(&self.out_path.lock().unwrap().clone()).is_ok() {
                         let new_name = unique_name(&dir, &out_name);
+                        self.logf("info", format!("{out_name} exists — saving as {new_name}"));
                         {
                             let mut probe_g = self.probe.lock().unwrap();
                             if let Some(p) = probe_g.as_mut() {
@@ -138,8 +149,10 @@ impl Task {
                             }
                         }
                         pr.filename = new_name.clone();
-                        *self.out_path.lock().unwrap() = Path::new(&dir).join(&new_name).to_string_lossy().into_owned();
-                        self.logf("info", format!("{out_name} exists — saving as {new_name}"));
+                        // open_for_write below reuses the local `out_name`; if
+                        // it stays the old name the rename is immediately undone.
+                        out_name = new_name;
+                        *self.out_path.lock().unwrap() = Path::new(&dir).join(&out_name).to_string_lossy().into_owned();
                     }
                 }
                 _ => {}
@@ -297,7 +310,13 @@ impl Task {
             // Already complete on disk (resume found everything done).
             self.bytes_done.store(pr.total_size, Ordering::SeqCst);
             self.set_state(TaskState::Completed);
-            self.verify_checksum()?;
+            if let Err(e) = self.verify_checksum() {
+                self.logf("error", format!("checksum: {e}"));
+                self.set_state(TaskState::Error);
+                self.persist_control();
+                self.emit_final(progress_sink.clone());
+                return Err(e);
+            }
             self.emit_final(progress_sink.clone());
             return self.finish().map_err(Error::msg);
         }
@@ -375,7 +394,13 @@ impl Task {
             return Err(Error::msg(format!("task failed: {e} chunk errors, {b}/{t} bytes")));
         }
         self.set_state(TaskState::Completed);
-        self.verify_checksum()?;
+        if let Err(e) = self.verify_checksum() {
+            self.logf("error", format!("checksum: {e}"));
+            self.set_state(TaskState::Error);
+            self.persist_control();
+            self.emit_final(progress_sink.clone());
+            return Err(e);
+        }
         self.emit_final(progress_sink.clone());
         self.finish().map_err(Error::msg)
     }
@@ -383,4 +408,106 @@ impl Task {
 
 fn engines_first_queue(t: &Arc<Task>) -> Option<Arc<dyn WorkQueue>> {
     t.engines.lock().unwrap().first().map(|e| e.q.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task::TaskOptions;
+    use std::path::PathBuf;
+
+    fn client() -> Arc<transport::Client> {
+        Arc::new(transport::new_client(transport::ClientConfig::default()).unwrap())
+    }
+    fn limiter() -> Arc<ratelimit::Limiter> {
+        Arc::new(ratelimit::Limiter::default())
+    }
+    fn test_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("odm-start-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[tokio::test]
+    async fn cancel_before_start_fails_fast_without_network() {
+        let t = Task::new(
+            "odm-1".into(),
+            "http://127.0.0.1:1/x.bin",
+            TaskOptions::default(),
+            client(),
+            limiter(),
+            None,
+        );
+        t.cancel();
+        let err = t.start(&Ctx::new(), 2, None).await.unwrap_err();
+        assert_eq!(err.msg, "task cancelled before start");
+        assert_eq!(t.state(), TaskState::Error);
+    }
+
+    #[tokio::test]
+    async fn checksum_mismatch_never_leaves_task_completed() {
+        let dir = test_dir("cs-mismatch");
+        let dest = dir.join("f.bin");
+        std::fs::write(&dest, vec![0u8; 64]).unwrap();
+        // A control file marking the whole file done reaches the
+        // already-complete-on-disk branch, where verifyChecksum runs.
+        let cf = storage::ControlFile {
+            total_size: 64,
+            chunk_size: 64,
+            completed: Some(vec![0]),
+            split_at: Some(0),
+            region2_chunk_size: Some(0),
+            ..Default::default()
+        };
+        storage::save_control(dest.to_str().unwrap(), &cf).unwrap();
+
+        let opts = TaskOptions {
+            dir: dir.to_str().unwrap().into(),
+            output_name: "f.bin".into(),
+            continue_: true,
+            chunk_size: 64,
+            checksum: format!("sha256:{}", "0".repeat(64)),
+            ..Default::default()
+        };
+        let t = Task::new("odm-2".into(), "http://127.0.0.1:1/f.bin", opts, client(), limiter(), None);
+        *t.probe.lock().unwrap() = Some(transport::ProbeResult {
+            final_url: "http://127.0.0.1:1/f.bin".into(),
+            filename: "f.bin".into(),
+            total_size: 64,
+            single_stream: true,
+            ..Default::default()
+        });
+
+        let err = t.start(&Ctx::new(), 0, None).await.unwrap_err();
+        assert!(err.msg.starts_with("checksum mismatch"), "{err:?}");
+        assert_eq!(t.state(), TaskState::Error);
+        assert_ne!(t.state(), TaskState::Completed);
+    }
+
+    #[tokio::test]
+    async fn auto_rename_writes_unique_name_and_preserves_original() {
+        let dir = test_dir("auto-rename");
+        let original = dir.join("file.bin");
+        std::fs::write(&original, b"original").unwrap();
+
+        let opts = TaskOptions {
+            dir: dir.to_str().unwrap().into(),
+            output_name: "file.bin".into(),
+            collision: "rename".into(),
+            ..Default::default()
+        };
+        let t = Task::new("odm-3".into(), "http://127.0.0.1:1/file.bin", opts, client(), limiter(), None);
+        *t.probe.lock().unwrap() = Some(transport::ProbeResult {
+            final_url: "http://127.0.0.1:1/file.bin".into(),
+            filename: "file.bin".into(),
+            total_size: 16,
+            ..Default::default()
+        });
+
+        // conns=0 → no workers/network; the renamed file is still opened.
+        let _ = t.start(&Ctx::new(), 0, None).await;
+        assert!(dir.join("file.1.bin").exists(), "expected renamed output file.1.bin");
+        assert_eq!(std::fs::read(&original).unwrap(), b"original");
+    }
 }
