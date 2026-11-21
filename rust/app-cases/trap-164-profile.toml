@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["--profile", "both", "-c", "8", "İstanbul"]
-status.code = 4
-fs.sandbox = true

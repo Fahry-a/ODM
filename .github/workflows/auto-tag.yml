@@ -50,7 +50,7 @@ jobs:
         id: validate
         run: |
           set -euo pipefail
-          VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' rust/version/lib.rs)
+          VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' crates/version/lib.rs)
           PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
           if [ -z "$VERSION_RUST" ] || [ -z "$PKGBUILD_VER" ]; then
             echo "::error::Could not extract a version from one of the files"

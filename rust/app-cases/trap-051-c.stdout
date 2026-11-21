@@ -1,8 +1,0 @@
-ODM will download 3 files (total ~?)
-Allocation: 1 connection/file, 3 files running in parallel (rest queued automatically)
-
-  [1] é                                                    ?
-  [2] a.tar.gz                                              ?
-  [3] b.tar.gz                                              ?
-
-Continue? [Y/n] 

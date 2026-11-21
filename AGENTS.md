@@ -36,33 +36,33 @@ fixes should be repeat-run to exercise the race window.
 
 ## Architecture
 
-Single binary `rust/app` (`odm`), wired from the ported internal packages:
+Single binary `crates/app` (`odm`), wired from the ported internal packages:
 
 ```
-rust/app    → entry point, clap flags (via config), mode dispatch
-rust/config → CLI flags + config file merge, Metalink, URL resolution
-rust/version→ single source of truth for VERSION (odm/X.Y.Z)
-rust/download → Task lifecycle, chunk queue, Manager, exit codes
-rust/transport → HTTP client, Probe, proxy (http/https/socks5/socks5h)
-rust/scheduler → Connection Balancer, live Scheduler, Daemon
-rust/ui     → pacman/ILoveCandy bars, prompts, TTY renderer
-rust/rpc    → JSON-RPC 2.0 + WebSocket server, Broadcaster, throttler
-rust/ratelimit → global token bucket (hand-rolled, no x/time/rate)
-rust/storage → File WriteAt, resume control files (.odm)
-rust/logging → leveled logger
-rust/update → self-update + version hint
+crates/app    → entry point, clap flags (via config), mode dispatch
+crates/config → CLI flags + config file merge, Metalink, URL resolution
+crates/version→ single source of truth for VERSION (odm/X.Y.Z)
+crates/download → Task lifecycle, chunk queue, Manager, exit codes
+crates/transport → HTTP client, Probe, proxy (http/https/socks5/socks5h)
+crates/scheduler → Connection Balancer, live Scheduler, Daemon
+crates/ui     → pacman/ILoveCandy bars, prompts, TTY renderer
+crates/rpc    → JSON-RPC 2.0 + WebSocket server, Broadcaster, throttler
+crates/ratelimit → global token bucket (hand-rolled, no x/time/rate)
+crates/storage → File WriteAt, resume control files (.odm)
+crates/logging → leveled logger
+crates/update → self-update + version hint
 ```
 
 Two execution modes: CLI one-shot (default) and RPC daemon (`--rpc`).
 
 ## Key conventions
 
-- Version is single-sourced in `rust/version/lib.rs` (`pub const VERSION`),
+- Version is single-sourced in `crates/version/lib.rs` (`pub const VERSION`),
   imported by config (User-Agent), download (control-file metadata) and rpc
   (`odm.getVersion`). CI checks it stays in sync with `packaging/PKGBUILD`.
 - `Snapshot()` / `Task::snapshot()` is the read API used by UI and RPC.
   Write path uses atomic fields.
-- `internal/ui/render.rs` equivalent (`rust/ui/src/render.rs`) is the pure
+- `internal/ui/render.rs` equivalent (`crates/ui/src/render.rs`) is the pure
   rendering layer; animation/TTY state lives in `progress.rs`. Bar width is
   fixed at 30 cells; ETA is `HH:MM:SS` (8 cells).
 - Exit codes: 0 ok, 1 args, 2 network, 3 partial, 4 cancelled
@@ -78,7 +78,7 @@ Automated: push a version bump to `main` → `auto-tag.yml` validates/versions �
 
 Release checklist (all must match the version being released):
 
-1. `rust/version/lib.rs` — `pub const VERSION: &str = "odm/X.Y.Z";`
+1. `crates/version/lib.rs` — `pub const VERSION: &str = "odm/X.Y.Z";`
 2. `packaging/PKGBUILD:9` — `pkgver=X.Y.Z`
 3. `CHANGELOG.md` — new `## [X.Y.Z] - YYYY-MM-DD` section and link updates
 

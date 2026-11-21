@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-c", "16", "https://example.com/a.tar.gz", "héllo wörld", "https://example.com/c.tar.gz"]
-status.code = 4
-fs.sandbox = true

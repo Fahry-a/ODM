@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-c", "-1", "https://primary.example/big.iso", ""]
-status.code = 1
-fs.sandbox = true

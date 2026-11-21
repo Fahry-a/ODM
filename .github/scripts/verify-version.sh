@@ -7,7 +7,7 @@
 set -euo pipefail
 
 EXPECTED="$1"
-VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' rust/version/lib.rs)
+VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' crates/version/lib.rs)
 PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
 
 FAIL=0
@@ -20,7 +20,7 @@ if [ "$EXPECTED" != "$PKGBUILD_VER" ]; then
   FAIL=1
 fi
 if [ "$FAIL" -eq 1 ]; then
-  echo "::error::Bump both rust/version/lib.rs and packaging/PKGBUILD together."
+  echo "::error::Bump both crates/version/lib.rs and packaging/PKGBUILD together."
   exit 1
 fi
 

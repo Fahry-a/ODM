@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Rust cutover** — the Go implementation (`cmd/`, `internal/`) has been
-  replaced by the pure-Rust port under `rust/`. One Cargo workspace at the
+  replaced by the pure-Rust port under `crates/`. One Cargo workspace at the
   repository root builds all crates; `cargo build --release -p odm` produces
   the binary. CI, version checks and the six-target release cross-compile
   (via `cargo-zigbuild`) now use Rust only. Behavior, flags, `.odm` format,

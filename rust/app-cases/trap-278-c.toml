@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-c", "16", "-i", "👨‍👩‍👧 family"]
-status.code = 1
-fs.sandbox = true

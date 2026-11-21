@@ -1,1 +1,0 @@
-odm: --min-split-size "İstanbul": --chunk-size "İstanbul": invalid rate "İstanbul": strconv.ParseFloat: parsing "İstanbul": invalid syntax

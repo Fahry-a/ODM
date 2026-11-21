@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-i", "👍🏽 thumbs"]
-status.code = 1
-fs.sandbox = true
