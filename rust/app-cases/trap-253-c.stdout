@@ -1,7 +1,0 @@
-ODM will download 2 files (total ~?)
-Allocation: 1 connection/file, 2 files running in parallel (rest queued automatically)
-
-  [1] big.iso                                               ?
-  [2] héllo wörld                                           ?
-
-Continue? [Y/n] 

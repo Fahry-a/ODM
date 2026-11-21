@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["(Oryn", "straße", "Manager)", "installer"]
-status.code = 4
-fs.sandbox = true

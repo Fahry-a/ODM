@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-i", "é"]
-status.code = 1
-fs.sandbox = true

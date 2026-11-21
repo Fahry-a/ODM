@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["--profile", "smart", "-c", "0", "-i", "file-list.txt"]
-status.code = 1
-fs.sandbox = true

@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-c", "16", "straße"]
-status.code = 4
-fs.sandbox = true

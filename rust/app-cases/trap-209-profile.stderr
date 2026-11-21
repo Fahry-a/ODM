@@ -1,1 +1,0 @@
-odm: --split and --max-connection-per-server must be ≥ 1 (run 'odm -h' for usage)

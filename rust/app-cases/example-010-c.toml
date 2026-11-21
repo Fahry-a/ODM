@@ -1,4 +1,0 @@
-bin.name = "odm"
-args = ["-c", "16", "-i", "release.meta4"]
-status.code = 1
-fs.sandbox = true

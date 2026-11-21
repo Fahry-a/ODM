@@ -36,8 +36,8 @@ jobs:
 
       - name: Verify version consistency
         run: |
-          VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' rust/version/lib.rs)
-          [ -n "$VERSION_RUST" ] || { echo "::error::Could not extract version from rust/version/lib.rs"; exit 1; }
+          VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' crates/version/lib.rs)
+          [ -n "$VERSION_RUST" ] || { echo "::error::Could not extract version from crates/version/lib.rs"; exit 1; }
           bash .github/scripts/verify-version.sh "$VERSION_RUST"
 
       - name: Clippy
