@@ -1,7 +1,11 @@
 //! Rust port of ODM's `internal/download` package: task lifecycle, chunk
 //! queue (work-stealing), Manager, exit codes.
 
+// Keeps the vendored libcrypto linked: the C SHA-256 shim resolves EVP_* from it.
+extern crate openssl;
+
 pub mod chunkqueue;
+pub mod csha256;
 pub mod engine;
 pub mod manager;
 pub mod resume;
