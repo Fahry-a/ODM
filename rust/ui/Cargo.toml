@@ -1,0 +1,9 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+download = { path = "../download" }
+scheduler = { path = "../scheduler" }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }

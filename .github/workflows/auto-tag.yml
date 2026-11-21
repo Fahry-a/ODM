@@ -50,15 +50,15 @@ jobs:
         id: validate
         run: |
           set -euo pipefail
-          VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
+          VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' rust/version/lib.rs)
           PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
-          if [ -z "$VERSION_GO" ] || [ -z "$PKGBUILD_VER" ]; then
+          if [ -z "$VERSION_RUST" ] || [ -z "$PKGBUILD_VER" ]; then
             echo "::error::Could not extract a version from one of the files"
             exit 1
           fi
-          bash .github/scripts/verify-version.sh "$VERSION_GO"
-          echo "version=$VERSION_GO" >> "$GITHUB_OUTPUT"
-          echo "Both files match: $VERSION_GO"
+          bash .github/scripts/verify-version.sh "$VERSION_RUST"
+          echo "version=$VERSION_RUST" >> "$GITHUB_OUTPUT"
+          echo "Both files match: $VERSION_RUST"
 
       - name: Check existing tag / version order
         id: check

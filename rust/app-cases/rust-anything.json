@@ -1,0 +1,88 @@
+{
+  "schema": "rust-anything/app-cases@1",
+  "name": "odm",
+  "run": [
+    "./odm"
+  ],
+  "timeout_secs": 30,
+  "unordered": {
+    "example-011-oryn": [
+      "stderr"
+    ],
+    "trap-038-c": [
+      "stderr"
+    ],
+    "trap-040-c": [
+      "stderr"
+    ],
+    "trap-042-c": [
+      "stderr"
+    ],
+    "trap-075-c": [
+      "stderr"
+    ],
+    "trap-096-c": [
+      "stderr"
+    ],
+    "trap-101-c": [
+      "stderr"
+    ],
+    "trap-280-h-llo-w-rld": [
+      "stderr"
+    ],
+    "trap-282": [
+      "stderr"
+    ],
+    "trap-284-e": [
+      "stderr"
+    ],
+    "trap-285-stanbul": [
+      "stderr"
+    ],
+    "trap-286-stra-e": [
+      "stderr"
+    ],
+    "trap-287-l-k-rmak": [
+      "stderr"
+    ],
+    "trap-288-family": [
+      "stderr"
+    ],
+    "trap-289-a-b": [
+      "stderr"
+    ],
+    "trap-290-oryn": [
+      "stderr"
+    ],
+    "trap-291-oryn": [
+      "stderr"
+    ],
+    "trap-292-oryn": [
+      "stderr"
+    ],
+    "trap-293-oryn": [
+      "stderr"
+    ],
+    "trap-294-oryn": [
+      "stderr"
+    ],
+    "trap-295-oryn": [
+      "stderr"
+    ],
+    "trap-296-oryn": [
+      "stderr"
+    ],
+    "trap-297-oryn": [
+      "stderr"
+    ],
+    "trap-298-oryn": [
+      "stderr"
+    ],
+    "trap-299-oryn": [
+      "stderr"
+    ],
+    "trap-300-oryn": [
+      "stderr"
+    ]
+  }
+}

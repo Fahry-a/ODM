@@ -19,36 +19,29 @@ jobs:
   build-test:
     name: Build & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
-          cache: true
+          components: clippy
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
+        run: cargo build --workspace --locked
 
       - name: Verify version consistency
         run: |
-          VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
-          [ -n "$VERSION_GO" ] || { echo "::error::Could not extract version from version.go"; exit 1; }
-          bash .github/scripts/verify-version.sh "$VERSION_GO"
+          VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' rust/version/lib.rs)
+          [ -n "$VERSION_RUST" ] || { echo "::error::Could not extract version from rust/version/lib.rs"; exit 1; }
+          bash .github/scripts/verify-version.sh "$VERSION_RUST"
 
-      - name: Lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        with:
-          version: v2.12.2
-          args: --timeout=5m
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
 
       - name: Test
-        run: go test -race -count=1 ./...
+        run: cargo test --workspace --locked

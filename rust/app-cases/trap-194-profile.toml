@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "smart", "-c", "16", "-i", "ılık ırmak"]
+status.code = 1
+fs.sandbox = true

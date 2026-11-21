@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["-c", "16", "-sf", "18446744073709551616", "https://example.com/a.tar.gz", "https://example.com/b.tar.gz", "..."]
+status.code = 1
+fs.sandbox = true

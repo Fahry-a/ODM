@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "日本語", "--split", "4", "--min-split-size", "10M", "https://example.com/big.iso"]
+status.code = 1
+fs.sandbox = true

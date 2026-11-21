@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "aria2c", "-c", "5", ""]
+status.code = 1
+fs.sandbox = true

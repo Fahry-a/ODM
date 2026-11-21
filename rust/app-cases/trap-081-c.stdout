@@ -1,0 +1,8 @@
+ODM will download 3 files (total ~?)
+Allocation: 4 connections/file, 3 files running in parallel (rest queued automatically)
+
+  [1] ...                                                   ?
+  [2] b.tar.gz                                              ?
+  [3] 👨‍👩‍👧 family                                       ?
+
+Continue? [Y/n] 

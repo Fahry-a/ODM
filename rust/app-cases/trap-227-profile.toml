@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "aria2c", "--split", "4", "--min-split-size", "10M", "日本語"]
+status.code = 4
+fs.sandbox = true

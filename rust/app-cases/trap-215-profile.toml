@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "aria2c", "--split", "4", "--min-split-size", "héllo wörld", "https://example.com/big.iso"]
+status.code = 1
+fs.sandbox = true

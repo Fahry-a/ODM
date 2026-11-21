@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "👍🏽 thumbs", "-c", "16", "-i", "file-list.txt"]
+status.code = 1
+fs.sandbox = true

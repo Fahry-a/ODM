@@ -1,0 +1,9 @@
+ODM will download 4 files (total ~?)
+Allocation: 1 connection/file, 4 files running in parallel (rest queued automatically)
+
+  [1] (Oryn                                                 ?
+  [2] Manager)                                              ?
+  [3] héllo wörld                                           ?
+  [4] installer                                             ?
+
+Continue? [Y/n] 

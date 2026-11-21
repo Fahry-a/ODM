@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["--profile", "both", "-c", "9007199254740993", "https://example.com/huge.iso"]
+status.code = 4
+fs.sandbox = true

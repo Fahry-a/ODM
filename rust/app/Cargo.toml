@@ -1,0 +1,25 @@
+[package]
+name = "odm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Oryn Download Manager — pure Rust port"
+
+[[bin]]
+name = "odm"
+path = "src/main.rs"
+
+[dependencies]
+config = { path = "../config" }
+download = { path = "../download" }
+logging = { path = "../logging" }
+ratelimit = { path = "../ratelimit" }
+rpc = { path = "../rpc" }
+scheduler = { path = "../scheduler" }
+transport = { path = "../transport" }
+ui = { path = "../ui" }
+update = { path = "../update" }
+version = { path = "../version" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+axum = "0.8"
+serde_json = "1"

@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["-c", "16", "日本語"]
+status.code = 4
+fs.sandbox = true

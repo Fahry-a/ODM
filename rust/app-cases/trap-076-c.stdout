@@ -1,0 +1,7 @@
+ODM will download 2 files (total ~?)
+Allocation: 4 connections/file, 2 files running in parallel (rest queued automatically)
+
+  [1] ...                                                   ?
+  [2] b.tar.gz                                              ?
+
+Continue? [Y/n] 

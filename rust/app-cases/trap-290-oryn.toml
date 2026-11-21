@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["(Oryn", "héllo wörld", "Manager)", "installer"]
+status.code = 4
+fs.sandbox = true

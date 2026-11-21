@@ -1,0 +1,8 @@
+ODM will download 3 files (total ~?)
+Allocation: 4 connections/file, 3 files running in parallel (rest queued automatically)
+
+  [1] ...                                                   ?
+  [2] a.tar.gz                                              ?
+  [3] 日本語                                                ?
+
+Continue? [Y/n] 

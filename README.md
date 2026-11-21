@@ -70,12 +70,20 @@ The upload action sends the local SHA-256 to Foenui PM and verifies the checksum
 
 ### From source
 
-Requires **Go 1.26+**.
+Requires a recent **Rust stable** toolchain (edition 2021).
 
 ```bash
 git clone https://github.com/Fahry-a/odm.git && cd odm
-go build -o odm ./cmd/odm
-sudo install -Dm755 odm /usr/local/bin/odm
+cargo build --release --locked -p odm
+sudo install -Dm755 target/release/odm /usr/local/bin/odm
+```
+
+For the fully static musl binary (requires `musl-gcc` / `musl-tools`):
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+CC_x86_64_unknown_linux_musl=musl-gcc \
+  cargo build --release --locked --target x86_64-unknown-linux-musl -p odm
 ```
 
 ### Systemd daemon

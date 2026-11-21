@@ -62,3 +62,6 @@ assets/
 
 # Hallmark design-skill log (local only)
 .hallmark/
+
+# Rust build artifacts (any cargo target/ directory, at root or in a crate)
+target/

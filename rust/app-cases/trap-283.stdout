@@ -1,0 +1,8 @@
+ODM will download 3 files (total ~?)
+Allocation: 1 connection/file, 3 files running in parallel (rest queued automatically)
+
+  [1] Download                                              ?
+  [2] Manager)                                              ?
+  [3] installer                                             ?
+
+Continue? [Y/n] 

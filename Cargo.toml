@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "rust/app",
+    "rust/config",
+    "rust/download",
+    "rust/logging",
+    "rust/ratelimit",
+    "rust/rpc",
+    "rust/scheduler",
+    "rust/storage",
+    "rust/transport",
+    "rust/ui",
+    "rust/update",
+    "rust/version",
+]
+
+[workspace.package]
+edition = "2021"

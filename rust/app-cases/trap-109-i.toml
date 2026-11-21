@@ -1,0 +1,4 @@
+bin.name = "odm"
+args = ["-i", "straße"]
+status.code = 1
+fs.sandbox = true

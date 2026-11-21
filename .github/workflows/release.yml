@@ -38,12 +38,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - name: Extract tag version
         id: tag
         run: |
@@ -72,8 +66,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/build-contributors.sh "${{ steps.tag.outputs.version }}"
 
+      # The cargo-zigbuild image ships the macOS SDK (required for the darwin
+      # targets) plus cargo-zigbuild itself; install the Rust std libs in the
+      # container and build all six artifacts with one toolchain.
       - name: Cross-compile
-        run: bash .github/scripts/cross-compile.sh "${{ steps.tag.outputs.version }}"
+        run: |
+          docker run --rm -v "$PWD:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild:latest \
+            bash -c '
+              set -euo pipefail
+              rustup target add \
+                i686-unknown-linux-musl \
+                x86_64-unknown-linux-musl \
+                armv7-unknown-linux-musleabihf \
+                aarch64-unknown-linux-musl \
+                x86_64-apple-darwin \
+                aarch64-apple-darwin
+              bash .github/scripts/cross-compile.sh "${{ steps.tag.outputs.version }}"
+            '
 
       - name: Generate checksums
         run: bash .github/scripts/gen-checksums.sh "${{ steps.tag.outputs.version }}"

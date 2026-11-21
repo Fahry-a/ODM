@@ -1,0 +1,21 @@
+[package]
+name = "download"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "io-util", "net"] }
+md5 = "0.7"
+sha1 = "0.10"
+# SHA-NI: Go's crypto/sha256 uses hardware SHA; software sha2 was ~2x slower.
+sha2 = { version = "0.10", features = ["asm"] }
+# Vendored so the musl release stays fully static. OpenSSL's assembly SHA-256
+# is ~2x the portable sha2 backend on CPUs without SHA-NI (measured).
+openssl = { version = "0.10", features = ["vendored"] }
+bytes = "1"
+storage = { path = "../storage" }
+transport = { path = "../transport" }
+ratelimit = { path = "../ratelimit" }
+version = { path = "../version" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks", "stream", "http2"] }
+futures-util = "0.3"
