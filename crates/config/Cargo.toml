@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 clap = "4"
-quick-xml = "0.38"
+quick-xml = "0.42"
 version = { path = "../version" }
