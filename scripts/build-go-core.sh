@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 case "$TARGET" in
   x86_64-unknown-linux-gnu)          GOOS=linux;  GOARCH=amd64; CC_BIN="${CC:-cc}"; CXX_BIN="${CXX:-c++}"; LIB=libodmgo ;;
-  x86_64-unknown-linux-musl)         GOOS=linux;  GOARCH=amd64; CC_BIN="${CC:-musl-gcc}"; CXX_BIN="${CXX:-musl-g++}"; LIB=libodmgo_musl ;;
+  x86_64-unknown-linux-musl)         GOOS=linux;  GOARCH=amd64; CC_BIN="zig cc -target x86_64-linux-musl"; CXX_BIN="zig c++ -target x86_64-linux-musl"; LIB=libodmgo_musl ;;
   aarch64-unknown-linux-musl)        GOOS=linux;  GOARCH=arm64; CC_BIN="zig cc -target aarch64-linux-musl"; CXX_BIN="zig c++ -target aarch64-linux-musl"; LIB=libodmgo_aarch64 ;;
   armv7-unknown-linux-musleabihf)    GOOS=linux;  GOARCH=arm;   CC_BIN="zig cc -target arm-linux-musleabihf"; CXX_BIN="zig c++ -target arm-linux-musleabihf"; LIB=libodmgo_armv7; export GOARM=7 ;;
   i686-unknown-linux-musl)           GOOS=linux;  GOARCH=386;   CC_BIN="zig cc -target x86-linux-musl"; CXX_BIN="zig c++ -target x86-linux-musl"; LIB=libodmgo_i686 ;;
