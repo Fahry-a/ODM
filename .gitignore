@@ -65,3 +65,7 @@ assets/
 
 # Rust build artifacts (any cargo target/ directory, at root or in a crate)
 target/
+/.build-tmp/
+/a.o
+/_tmp_*.tar.gz
+/_tmp_*.tar.gz.odm

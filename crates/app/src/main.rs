@@ -1,6 +1,9 @@
 //! Rust port of `cmd/odm/main.go` — CLI one-shot + `--rpc` daemon.
 //! Wires the ported crates together; all engine work lives in `internal/*` ports.
 
+// Go is the primary download core. ODM_RUST_ENGINE=1 selects the Rust engine.
+mod go_engine;
+
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{IsTerminal, Write};
@@ -203,6 +206,13 @@ async fn run_inner(argv: &[String]) -> Result<i32, AppErr> {
         if !ok {
             return Err(AppErr { code: exit_code::EXIT_CANCELLED, msg: "cancelled by user".into() });
         }
+    }
+
+    // Go is the primary download core. Dispatch after probing + confirmation
+    // so both engines show the same plan prompt; ODM_RUST_ENGINE=1 keeps the
+    // Rust engine as an A/B fallback and the RPC daemon always stays on Rust.
+    if !o.rpc && std::env::var_os("ODM_RUST_ENGINE").is_none() {
+        return Ok(go_engine::run(&o).await);
     }
 
     // Progress renderer + snapshot channels. The scheduler's ProgressCB pushes
