@@ -28,10 +28,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
+          - os: macos-26-intel
             asset: darwin_amd64
             qemu: ""
-          - os: macos-latest
+          - os: macos-26
             asset: darwin_arm64
             qemu: ""
           - os: ubuntu-24.04-arm
