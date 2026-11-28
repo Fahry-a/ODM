@@ -38,7 +38,8 @@ for ENTRY in "${TARGETS[@]}"; do
   # musl invokes Go c-archive constructors without argc/argv; the post-link
   # patch is mandatory for every static Linux release binary.
   if [ "$GOOS" = "linux" ]; then
-    export RUSTFLAGS="-C relocation-model=static -C link-arg=-no-pie"
+    # strip=none keeps the odm_go_ctor_* symbols the patcher rewrites.
+    export RUSTFLAGS="-C relocation-model=static -C link-arg=-no-pie -C strip=none"
   else
     unset RUSTFLAGS
   fi
