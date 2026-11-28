@@ -27,10 +27,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build & Release
+  meta:
+    name: Prepare release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
     steps:
       # fetch-depth: 0 so `git log` between tags works for the per-release
       # contributors list (and the changelog extraction below).
@@ -58,7 +59,6 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag || true
 
       - name: Extract changelog
-        id: changelog
         run: bash .github/scripts/extract-changelog.sh "${{ steps.tag.outputs.version }}"
 
       - name: Append contributors to release notes
@@ -66,10 +66,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/build-contributors.sh "${{ steps.tag.outputs.version }}"
 
+      - name: Upload release notes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-notes
+          path: /tmp/release-notes.md
+
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { triple: i686-unknown-linux-musl,       os: linux,  arch: "386" }
+          - { triple: x86_64-unknown-linux-musl,     os: linux,  arch: amd64 }
+          - { triple: armv7-unknown-linux-musleabihf, os: linux,  arch: arm }
+          - { triple: aarch64-unknown-linux-musl,    os: linux,  arch: arm64 }
+          - { triple: x86_64-apple-darwin,           os: darwin, arch: amd64 }
+          - { triple: aarch64-apple-darwin,          os: darwin, arch: arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       # The cargo-zigbuild image ships the macOS SDK (required for the darwin
-      # targets) plus cargo-zigbuild itself; install the Rust std libs in the
-      # container and build all six artifacts with one toolchain.
-      - name: Cross-compile
+      # targets) plus cargo-zigbuild itself.
+      - name: Cross-compile one target
         run: |
           docker run --rm -v "$PWD:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild:latest \
             bash -c '
@@ -89,42 +112,82 @@ jobs:
               fi
               export PATH="/usr/local/go/bin:$PATH"
               go version
-              rustup target add \
-                i686-unknown-linux-musl \
-                x86_64-unknown-linux-musl \
-                armv7-unknown-linux-musleabihf \
-                aarch64-unknown-linux-musl \
-                x86_64-apple-darwin \
-                aarch64-apple-darwin
-              bash .github/scripts/cross-compile.sh "${{ steps.tag.outputs.version }}"
+              rustup target add ${{ matrix.triple }}
+              bash .github/scripts/cross-compile.sh "${{ needs.meta.outputs.version }}" "${{ matrix.triple }}"
             '
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: odm-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/odm_*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: odm-*
+          merge-multiple: true
+          path: build
+
+      - name: Download release notes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-notes
+          path: /tmp
+
       - name: Generate checksums
-        run: bash .github/scripts/gen-checksums.sh "${{ steps.tag.outputs.version }}"
+        run: bash .github/scripts/gen-checksums.sh "${{ needs.meta.outputs.version }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
-          tag_name: v${{ steps.tag.outputs.version }}
-          name: v${{ steps.tag.outputs.version }}
+          tag_name: v${{ needs.meta.outputs.version }}
+          name: v${{ needs.meta.outputs.version }}
           body_path: /tmp/release-notes.md
           files: |
-            build/odm_${{ steps.tag.outputs.version }}_*
+            build/odm_${{ needs.meta.outputs.version }}_*
             build/checksums.txt
           draft: false
-          prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.meta.outputs.version, '-') }}
 
       - name: Dispatch AUR publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.tag.outputs.version }}"
+          VERSION="${{ needs.meta.outputs.version }}"
           # workflow_dispatch is exempt from GitHub's recursion guard (the same
           # reason auto-tag.yml dispatches this workflow explicitly), so this
           # reliably starts aur-publish.yml where a workflow_run chain would be
           # suppressed for GITHUB_TOKEN-triggered runs.
           gh workflow run aur-publish.yml -f "tag=v${VERSION}" --ref main
           echo "Dispatched aur-publish.yml for v$VERSION"
+
+  publish:
+    name: Publish ${{ matrix.os }}/${{ matrix.arch }} to Foenui PM
+    needs: [meta, release]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,  arch: "386" }
+          - { os: linux,  arch: amd64 }
+          - { os: linux,  arch: arm }
+          - { os: linux,  arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: odm-${{ matrix.os }}-${{ matrix.arch }}
+          path: build
 
       # The registry mirror is opt-in so existing releases keep working
       # until FOENUI_UPLOAD_TOKEN has been configured in repository settings.
@@ -141,86 +204,16 @@ jobs:
             echo "::notice title=Foenui PM mirror skipped::Add the FOENUI_UPLOAD_TOKEN repository secret to mirror future release tarballs."
           fi
 
-      - name: Publish linux/386 to Foenui PM
+      - name: Publish to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
         uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
-          source: build/odm_${{ steps.tag.outputs.version }}_linux_386.tar.gz
+          source: build/odm_${{ needs.meta.outputs.version }}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
           owner: fahry-a
           organization: "false"
           package: odm
-          version: ${{ steps.tag.outputs.version }}
-          os: linux
-          arch: "386"
-          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
-          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
-
-      - name: Publish linux/amd64 to Foenui PM
-        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
-        with:
-          source: build/odm_${{ steps.tag.outputs.version }}_linux_amd64.tar.gz
-          owner: fahry-a
-          organization: "false"
-          package: odm
-          version: ${{ steps.tag.outputs.version }}
-          os: linux
-          arch: amd64
-          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
-          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
-
-      - name: Publish linux/arm to Foenui PM
-        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
-        with:
-          source: build/odm_${{ steps.tag.outputs.version }}_linux_arm.tar.gz
-          owner: fahry-a
-          organization: "false"
-          package: odm
-          version: ${{ steps.tag.outputs.version }}
-          os: linux
-          arch: arm
-          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
-          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
-
-      - name: Publish linux/arm64 to Foenui PM
-        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
-        with:
-          source: build/odm_${{ steps.tag.outputs.version }}_linux_arm64.tar.gz
-          owner: fahry-a
-          organization: "false"
-          package: odm
-          version: ${{ steps.tag.outputs.version }}
-          os: linux
-          arch: arm64
-          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
-          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
-
-      - name: Publish darwin/amd64 to Foenui PM
-        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
-        with:
-          source: build/odm_${{ steps.tag.outputs.version }}_darwin_amd64.tar.gz
-          owner: fahry-a
-          organization: "false"
-          package: odm
-          version: ${{ steps.tag.outputs.version }}
-          os: darwin
-          arch: amd64
-          overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
-          token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}
-
-      - name: Publish darwin/arm64 to Foenui PM
-        if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
-        with:
-          source: build/odm_${{ steps.tag.outputs.version }}_darwin_arm64.tar.gz
-          owner: fahry-a
-          organization: "false"
-          package: odm
-          version: ${{ steps.tag.outputs.version }}
-          os: darwin
-          arch: arm64
+          version: ${{ needs.meta.outputs.version }}
+          os: ${{ matrix.os }}
+          arch: ${{ matrix.arch }}
           overwrite: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite || false }}
           token: ${{ secrets.FOENUI_UPLOAD_TOKEN }}

@@ -6,11 +6,13 @@
 # macOS targets need the SDK, which the release workflow supplies via the
 # ghcr.io/rust-cross/cargo-zigbuild image.
 #
-# Usage: cross-compile.sh <version>
+# Usage: cross-compile.sh <version> [rust-target-triple]
 #   <version>  the version being released, e.g. "1.5.2"
+#   <triple>   build only this target (release matrix passes one per job)
 set -euo pipefail
 
 VERSION="$1"
+FILTER="${2:-}"
 
 # rust target triple | artifact os | artifact arch
 TARGETS=(
@@ -28,11 +30,13 @@ mkdir -p build
 # before Rust links against them (build.rs would do the same per target).
 for ENTRY in "${TARGETS[@]}"; do
   IFS='|' read -r TRIPLE GOOS GOARCH <<<"$ENTRY"
+  [ -z "$FILTER" ] || [ "$TRIPLE" = "$FILTER" ] || continue
   bash scripts/build-go-core.sh "$TRIPLE"
 done
 
 for ENTRY in "${TARGETS[@]}"; do
   IFS='|' read -r TRIPLE GOOS GOARCH <<<"$ENTRY"
+  [ -z "$FILTER" ] || [ "$TRIPLE" = "$FILTER" ] || continue
   TARBALL="build/odm_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
   echo "Building $TARBALL ($TRIPLE) ..."
   # musl invokes Go c-archive constructors without argc/argv; the post-link

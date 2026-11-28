@@ -1,5 +1,5 @@
 use std::fs::{File as OsFile, OpenOptions};
-use std::io::self;
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
