@@ -25,5 +25,6 @@ fi
 mkdir -p "$ROOT/.build-tmp"
 export GOTMPDIR="$ROOT/.build-tmp" TMPDIR="$ROOT/.build-tmp"
 echo "[go-core] building $LIB for $GOOS/$GOARCH ($TARGET)" >&2
+# VCS stamping fails when the repo is bind-mounted with a different owner (containers).
 (cd "$ROOT/gocore" && CGO_ENABLED=1 CC="$CC_BIN" CXX="$CXX_BIN" GOOS="$GOOS" GOARCH="$GOARCH" \
-  go build -buildmode=c-archive -o "$LIB.a" ./cmd/odmbridge)
+  go build -buildvcs=false -buildmode=c-archive -o "$LIB.a" ./cmd/odmbridge)
