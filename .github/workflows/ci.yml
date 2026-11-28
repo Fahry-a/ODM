@@ -31,7 +31,7 @@ jobs:
       # build.rs compiles the embedded Go core on a fresh checkout; the
       # archives are gitignored.
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: gocore/go.mod
           cache-dependency-path: gocore/go.sum
