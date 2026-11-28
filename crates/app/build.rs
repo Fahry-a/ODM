@@ -53,7 +53,8 @@ fn main() {
         if arch == "x86" || arch == "arm" {
             println!("cargo:rustc-link-lib=atomic");
             println!("cargo:rustc-link-lib=gcc");
-            println!("cargo:rustc-link-arg=-Wl,--wrap=clock_gettime");
+            // zig's lld accepts the single-dash spelling; GNU ld accepts both.
+            println!("cargo:rustc-link-arg=-Wl,-wrap,clock_gettime");
         }
     }
     println!("cargo:rerun-if-changed={}", gocore.join("cmd/odmbridge").display());
