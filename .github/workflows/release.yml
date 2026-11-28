@@ -74,6 +74,11 @@ jobs:
           docker run --rm -v "$PWD:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild:latest \
             bash -c '
               set -euo pipefail
+              # build.rs builds the Go core archives (gitignored); the
+              # cargo-zigbuild image may not ship a Go toolchain.
+              if ! command -v go >/dev/null 2>&1; then
+                (apt-get update -qq && apt-get install -y -qq golang-go) || (apk add --no-cache go)
+              fi
               rustup target add \
                 i686-unknown-linux-musl \
                 x86_64-unknown-linux-musl \

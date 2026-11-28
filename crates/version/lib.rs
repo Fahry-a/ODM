@@ -6,12 +6,12 @@
 
 /// ODM release string; baked into --version, the default User-Agent, and the
 /// RPC odm.getVersion response.
-pub const VERSION: &str = "odm/1.9.2";
+pub const VERSION: &str = "odm/1.10.0";
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn version_string_matches_go() {
-        assert_eq!(super::VERSION, "odm/1.9.2");
+    fn version_string_is_release_value() {
+        assert_eq!(super::VERSION, "odm/1.10.0");
     }
 }

@@ -361,6 +361,12 @@ impl Client {
     fn go_send_error(raw_url: &str, e: reqwest::Error) -> String {
         let msg = e.to_string();
         if msg.starts_with("error sending request") {
+            let refused = root_io_error(&e).map_or(false, |io| io.kind() == std::io::ErrorKind::ConnectionRefused);
+            if refused {
+                if let Some(text) = go_connection_refused(raw_url) {
+                    return text;
+                }
+            }
             if let Ok(u) = Url::parse(raw_url) {
                 if let Some(host) = u.host_str() {
                     if host.ends_with(".example") {
@@ -563,5 +569,44 @@ impl std::error::Error for GetRangeError {}
 impl From<StatusError> for GetRangeError {
     fn from(e: StatusError) -> Self {
         GetRangeError::Status(e)
+    }
+}
+
+/// Go's `dial tcp host:port: connect: connection refused` for a refused socket.
+fn go_connection_refused(raw_url: &str) -> Option<String> {
+    let u = Url::parse(raw_url).ok()?;
+    let host = u.host_str()?;
+    let port = u.port_or_known_default().unwrap_or(80);
+    Some(format!(
+        "Get \"{raw_url}\": dial tcp {host}:{port}: connect: connection refused"
+    ))
+}
+
+/// Find the underlying OS error in reqwest/hyper's source chain.
+fn root_io_error<'a>(err: &'a (dyn std::error::Error + 'static)) -> Option<&'a std::io::Error> {
+    let mut cur = Some(err);
+    while let Some(e) = cur {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            return Some(io);
+        }
+        cur = e.source();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn go_connection_refused_error_text() {
+        assert_eq!(
+            go_connection_refused("http://127.0.0.1:1/a"),
+            Some("Get \"http://127.0.0.1:1/a\": dial tcp 127.0.0.1:1: connect: connection refused".to_string())
+        );
+        assert_eq!(
+            go_connection_refused("https://127.0.0.1/x"),
+            Some("Get \"https://127.0.0.1/x\": dial tcp 127.0.0.1:443: connect: connection refused".to_string())
+        );
     }
 }

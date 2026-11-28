@@ -567,6 +567,35 @@ func odm_go_set_progress_callback(cb C.odm_progress_cb) {
 	cbMu.Unlock()
 }
 
+// engineLog forwards the download engine's leveled messages to the Rust CLI,
+// so the embedded Go core logs exactly like the standalone Go binary did.
+var engineLog download.LogFn
+
+func sendLog(level, format string, args ...any) {
+	fn := engineLog
+	if fn != nil {
+		fn(level, format, args...)
+	}
+}
+
+//export odm_go_set_log_callback
+func odm_go_set_log_callback(cb C.odm_log_cb) {
+	cbMu.Lock()
+	C.odm_shim_set_log(cb)
+	if cb == nil {
+		engineLog = nil
+	} else {
+		engineLog = func(level, format string, args ...any) {
+			cLevel := C.CString(level)
+			cMsg := C.CString(fmt.Sprintf(format, args...))
+			C.odm_shim_log(cLevel, cMsg)
+			C.free(unsafe.Pointer(cLevel))
+			C.free(unsafe.Pointer(cMsg))
+		}
+	}
+	cbMu.Unlock()
+}
+
 //export odm_go_cancel
 func odm_go_cancel() {
 	runMu.Lock()
@@ -763,8 +792,6 @@ func run(ctx context.Context, cfg bridgeConfig, res *bridgeResult) int {
 		if p := profiles[url]; p != "" {
 			profile = p
 		}
-		// The engine's logger is silent here; Start's error is captured by
-		// runBatch directly, which gives exact per-task error text.
 		t := download.NewTask(id, url, download.TaskOptions{
 			OutputName:       exec.OutFile,
 			Dir:              exec.Dir,
@@ -783,7 +810,7 @@ func run(ctx context.Context, cfg bridgeConfig, res *bridgeResult) int {
 			MinSplitSize:     exec.MinSplitSize,
 			MaxConnPerServer: exec.MaxConnPerServer,
 			Collision:        exec.Collision,
-		}, mgr.Client(), mgr.Limiter(), nil)
+		}, mgr.Client(), mgr.Limiter(), sendLog)
 		t.SetH2Client(mgr.H2Client())
 		if pr := probes[url]; pr != nil {
 			pr2 := *pr

@@ -10,12 +10,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 case "$TARGET" in
-  x86_64-unknown-linux-musl)          GOOS=linux;  GOARCH=amd64; CC_BIN="musl-gcc"; CXX_BIN="musl-gcc"; LIB=libodmgo_musl.a; LINUX=1 ;;
-  aarch64-unknown-linux-musl)         GOOS=linux;  GOARCH=arm64; CC_BIN="zig cc -target aarch64-linux-musl"; CXX_BIN="zig c++ -target aarch64-linux-musl"; LIB=libodmgo_aarch64.a; LINUX=1 ;;
-  armv7-unknown-linux-musleabihf)     GOOS=linux;  GOARCH=arm;   CC_BIN="zig cc -target arm-linux-musleabihf"; CXX_BIN="zig c++ -target arm-linux-musleabihf"; LIB=libodmgo_armv7.a; LINUX=1; export GOARM=7 ;;
-  i686-unknown-linux-musl)            GOOS=linux;  GOARCH=386;   CC_BIN="zig cc -target x86-linux-musl"; CXX_BIN="zig c++ -target x86-linux-musl"; LIB=libodmgo_i686.a; LINUX=1 ;;
-  x86_64-apple-darwin)                GOOS=darwin; GOARCH=amd64; CC_BIN="zig cc -target x86_64-macos"; CXX_BIN="zig c++ -target x86_64-macos"; LIB=libodmgo_darwin_amd64.a; LINUX=0 ;;
-  aarch64-apple-darwin)               GOOS=darwin; GOARCH=arm64; CC_BIN="zig cc -target aarch64-macos"; CXX_BIN="zig c++ -target aarch64-macos"; LIB=libodmgo_darwin_arm64.a; LINUX=0 ;;
+  x86_64-unknown-linux-musl)          LIB=libodmgo_musl.a; LINUX=1 ;;
+  aarch64-unknown-linux-musl)         LIB=libodmgo_aarch64.a; LINUX=1 ;;
+  armv7-unknown-linux-musleabihf)     LIB=libodmgo_armv7.a; LINUX=1 ;;
+  i686-unknown-linux-musl)            LIB=libodmgo_i686.a; LINUX=1 ;;
+  x86_64-apple-darwin)                LIB=libodmgo_darwin_amd64.a; LINUX=0 ;;
+  aarch64-apple-darwin)               LIB=libodmgo_darwin_arm64.a; LINUX=0 ;;
   *) echo "unsupported target: $TARGET" >&2; exit 2 ;;
 esac
 
@@ -24,8 +24,8 @@ export GOTMPDIR="$ROOT/.build-tmp"
 export TMPDIR="$ROOT/.build-tmp"
 
 echo "[1/3] Go core archive ($TARGET -> $LIB)"
-(cd gocore && CGO_ENABLED=1 CC="$CC_BIN" CXX="$CXX_BIN" GOOS="$GOOS" GOARCH="$GOARCH" \
-  go build -buildmode=c-archive -o "$LIB" ./cmd/odmbridge)
+rm -f "$ROOT/gocore/$LIB.a" "$ROOT/gocore/$LIB.h"
+bash "$ROOT/scripts/build-go-core.sh" "$TARGET"
 
 echo "[2/3] Rust binary ($TARGET)"
 if [ "$LINUX" = 1 ]; then

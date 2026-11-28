@@ -137,18 +137,38 @@ impl Logger {
 }
 
 /// Go-log-header equivalent: `2026/11/20 17:13:55 ` (LstdFlags: date, space,
-/// time, space). Timestamps are rendered in UTC — Go uses local time, but
-/// log timestamps are not a behavioral contract (replay normalizes them).
+/// time, space), in the process's local timezone like Go's standard logger.
 fn timestamp_header() -> String {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    go_log_timestamp(secs)
+    format_log_timestamp(secs as i64, local_utc_offset())
+}
+
+/// Local UTC offset from the C library (`localtime_r`), matching Go's time.Local.
+fn local_utc_offset() -> i32 {
+    #[cfg(unix)]
+    {
+        let t = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as _)
+            .unwrap_or(0);
+        let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
+        unsafe {
+            libc::localtime_r(&t, tm.as_mut_ptr());
+            tm.assume_init().tm_gmtoff as i32
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
 }
 
 /// Format a unix timestamp like Go's `log.LstdFlags` ("2006/01/02 15:04:05 ").
-/// Pure integer math (Howard Hinnant's civil-from-days), no chrono/localtime.
-fn go_log_timestamp(secs: u64) -> String {
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
+/// Pure integer math (Howard Hinnant's civil-from-days), no chrono dependency.
+fn format_log_timestamp(secs: i64, offset: i32) -> String {
+    let local = secs + offset as i64;
+    let days = local.div_euclid(86400);
+    let rem = local.rem_euclid(86400) as u64;
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u64; // [0, 146096]
@@ -193,6 +213,14 @@ mod tests {
             let err = parse_level(bad).expect_err("want error");
             assert!(err.contains("invalid log level"), "unexpected error: {err}");
         }
+    }
+
+    #[test]
+    fn log_timestamp_applies_local_utc_offset() {
+        // Go's log.LstdFlags uses local time; 1970-01-01 00:00 UTC in WIB (+7)
+        // is 07:00 the same day, and in EST (-5) is 19:00 the previous day.
+        assert_eq!(format_log_timestamp(0, 7 * 3600), "1970/01/01 07:00:00 ");
+        assert_eq!(format_log_timestamp(0, -5 * 3600), "1969/12/31 19:00:00 ");
     }
 
     #[test]

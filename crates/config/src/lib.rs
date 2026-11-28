@@ -507,9 +507,19 @@ fn check_numeric_ranges(args: &[String]) -> Result<(), String> {
             (a.clone(), None)
         };
         if let (Some(label), Some(v)) = (display(&flag), value) {
-            let ok = v.parse::<i128>().map_or(false, |n| n >= i64::MIN as i128 && n <= i64::MAX as i128);
-            if !ok {
-                return Err(format!("invalid argument \"{v}\" for \"{label}\" flag: must be an integer"));
+            let parsed = v.parse::<i128>();
+            let in_range = parsed.as_ref().map_or(false, |n| *n >= i64::MIN as i128 && *n <= i64::MAX as i128);
+            if !in_range {
+                // pflag's strconv.ParseInt wording, kept byte-for-byte.
+                let digits = v.trim().trim_start_matches(['+', '-']);
+                let reason = if parsed.is_ok() || (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())) {
+                    "value out of range"
+                } else {
+                    "invalid syntax"
+                };
+                return Err(format!(
+                    "invalid argument \"{v}\" for \"{label}\" flag: strconv.ParseInt: parsing \"{v}\": {reason}"
+                ));
             }
             if !a.contains('=') {
                 i += 1;
@@ -597,6 +607,23 @@ pub fn user_config_path() -> Result<PathBuf, String> {
     Ok(base.join(USER_CONFIG_REL_PATH))
 }
 
+/// Render clap's unknown-flag error with pflag's wording (the rest keeps
+/// clap's text until a concrete parity case needs otherwise).
+fn clap_error_text(e: clap::Error) -> String {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    if e.kind() == ErrorKind::UnknownArgument {
+        if let Some(ContextValue::String(arg)) = e.get(ContextKind::InvalidArg) {
+            if let Some(short) = arg.strip_prefix('-').and_then(|s| s.chars().next()) {
+                if !arg.starts_with("--") {
+                    return format!("unknown shorthand flag: '{short}' in {arg}");
+                }
+            }
+            return format!("unknown flag: {arg}");
+        }
+    }
+    e.to_string()
+}
+
 /// `cli_parse` — clap parser bound to the same flags/shorthands as Go's
 /// BindFlags. Returns (changed_flags, args_after_flags).
 fn cli_parse(args: &[String], o: &mut Options) -> Result<(BTreeSet<String>, Vec<String>), String> {
@@ -618,6 +645,8 @@ fn cli_parse(args: &[String], o: &mut Options) -> Result<(BTreeSet<String>, Vec<
         a
     };
     let cmd = Command::new("odm")
+        // pflag lets a flag repeat (last value wins); clap rejects it by default.
+        .args_override_self(true)
         // Strings
         .arg(Arg::new("connections").short('c').long("connections").action(clap::ArgAction::Set).value_parser(clap::value_parser!(i64)).help("Total connection budget"))
         .arg(Arg::new("max-connections").short('m').long("max-connections").action(clap::ArgAction::Set).value_parser(clap::value_parser!(i64)).help("Configurable ceiling for -c/-sf; exceeding it warns"))
@@ -671,7 +700,7 @@ fn cli_parse(args: &[String], o: &mut Options) -> Result<(BTreeSet<String>, Vec<
     let matches = cmd
         .clone()
         .try_get_matches_from(std::iter::once(String::from("odm")).chain(args.iter().cloned()))
-        .map_err(|e| e.to_string())?;
+        .map_err(clap_error_text)?;
 
     // Fill o from matches; record changed flags (clap CommandLine source).
     let mut changed = BTreeSet::new();
@@ -775,7 +804,8 @@ fn cli_parse(args: &[String], o: &mut Options) -> Result<(BTreeSet<String>, Vec<
 /// `cookie_header` reads a Netscape-format cookies.txt and returns a
 /// "Cookie: k=v; k2=v2" header line.
 pub fn cookie_header(path: &str) -> Result<String, String> {
-    let f = std::fs::File::open(path).map_err(|e| format!("load-cookies {}: {}", go_quote(path), io_error_text(&e)))?;
+    let f = std::fs::File::open(path)
+        .map_err(|e| format!("load-cookies {}: open {}: {}", go_quote(path), path, io_error_text(&e)))?;
     let mut pairs: Vec<String> = Vec::new();
     for line in BufReader::new(f).lines() {
         let line = line.map_err(|e| format!("load-cookies {path:?}: {e}"))?;

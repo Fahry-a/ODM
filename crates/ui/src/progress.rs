@@ -340,7 +340,12 @@ impl Renderer {
         let key = format!("{}|{}", stats.completed, stats.total);
         let interval_elapsed = st.last_non_tty_flush.map(|t| now.saturating_duration_since(t) >= self.non_tty_interval).unwrap_or(false);
         let milestone = key != st.last_logged_key;
-        if !final_frame && !interval_elapsed && !milestone {
+        // Before the first snapshot there is nothing to draw; Go's first frame
+        // already carries the probed task. A forced final frame that repeats a
+        // full milestone frame is a duplicate, not extra information.
+        if (view.is_empty() && st.last_logged_key.is_empty())
+            || (!final_frame && !interval_elapsed && !milestone)
+        {
             return;
         }
         let full = final_frame || milestone;
@@ -589,6 +594,20 @@ mod tests {
         let out = output(&buf);
         // The cached task must still render (not vanish to Total: 0/0).
         assert!(out.contains("f.bin") || out.contains("Total: 1/1"), "out: {out}");
+    }
+
+    #[test]
+    fn non_tty_skips_empty_start_frame() {
+        let buf = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let r = Renderer::new_with_writer(buf.clone(), false, false);
+        r.frame(None, None); // empty start: no tasks known yet
+        r.frame(Some(&[view("a", TaskState::Active, 0, 100)]), None);
+        r.frame(Some(&[view("a", TaskState::Completed, 100, 100)]), None);
+        r.frame(None, None); // forced final after the completed milestone
+        let text = output(&buf);
+        assert!(!text.contains("Total: 0/0"), "empty start frame leaked: {text}");
+        // Go prints the completed frame twice (milestone + forced final).
+        assert_eq!(text.matches("---\n").count(), 3, "frame count differs from Go: {text}");
     }
 
     #[test]

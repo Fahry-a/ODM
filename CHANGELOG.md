@@ -5,16 +5,39 @@ All notable changes to ODM (Oryn Download Manager) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.0] - 2026-11-28
 
 ### Changed
 
-- **Rust cutover** — the Go implementation (`cmd/`, `internal/`) has been
-  replaced by the pure-Rust port under `crates/`. One Cargo workspace at the
-  repository root builds all crates; `cargo build --release -p odm` produces
-  the binary. CI, version checks and the six-target release cross-compile
-  (via `cargo-zigbuild`) now use Rust only. Behavior, flags, `.odm` format,
-  RPC surface and exit codes are preserved (311/311 app replay cases).
+- **Rust cutover** — the CLI, config, probe, UI, scheduler, RPC and rate
+  limiting now live in the `crates/` Cargo workspace. One-shot downloads run
+  on the embedded Go core (`gocore/`, static c-archive); `ODM_RUST_ENGINE=1`
+  keeps the Rust engine as an A/B fallback and `--rpc` stays on Rust. Flags,
+  `.odm` format, RPC surface, session log and exit codes stay compatible with
+  the Go 1.9.2 reference.
+- **Build** — `crates/app/build.rs` builds the gitignored `gocore/libodmgo*.a`
+  on demand, so a fresh checkout links without a manual Go step. musl builds
+  link through `scripts/musl-link.sh`, which applies the mandatory Go
+  constructor patch; release cross-builds do the same explicitly.
+
+### Fixed
+
+- Help text, flag-repeat handling and pflag-compatible error wording
+  (unknown flag, `strconv.ParseInt`, `--load-cookies`).
+- Engine log callback: INFO/WARN/ERROR lines from the Go core are no longer
+  dropped, including the checksum-failure reason.
+- Log timestamps use the local timezone like Go's standard logger.
+- Probe connection-refused text matches Go (`dial tcp host:port: connect:
+  connection refused`).
+- `odm.getVersion` advertises `TLS` unconditionally like Go.
+- Session log records match Go's field set/order and include the initial
+  `downloading` event; the empty start progress frame is suppressed.
+
+### Verified
+
+- Full workspace test suite and clippy pass; six-target cross-build path and
+  musl smoke test verified; WebSocket events, HTTP proxy, resume, checksum,
+  mirror, Metalink and RPC compared against the Go reference.
 
 ## [1.9.2] - 2026-10-17
 
@@ -992,7 +1015,7 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
-[Unreleased]: https://github.com/Fahry-a/ODM/compare/v1.9.2...HEAD
+[1.10.0]: https://github.com/Fahry-a/ODM/compare/v1.9.2...v1.10.0
 [1.9.2]: https://github.com/Fahry-a/ODM/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/Fahry-a/ODM/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/Fahry-a/ODM/compare/v1.8.1...v1.9.0

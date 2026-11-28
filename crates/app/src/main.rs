@@ -131,7 +131,7 @@ async fn run_inner(argv: &[String]) -> Result<i32, AppErr> {
         }
         exec.checksum.clear();
     }
-    let mgr = Arc::new(Manager::new_manager(exec, logf).map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e })?);
+    let mgr = Arc::new(Manager::new_manager(exec, logf.clone()).map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e })?);
 
     // Probe every URL up front (8 at a time) so the Balancer can reallocate
     // for files that don't support ranges, and the prompt knows their sizes.
@@ -212,7 +212,7 @@ async fn run_inner(argv: &[String]) -> Result<i32, AppErr> {
     // so both engines show the same plan prompt; ODM_RUST_ENGINE=1 keeps the
     // Rust engine as an A/B fallback and the RPC daemon always stays on Rust.
     if !o.rpc && std::env::var_os("ODM_RUST_ENGINE").is_none() {
-        return Ok(go_engine::run(&o).await);
+        return Ok(go_engine::run(&o, logf.clone()).await);
     }
 
     // Progress renderer + snapshot channels. The scheduler's ProgressCB pushes
@@ -307,7 +307,7 @@ async fn run_rpc(o: &config::Options, logf: Option<download::LogFn>) -> Result<i
     // The -o override only makes sense for one-shot: every addUri task would
     // otherwise write to the SAME file.
     exec.out_file.clear();
-    let mgr = Arc::new(Manager::new_manager(exec, logf).map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e })?);
+    let mgr = Arc::new(Manager::new_manager(exec, logf.clone()).map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e })?);
     let slots = o.connections.max(1) as i32;
     let bc = rpc::Broadcaster::new();
     let throttler = ProgressThrottler::new(bc.clone());
@@ -349,7 +349,6 @@ async fn run_rpc(o: &config::Options, logf: Option<download::LogFn>) -> Result<i
     let app: Router = srv.routes();
     let signalled = ctx.clone();
     let tls = !o.rpc_tls_cert.is_empty() && !o.rpc_tls_key.is_empty();
-    srv.set_tls(tls);
     if tls {
         // axum-server uses rustls' process-default provider; install one so
         // ServerConfig::builder() cannot panic with tls-rustls-no-provider.
@@ -631,77 +630,81 @@ fn signal_ctx() -> Ctx {
 }
 
 fn print_usage() {
-    print!(
-        "odm {} — Oryn Download Manager (Connection Balancer + pacman bar)\n\
-\n\
-Usage:\n\
-  odm [OPTIONS] <URL> [URL ...]        # space-separated URLs (recommended)\n\
-  odm [OPTIONS] \"URL1,URL2,...\"        # legacy comma form (http://-prefixed)\n\
-  odm [OPTIONS] -i <file-list.txt>     # URLs from a file, one per line\n\
-  odm --rpc [OPTIONS]                  # JSON-RPC + WebSocket daemon\n\
-  odm update                           # self-update to the latest version\n\
-\n\
-Connection budget (the Balancer auto-splits -c across files):\n\
-  -c, --connections  total parallel-connection budget        (default 5)\n\
-  -m, --max-connections  ceiling; exceeding it just warns     (default 32)\n\
-      --split-file/-sf  connections per file in batch mode   (unset = 1 per file)\n\
-\n\
-Inputs / output:\n\
-  -o, --output NAME   output filename (single-file only)\n\
-  -d, --dir PATH       destination directory                  (default cwd)\n\
-  -i, --input-file FILE  read URL list from FILE (.meta4/.metalink supported)\n\
-\n\
-Behavior:\n\
-  -y, --yes           skip the confirmation prompt\n\
-      --dry-run       probe URLs + show the plan, download nothing\n\
-  -q, --quiet         no progress bar (cron/scripts); also skips the prompt\n\
-  -x, --continue      resume an incomplete file via the .odm control file (default on)\n\
-      --auto-rename   existing destination → name.<N>.ext\n\
-      --skip-existing  skip files already present with a matching size\n\
-      --session-log FILE  append JSONL progress/summary events (for wrappers/GUIs)\n\
-  -s, --chunk-size SIZE   work-stealing chunk size, e.g. 4M   (default 4M)\n\
-\n\
-Engine profiles (--profile aria2c|both|smart):\n\
-      --profile NAME  engine profile: odm (default) | aria2c | both | smart\n\
-      --split N       aria2c: number of segments per file                (default 5)\n\
-      --min-split-size SIZE   aria2c: don't split ranges < 2x this size  (default 20M)\n\
-      --max-connection-per-server N   aria2c: cap per server in h1       (default 1)\n\
-\n\
-HTTP / network:\n\
-  -n, --max-redirect N   redirect hops to follow          (default 5)\n\
-  -r, --retry N          retries per segment on failure    (default 3)\n\
-  -w, --retry-wait SEC   delay between retries            (default 2)\n\
-  -t, --timeout SEC      dial+headers timeout             (default 30)\n\
-  -u, --user-agent UA    custom User-Agent               (default {})\n\
-  -H, --header K:V       add a custom header (repeatable)\n\
-      --load-cookies FILE  load Netscape cookies.txt as a Cookie header\n\
-      --referer URL      set the Referer header\n\
-  -p, --proxy URL        http/https/socks5 proxy\n\
-      --check-cert BOOL  verify TLS                       (default true)\n\
-      --checksum algo:hash  verify md5/sha1/sha256\n\
-      --checksum-url URL  fetch the checksum from a sidecar URL\n\
-      --mirror URL       alternate URL serving the SAME file; chunks rotate\n\
-  -l, --limit-rate RATE   global speed limit, e.g. 5M/500K\n\
-      --limit-rate-per-task RATE  per-task speed cap, e.g. 2M\n\
-\n\
-Config / logging / RPC:\n\
-      --config PATH     config file path               (default /etc/odm/config.conf)\n\
-  -L, --log FILE        mirror logs to FILE\n\
-      --log-level LEVEL debug|info|warn|error          (default info)\n\
-      --rpc             run as the RPC server (daemon)\n\
-      --rpc-listen-port PORT                           (default 6900)\n\
-      --rpc-listen-all  bind 0.0.0.0 (default 127.0.0.1)\n\
-      --rpc-secret TOKEN  auth for RPC ('token:<secret>' param or ?secret=)\n\
-      --rpc-tls-cert FILE  TLS certificate (PEM); enables HTTPS\n\
-      --rpc-tls-key FILE   TLS private key (PEM); requires --rpc-tls-cert\n\
-  -V, --version         print version and exit\n\
-  -h, --help            show this help\n\
-\n\
-Config priority: CLI > ~/.config/odm/config.conf > /etc/odm/config.conf > defaults.\n\
-Exit codes: 0 ok | 1 bad args | 2 network | 3 partial | 4 cancelled.\n",
-        version::VERSION,
-        version::VERSION,
-    );
+    // A raw literal keeps the Go help table byte-for-byte: Rust's `\`-at-EOL
+    // string continuation would strip every line's leading two spaces.
+    const USAGE: &str = r#"odm {} — Oryn Download Manager (Connection Balancer + pacman bar)
+
+Usage:
+  odm [OPTIONS] <URL> [URL ...]        # space-separated URLs (recommended)
+  odm [OPTIONS] "URL1,URL2,..."        # legacy comma form (http://-prefixed)
+  odm [OPTIONS] -i <file-list.txt>     # URLs from a file, one per line
+  odm --rpc [OPTIONS]                  # JSON-RPC + WebSocket daemon
+  odm update                           # self-update to the latest version
+
+Connection budget (the Balancer auto-splits -c across files):
+  -c, --connections  total parallel-connection budget        (default 5)
+  -m, --max-connections  ceiling; exceeding it just warns     (default 32)
+      --split-file/-sf  connections per file in batch mode   (unset = 1 per file)
+
+Inputs / output:
+  -o, --output NAME   output filename (single-file only)
+  -d, --dir PATH       destination directory                  (default cwd)
+  -i, --input-file FILE  read URL list from FILE (.meta4/.metalink supported)
+
+Behavior:
+  -y, --yes           skip the confirmation prompt
+      --dry-run       probe URLs + show the plan, download nothing
+  -q, --quiet         no progress bar (cron/scripts); also skips the prompt
+  -x, --continue      resume an incomplete file via the .odm control file (default on)
+      --auto-rename   existing destination → name.<N>.ext (mutually exclusive with --skip-existing)
+      --skip-existing  skip files already present with a matching size
+      --session-log FILE  append JSONL progress/summary events (for wrappers/GUIs)
+  -s, --chunk-size SIZE   work-stealing chunk size, e.g. 4M   (default 4M)
+
+Engine profiles (--profile aria2c|both|smart):
+      --profile NAME  engine profile: odm (default) | aria2c | both | smart
+      --split N       aria2c: number of segments per file                (default 5)
+      --min-split-size SIZE   aria2c: don't split ranges < 2x this size  (default 20M)
+      --max-connection-per-server N   aria2c: cap per server in h1       (default 1)
+
+HTTP / network:
+  -n, --max-redirect N   redirect hops to follow          (default 5)
+  -r, --retry N          retries per segment on failure    (default 3)
+  -w, --retry-wait SEC   delay between retries            (default 2)
+  -t, --timeout SEC      dial+headers timeout             (default 30)
+  -u, --user-agent UA    custom User-Agent               (default {})
+  -H, --header K:V       add a custom header (repeatable)
+      --load-cookies FILE  load Netscape cookies.txt as a Cookie header
+      --referer URL      set the Referer header
+  -p, --proxy URL        http/https/socks5 proxy
+      --check-cert BOOL  verify TLS                       (default true)
+      --checksum algo:hash  verify md5/sha1/sha256
+      --checksum-url URL  fetch the checksum from a sidecar URL (sha256sum-style file)
+      --mirror URL       alternate URL serving the SAME file; chunks rotate (repeatable)
+  -l, --limit-rate RATE   global speed limit, e.g. 5M/500K
+      --limit-rate-per-task RATE  per-task speed cap (stacked on global), e.g. 2M
+
+Config / logging / RPC:
+      --config PATH     config file path               (default /etc/odm/config.conf)
+  -L, --log FILE        mirror logs to FILE
+      --log-level LEVEL debug|info|warn|error          (default info)
+      --rpc             run as the RPC server (daemon)
+      --rpc-listen-port PORT                           (default 6900)
+      --rpc-listen-all  bind 0.0.0.0 (default 127.0.0.1)
+      --rpc-secret TOKEN  auth for RPC ('token:<secret>' param or ?secret=)
+      --rpc-tls-cert FILE  TLS certificate (PEM); enables HTTPS
+      --rpc-tls-key FILE   TLS private key (PEM); requires --rpc-tls-cert
+  -V, --version         print version and exit
+  -h, --help            show this help
+
+Config priority: CLI > ~/.config/odm/config.conf > /etc/odm/config.conf > defaults.
+URLs with a literal comma must use space-separated form or -i. For batches >10
+URLs, -i is recommended.
+
+Exit codes: 0 ok | 1 bad args | 2 network (all retries exhausted) | 3 partial |
+            4 cancelled.
+"#;
+    print!("{}", USAGE.replace("{}", version::VERSION));
     if let Some(hint) = update::hint(version::VERSION) {
         println!("\n  {hint}");
     }

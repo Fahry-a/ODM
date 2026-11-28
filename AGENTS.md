@@ -14,13 +14,15 @@ CI (`.github/workflows/ci.yml`) runs `cargo build --workspace --locked`,
 `cargo clippy --workspace --all-targets --locked`, the version-consistency
 check, and `cargo test --workspace --locked` on every push/PR to `main`.
 
-Static musl build (like the release artifacts):
+Static musl build (like the release artifacts). Requires Go (cgo) and musl-gcc; `.cargo/config.toml` routes linking through `scripts/musl-link.sh`, which applies the mandatory Go constructor patch — an unpatched static binary segfaults on its first Go call:
 
 ```bash
 rustup target add x86_64-unknown-linux-musl
 CC_x86_64_unknown_linux_musl=musl-gcc \
   cargo build --release --locked --target x86_64-unknown-linux-musl -p odm
 ```
+
+The gitignored `gocore/libodmgo*.a` archives are built on demand by `crates/app/build.rs` (script: `scripts/build-go-core.sh`). For all six targets use `scripts/build-static.sh <triple>`; release cross-builds run the same patch step in `.github/scripts/cross-compile.sh`.
 
 `build/` is gitignored — cross-compiled binaries go there.
 

@@ -28,6 +28,14 @@ jobs:
         with:
           components: clippy
 
+      # build.rs compiles the embedded Go core on a fresh checkout; the
+      # archives are gitignored.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gocore/go.mod
+          cache-dependency-path: gocore/go.sum
+
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 

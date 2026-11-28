@@ -24,11 +24,28 @@ TARGETS=(
 
 mkdir -p build
 
+# The Go core archives are gitignored; build them for every release target
+# before Rust links against them (build.rs would do the same per target).
+for ENTRY in "${TARGETS[@]}"; do
+  IFS='|' read -r TRIPLE GOOS GOARCH <<<"$ENTRY"
+  bash scripts/build-go-core.sh "$TRIPLE"
+done
+
 for ENTRY in "${TARGETS[@]}"; do
   IFS='|' read -r TRIPLE GOOS GOARCH <<<"$ENTRY"
   TARBALL="build/odm_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
   echo "Building $TARBALL ($TRIPLE) ..."
+  # musl invokes Go c-archive constructors without argc/argv; the post-link
+  # patch is mandatory for every static Linux release binary.
+  if [ "$GOOS" = "linux" ]; then
+    export RUSTFLAGS="-C relocation-model=static -C link-arg=-no-pie"
+  else
+    unset RUSTFLAGS
+  fi
   cargo zigbuild --release --locked --target "$TRIPLE" -p odm
+  if [ "$GOOS" = "linux" ]; then
+    python3 scripts/patch_go_ctor.py "target/${TRIPLE}/release/odm"
+  fi
   STAGE="$(mktemp -d)"
   cp "target/${TRIPLE}/release/odm" "$STAGE/odm"
   cp LICENSE "$STAGE/LICENSE"

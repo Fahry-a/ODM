@@ -132,16 +132,13 @@ async fn get_version_and_unknown_method_over_http() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn get_version_advertises_tls_only_when_enabled() {
+async fn get_version_advertises_tls_like_go() {
+    // Go advertises TLS unconditionally (the capability is compiled in).
     let (srv, _ctx) = start_server("");
-    let (base, _h) = spawn_http(srv.clone()).await;
+    let (base, _h) = spawn_http(srv).await;
     let r = rpc(&base, "odm.getVersion", json!([]), 1).await;
     let features = r["result"]["enabledFeatures"].as_array().unwrap();
-    assert!(!features.iter().any(|f| f == "TLS"), "TLS advertised while serving plain HTTP: {features:?}");
-    srv.set_tls(true);
-    let r = rpc(&base, "odm.getVersion", json!([]), 2).await;
-    let features = r["result"]["enabledFeatures"].as_array().unwrap();
-    assert!(features.iter().any(|f| f == "TLS"), "TLS missing after enabling: {features:?}");
+    assert!(features.iter().any(|f| f == "TLS"), "TLS missing from feature list: {features:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

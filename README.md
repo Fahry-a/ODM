@@ -1,4 +1,5 @@
 # ODM — Oryn Download Manager
+<sub><sup>Just a random project I built out of boredom.</sup></sub>
 
 [![CI](https://github.com/Fahry-a/ODM/actions/workflows/ci.yml/badge.svg)](https://github.com/Fahry-a/ODM/actions/workflows/ci.yml)
 [![Release](https://github.com/Fahry-a/ODM/actions/workflows/release.yml/badge.svg)](https://github.com/Fahry-a/ODM/actions/workflows/release.yml)
@@ -70,7 +71,7 @@ The upload action sends the local SHA-256 to Foenui PM and verifies the checksum
 
 ### From source
 
-Requires a recent **Rust stable** toolchain (edition 2021).
+Requires a recent **Rust stable** toolchain (edition 2021) and a **Go toolchain** (cgo). The Go download core is a static c-archive built automatically by `crates/app/build.rs` when its gitignored `gocore/libodmgo*.a` is missing.
 
 ```bash
 git clone https://github.com/Fahry-a/odm.git && cd odm
@@ -78,13 +79,16 @@ cargo build --release --locked -p odm
 sudo install -Dm755 target/release/odm /usr/local/bin/odm
 ```
 
-For the fully static musl binary (requires `musl-gcc` / `musl-tools`):
+For the fully static musl binary (requires `musl-gcc` / `musl-tools`). `.cargo/config.toml` links through `scripts/musl-link.sh`, which applies the mandatory Go constructor patch after linking — do not skip it, or the binary segfaults on its first Go call:
 
 ```bash
 rustup target add x86_64-unknown-linux-musl
 CC_x86_64_unknown_linux_musl=musl-gcc \
   cargo build --release --locked --target x86_64-unknown-linux-musl -p odm
+file target/x86_64-unknown-linux-musl/release/odm   # statically linked, not PIE
 ```
+
+The same steps for all six release targets are automated by `scripts/build-static.sh <triple>`; `bash -n` and the CI workflow verify this path.
 
 ### Systemd daemon
 

@@ -61,6 +61,7 @@ __asm__(".globl __atomic_is_lock_free\n.set __atomic_is_lock_free, odm_atomic_is
  * static would give the setter and the emitter different copies.
  */
 static odm_progress_cb odm_progress_cb_store;
+static odm_log_cb odm_log_cb_store;
 
 void odm_shim_set_progress(odm_progress_cb cb) {
     odm_progress_cb_store = cb;
@@ -70,6 +71,17 @@ void odm_shim_progress(const char *event_json) {
     odm_progress_cb cb = odm_progress_cb_store;
     if (cb != 0 && event_json != 0) {
         cb(event_json);
+    }
+}
+
+void odm_shim_set_log(odm_log_cb cb) {
+    odm_log_cb_store = cb;
+}
+
+void odm_shim_log(const char *level, const char *message) {
+    odm_log_cb cb = odm_log_cb_store;
+    if (cb != 0 && level != 0 && message != 0) {
+        cb(level, message);
     }
 }
 

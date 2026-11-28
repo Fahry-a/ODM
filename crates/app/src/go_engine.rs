@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 extern "C" {
     fn odm_go_run(config_json: *const c_char, result_buf: *mut c_char, result_len: c_int) -> c_int;
     fn odm_go_set_progress_callback(cb: extern "C" fn(*const c_char));
+    fn odm_go_set_log_callback(cb: extern "C" fn(*const c_char, *const c_char));
     fn odm_go_cancel();
 }
 
@@ -32,6 +33,8 @@ static SESSION: Mutex<Option<File>> = Mutex::new(None);
 type ViewMap = HashMap<String, download::ProgressView>;
 static LIVE_TASKS: LazyLock<Mutex<ViewMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static LIVE_TX: Mutex<Option<mpsc::Sender<Vec<download::ProgressView>>>> = Mutex::new(None);
+/// Engine log callback has no userdata, so the CLI logger is shared here.
+static ENGINE_LOG: Mutex<Option<download::LogFn>> = Mutex::new(None);
 
 /// Serialize the full CLI/config state into the bridge's config JSON.
 /// Pure function so it can be unit-tested without Go linkage.
@@ -134,28 +137,43 @@ extern "C" fn on_progress(event_json: *const c_char) {
         return;
     }
     let raw = unsafe { CStr::from_ptr(event_json) }.to_string_lossy();
-
-    if let Ok(mut g) = SESSION.lock() {
-        if let Some(f) = g.as_mut() {
-            let _ = writeln!(f, "{raw}");
-        }
-    }
-
     let v: Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => return,
     };
-    let Some(view) = progress_view(&v) else {
-        return;
-    };
 
-    let snapshot = {
+    let (is_new, snapshot) = {
         let Ok(mut tasks) = LIVE_TASKS.lock() else {
             return;
         };
+        let Some(view) = progress_view(&v) else {
+            return;
+        };
+        let is_new = !tasks.contains_key(&view.id);
         tasks.insert(view.id.clone(), view);
-        tasks.values().cloned().collect::<Vec<_>>()
+        (is_new, tasks.values().cloned().collect::<Vec<_>>())
     };
+
+    if let Ok(mut g) = SESSION.lock() {
+        if let Some(f) = g.as_mut() {
+            // The Go CLI logs an initial "downloading" view from its throttled
+            // progress callback; the bridge only emits the final one.
+            let state = v["state"].as_str().unwrap_or("");
+            // The bridge may only send the terminal event; Go's progress
+            // callback still recorded the initial "downloading" view.
+            let first = if is_new { "downloading" } else { "" };
+            if !first.is_empty() {
+                let _ = writeln!(f, "{}", session_record(&v, first));
+            }
+            let canonical_state = if state == "active" || state == "downloading" {
+                "downloading"
+            } else {
+                state
+            };
+            let _ = writeln!(f, "{}", session_record(&v, canonical_state));
+        }
+    }
+
     let Ok(tx) = LIVE_TX.lock() else { return };
     if let Some(tx) = tx.as_ref() {
         let _ = tx.try_send(snapshot);
@@ -236,7 +254,8 @@ async fn dry_run(o: &Options) -> i32 {
     0
 }
 
-pub async fn run(o: &Options) -> i32 {
+pub async fn run(o: &Options, logf: Option<download::LogFn>) -> i32 {
+    *ENGINE_LOG.lock().unwrap() = logf;
     if !o.rpc && o.urls.is_empty() {
         eprintln!("odm: no URLs provided (pass URLs as args, -i <file>, or use --rpc)");
         return download::exit_code::EXIT_GENERAL;
@@ -291,6 +310,7 @@ pub async fn run(o: &Options) -> i32 {
     let mut buf = vec![0u8; RESULT_CAP];
     unsafe {
         odm_go_set_progress_callback(on_progress);
+        odm_go_set_log_callback(on_log);
         odm_go_run(
             cfg.as_ptr(),
             buf.as_mut_ptr() as *mut c_char,
@@ -355,10 +375,67 @@ pub async fn run(o: &Options) -> i32 {
     }
 }
 
+/// Mirror the Go CLI's session-log record: fixed key set, no `conns`, speed
+/// as an integer, keys in Go's sorted map order.
+fn session_record(v: &Value, state: &str) -> String {
+    json!({
+        "bytes": v["bytes"].as_i64().unwrap_or(0),
+        "errors": v["errors"].as_i64().unwrap_or(0),
+        "event": "progress",
+        "file": v["file"].as_str().unwrap_or(""),
+        "id": v["id"].as_str().unwrap_or(""),
+        "retries": v["retries"].as_i64().unwrap_or(0),
+        "speed": v["speed"].as_f64().unwrap_or(0.0) as i64,
+        "state": state,
+        "total": v["total"].as_i64().unwrap_or(0),
+        "url": v["url"].as_str().unwrap_or(""),
+    })
+    .to_string()
+}
+
+/// Go's engine emits info/warn/error; the Rust logger uses the same words.
+fn log_level(level: &str) -> &'static str {
+    match level {
+        "warn" => "warn",
+        "error" => "error",
+        _ => "info",
+    }
+}
+
+extern "C" fn on_log(level: *const c_char, message: *const c_char) {
+    if level.is_null() || message.is_null() {
+        return;
+    }
+    let level = unsafe { CStr::from_ptr(level) }.to_string_lossy();
+    let message = unsafe { CStr::from_ptr(message) }.to_string_lossy();
+    if let Ok(guard) = ENGINE_LOG.lock() {
+        if let Some(logf) = guard.as_ref() {
+            logf(log_level(&level), format!("{message}"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use config::default_ptr;
+
+    #[test]
+    fn session_record_matches_go_field_set_and_order() {
+        let v = json!({"id":"odm-001","url":"http://127.0.0.1:18765/file.bin","file":"x.bin","state":"completed","bytes":1048576,"total":1048576,"speed":0.0,"conns":5,"errors":0,"retries":0});
+        assert_eq!(
+            session_record(&v, "downloading"),
+            r#"{"bytes":1048576,"errors":0,"event":"progress","file":"x.bin","id":"odm-001","retries":0,"speed":0,"state":"downloading","total":1048576,"url":"http://127.0.0.1:18765/file.bin"}"#
+        );
+    }
+
+    #[test]
+    fn engine_log_levels_map_to_rust_logger() {
+        assert_eq!(log_level("info"), "info");
+        assert_eq!(log_level("warn"), "warn");
+        assert_eq!(log_level("error"), "error");
+        assert_eq!(log_level("debug"), "info");
+    }
 
     #[test]
     fn config_json_uses_fixed_keys_and_values() {
