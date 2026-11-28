@@ -16,4 +16,4 @@ bytes = "1"
 
 [dev-dependencies]
 tokio-tungstenite = "0.29"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }

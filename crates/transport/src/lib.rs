@@ -5,14 +5,14 @@
 //! requests on top of the `Client` returned by `new`.
 //!
 //! Porting notes:
-//! - Go `net/http` → reqwest 0.12 (async).
+//! - Go `net/http` → reqwest 0.13 (async).
 //! - Go `time.Duration` → std::time::Duration.
 //! - `Client.HTTP` (public in Go) → `Client.client`.
 //! - `NewClient` → `new`.
 //! - Redirect policy: Go errors when `len(via) > max_redirect`; we count
 //!   redirects with a shared counter (same behavior).
 //! - `ClientConfig.Timeout` → reqwest `connect_timeout`; Go additionally had
-//!   TLSHandshakeTimeout and ResponseHeaderTimeout — reqwest 0.12 lacks the
+//!   TLSHandshakeTimeout and ResponseHeaderTimeout — reqwest 0.13 lacks the
 //!   knobs.
 //! - `ClientConfig.HTTP2` (Go: ForceAttemptHTTP2) → reqwest: there is no
 //!   stable "disable h2 advertisement" knob; rust advertises h2 per server.
@@ -435,7 +435,7 @@ fn merge_size(dst: &mut ProbeResult, src: &ProbeResult) {
 }
 
 /// `skip_body` drains the response body (Go: io.Copy to Discard, limit 1024,
-/// then Close). reqwest 0.12's Response has no `Read` impl; we read the
+/// then Close). reqwest 0.13's Response has no `Read` impl; we read the
 /// whole body instead — probe/error responses are small, so the difference
 /// is invisible.
 async fn skip_body(r: Response) {
