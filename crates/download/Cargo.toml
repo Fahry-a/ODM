@@ -20,5 +20,5 @@ storage = { path = "../storage" }
 transport = { path = "../transport" }
 ratelimit = { path = "../ratelimit" }
 version = { path = "../version" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks", "stream", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "socks", "stream", "http2"] }
 futures-util = "0.3"
