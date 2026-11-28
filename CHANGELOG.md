@@ -5,6 +5,15 @@ All notable changes to ODM (Oryn Download Manager) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-11-28
+
+### Changed
+
+- **Foenui PM uploads** now use the `foenui/foenui-pm-action` action instead of the old `foenui/foenui-pm` repository.
+- **Dependabot** checks Go modules in `gocore/` and Cargo at the workspace root; previously the Go entry pointed at the repository root and Rust dependencies were not tracked.
+- **Dependency updates** — reqwest 0.13 (`rustls-tls` → `rustls`), axum-server 0.9, quick-xml 0.42, sha1 0.11, md5 0.8, tokio-tungstenite 0.29, clap 4.6.10 and golang.org/x/net 0.63.
+- **Release smoke matrix** uses the current macOS runner labels.
+
 ## [1.10.0] - 2026-11-28
 
 ### Changed
@@ -1017,6 +1026,7 @@ with regression tests):
 - Per-task speed limits (only global `--limit-rate` today).
 - BitTorrent / magnet links.
 
+[1.10.1]: https://github.com/Fahry-a/ODM/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/Fahry-a/ODM/compare/v1.9.2...v1.10.0
 [1.9.2]: https://github.com/Fahry-a/ODM/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/Fahry-a/ODM/compare/v1.9.0...v1.9.1
