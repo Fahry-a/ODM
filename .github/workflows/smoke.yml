@@ -1,0 +1,98 @@
+name: Release smoke test
+
+# Run every shipped artifact on a runner that matches its architecture.
+# This is the only way to actually execute the darwin binaries; Linux CI
+# can only check their Mach-O headers and symbols.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to smoke-test (e.g. v1.10.0)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: ${{ matrix.asset }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            asset: darwin_amd64
+            qemu: ""
+          - os: macos-latest
+            asset: darwin_arm64
+            qemu: ""
+          - os: ubuntu-24.04-arm
+            asset: linux_arm64
+            qemu: ""
+          - os: ubuntu-latest
+            asset: linux_amd64
+            qemu: ""
+          # 32-bit Linux has no hosted runner; qemu-user-static emulates it.
+          - os: ubuntu-latest
+            asset: linux_386
+            qemu: qemu-i386
+          - os: ubuntu-latest
+            asset: linux_arm
+            qemu: qemu-arm
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then tag="${{ github.event.release.tag_name }}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install qemu for 32-bit targets
+        if: matrix.qemu != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+
+      - name: Download artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "${{ steps.tag.outputs.tag }}" --pattern "odm_*_${{ matrix.asset }}.tar.gz" --dir .
+
+      - name: Unpack
+        run: |
+          tar xzf odm_*_${{ matrix.asset }}.tar.gz
+          chmod +x odm
+          xattr -d com.apple.quarantine odm 2>/dev/null || true
+
+      - name: Version and help
+        env:
+          QEMU: ${{ matrix.qemu }}
+        run: |
+          if [ -n "$QEMU" ]; then
+            $QEMU ./odm --version
+            $QEMU ./odm --help | head -3
+          else
+            ./odm --version
+            ./odm --help | head -3
+          fi
+
+      # Native runners only: exercise probe, arg parsing and a real download.
+      - name: Local download
+        if: matrix.qemu == ''
+        shell: bash
+        run: |
+          printf 'hello odm smoke\n' > fixture.bin
+          python3 -m http.server 18765 --bind 127.0.0.1 >/dev/null 2>&1 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          sleep 2
+          ./odm -y -q -o got.bin http://127.0.0.1:18765/fixture.bin
+          cmp fixture.bin got.bin

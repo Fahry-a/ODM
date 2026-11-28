@@ -1,0 +1,10 @@
+[package]
+name = "scheduler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+download = { path = "../download" }
+ratelimit = { path = "../ratelimit" }
+transport = { path = "../transport" }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }

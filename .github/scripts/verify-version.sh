@@ -7,12 +7,12 @@
 set -euo pipefail
 
 EXPECTED="$1"
-VERSION_GO=$(grep -oP 'const Version = "odm/\K[^"]+' internal/version/version.go)
+VERSION_RUST=$(grep -oP 'pub const VERSION: &str = "odm/\K[^"]+' crates/version/lib.rs)
 PKGBUILD_VER=$(grep -oP '^pkgver=\K.*' packaging/PKGBUILD)
 
 FAIL=0
-if [ "$EXPECTED" != "$VERSION_GO" ]; then
-  echo "::error::Version mismatch: expected=$EXPECTED version.go=$VERSION_GO"
+if [ "$EXPECTED" != "$VERSION_RUST" ]; then
+  echo "::error::Version mismatch: expected=$EXPECTED version.rs=$VERSION_RUST"
   FAIL=1
 fi
 if [ "$EXPECTED" != "$PKGBUILD_VER" ]; then
@@ -20,7 +20,7 @@ if [ "$EXPECTED" != "$PKGBUILD_VER" ]; then
   FAIL=1
 fi
 if [ "$FAIL" -eq 1 ]; then
-  echo "::error::Bump both internal/version/version.go and packaging/PKGBUILD together."
+  echo "::error::Bump both crates/version/lib.rs and packaging/PKGBUILD together."
   exit 1
 fi
 

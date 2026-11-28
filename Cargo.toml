@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/config",
+    "crates/download",
+    "crates/logging",
+    "crates/ratelimit",
+    "crates/rpc",
+    "crates/scheduler",
+    "crates/storage",
+    "crates/transport",
+    "crates/ui",
+    "crates/update",
+    "crates/version",
+]
+
+[workspace.package]
+edition = "2021"

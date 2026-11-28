@@ -1,0 +1,14 @@
+/libodmgo.a
+/libodmgo.h
+/libodmgo_musl.a
+/libodmgo_musl.h
+/libodmgo_aarch64.a
+/libodmgo_aarch64.h
+/libodmgo_armv7.a
+/libodmgo_armv7.h
+/libodmgo_i686.a
+/libodmgo_i686.h
+/libodmgo_darwin_arm64.a
+/libodmgo_darwin_arm64.h
+/libodmgo_darwin_amd64.a
+/libodmgo_darwin_amd64.h

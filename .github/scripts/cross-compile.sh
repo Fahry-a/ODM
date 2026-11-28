@@ -1,30 +1,55 @@
 #!/usr/bin/env bash
-# Cross-compile ODM for the release targets into build/, packaged as
+# Cross-compile ODM (Rust) for the release targets into build/, packaged as
 # odm_<version>_<os>_<arch>.tar.gz (binary "odm" + LICENSE inside).
+#
+# Uses cargo-zigbuild so one toolchain can target musl Linux and macOS; the
+# macOS targets need the SDK, which the release workflow supplies via the
+# ghcr.io/rust-cross/cargo-zigbuild image.
 #
 # Usage: cross-compile.sh <version>
 #   <version>  the version being released, e.g. "1.5.2"
 set -euo pipefail
 
 VERSION="$1"
-LDFLAGS="-s -w -buildid="
-export CGO_ENABLED=0
-export GOFLAGS="-trimpath -mod=readonly"
-export GOTOOLCHAIN=local
 
-TARGETS="linux/386 linux/amd64 linux/arm linux/arm64 darwin/amd64 darwin/arm64"
+# rust target triple | artifact os | artifact arch
+TARGETS=(
+  "i686-unknown-linux-musl|linux|386"
+  "x86_64-unknown-linux-musl|linux|amd64"
+  "armv7-unknown-linux-musleabihf|linux|arm"
+  "aarch64-unknown-linux-musl|linux|arm64"
+  "x86_64-apple-darwin|darwin|amd64"
+  "aarch64-apple-darwin|darwin|arm64"
+)
 
 mkdir -p build
 
-for TARGET in $TARGETS; do
-  GOOS="${TARGET%/*}"
-  GOARCH="${TARGET#*/}"
+# The Go core archives are gitignored; build them for every release target
+# before Rust links against them (build.rs would do the same per target).
+for ENTRY in "${TARGETS[@]}"; do
+  IFS='|' read -r TRIPLE GOOS GOARCH <<<"$ENTRY"
+  bash scripts/build-go-core.sh "$TRIPLE"
+done
+
+for ENTRY in "${TARGETS[@]}"; do
+  IFS='|' read -r TRIPLE GOOS GOARCH <<<"$ENTRY"
   TARBALL="build/odm_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
-  echo "Building $TARBALL ..."
+  echo "Building $TARBALL ($TRIPLE) ..."
+  # musl invokes Go c-archive constructors without argc/argv; the post-link
+  # patch is mandatory for every static Linux release binary.
+  if [ "$GOOS" = "linux" ]; then
+    # strip=none keeps the odm_go_ctor_* symbols the patcher rewrites.
+    export RUSTFLAGS="-C relocation-model=static -C link-arg=-no-pie -C strip=none"
+  else
+    unset RUSTFLAGS
+  fi
+  cargo zigbuild --release --locked --target "$TRIPLE" -p odm
+  if [ "$GOOS" = "linux" ]; then
+    python3 scripts/patch_go_ctor.py "target/${TRIPLE}/release/odm"
+  fi
   STAGE="$(mktemp -d)"
-  GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags="$LDFLAGS" -o "$STAGE/odm" ./cmd/odm
+  cp "target/${TRIPLE}/release/odm" "$STAGE/odm"
   cp LICENSE "$STAGE/LICENSE"
-  # Binary keeps its exec bit; files are owned by the invoking user.
   tar -czf "$TARBALL" -C "$STAGE" odm LICENSE
   rm -rf "$STAGE"
 done
