@@ -935,8 +935,8 @@ struct MetalinkFile {
 
 fn attr_of(e: &quick_xml::events::BytesStart, name: &str) -> String {
     for a in e.attributes().flatten() {
-        if a.key.as_ref() == name.as_bytes() {
-            return String::from_utf8_lossy(a.value.as_ref()).into_owned();
+        if a.key.as_ref() == name {
+            return a.value.as_ref().to_string();
         }
     }
     String::new()
@@ -961,23 +961,23 @@ fn parse_metalink_xml(data: &str) -> Result<Vec<MetalinkFile>, String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Start(e)) => match e.name().as_ref() {
-                b"file" => {
+                "file" => {
                     cur = Some(MetalinkFile { name: String::new(), hashes: Vec::new(), urls: Vec::new() });
                 }
-                b"hash" => {
+                "hash" => {
                     if let Some(ce) = cur.as_mut() {
                         let _ = attr_of(&e, "type"); // type attr is informational here
                         ce.hashes.push((attr_of(&e, "type"), String::new()));
                         mode = Mode::HashVal;
                     }
                 }
-                b"url" => {
+                "url" => {
                     if let Some(ce) = cur.as_mut() {
                         ce.urls.push(String::new());
                         mode = Mode::UrlVal;
                     }
                 }
-                b"name" => {
+                "name" => {
                     if cur.is_some() {
                         mode = Mode::FileName;
                     }
@@ -985,7 +985,7 @@ fn parse_metalink_xml(data: &str) -> Result<Vec<MetalinkFile>, String> {
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(t)) => {
-                let s = String::from_utf8_lossy(t.as_ref()).into_owned();
+                let s = t.as_ref().to_string();
                 match mode {
                     Mode::FileName => {
                         if let Some(ce) = cur.as_mut() {
@@ -1010,8 +1010,8 @@ fn parse_metalink_xml(data: &str) -> Result<Vec<MetalinkFile>, String> {
                 }
             }
             Ok(quick_xml::events::Event::End(e)) => match e.name().as_ref() {
-                b"hash" | b"url" | b"name" => mode = Mode::None,
-                b"file" => {
+                "hash" | "url" | "name" => mode = Mode::None,
+                "file" => {
                     if let Some(mut ce) = cur.take() {
                         // Go drops empty <url/> elements; an empty URL would
                         // otherwise become a task and fail its probe.
