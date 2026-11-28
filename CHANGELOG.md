@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Full workspace test suite and clippy pass; six-target cross-build path and
   musl smoke test verified; WebSocket events, HTTP proxy, resume, checksum,
-  mirror, Metalink and RPC compared against the Go reference.
+  mirror, Metalink and RPC compared against the Go reference. The release
+  smoke workflow runs every published artifact on a matching hosted runner
+  (macOS Intel/arm64, Linux arm64/amd64, qemu for 32-bit Linux).
 
 ## [1.9.2] - 2026-10-17
 
