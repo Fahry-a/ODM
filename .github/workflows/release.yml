@@ -143,7 +143,7 @@ jobs:
 
       - name: Publish linux/386 to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_386.tar.gz
           owner: fahry-a
@@ -157,7 +157,7 @@ jobs:
 
       - name: Publish linux/amd64 to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_amd64.tar.gz
           owner: fahry-a
@@ -171,7 +171,7 @@ jobs:
 
       - name: Publish linux/arm to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_arm.tar.gz
           owner: fahry-a
@@ -185,7 +185,7 @@ jobs:
 
       - name: Publish linux/arm64 to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_linux_arm64.tar.gz
           owner: fahry-a
@@ -199,7 +199,7 @@ jobs:
 
       - name: Publish darwin/amd64 to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_darwin_amd64.tar.gz
           owner: fahry-a
@@ -213,7 +213,7 @@ jobs:
 
       - name: Publish darwin/arm64 to Foenui PM
         if: ${{ steps.foenui-pm.outputs.enabled == 'true' }}
-        uses: foenui/foenui-pm@ad543a9b29fad1a42f6399c6e0730e8eac56d03b
+        uses: foenui/foenui-pm-action@73cbb7296ad377688b3f3a19819a0825a6d38db9
         with:
           source: build/odm_${{ steps.tag.outputs.version }}_darwin_arm64.tar.gz
           owner: fahry-a
