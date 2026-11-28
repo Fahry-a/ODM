@@ -367,6 +367,7 @@ async fn run_rpc(o: &config::Options, logf: Option<download::LogFn>) -> Result<i
             h.graceful_shutdown(None);
         });
         axum_server::from_tcp_rustls(std_listener, cfg)
+            .map_err(|e| AppErr { code: exit_code::EXIT_GENERAL, msg: e.to_string() })?
             .handle(handle)
             .serve(app.into_make_service())
             .await
