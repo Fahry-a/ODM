@@ -233,12 +233,11 @@ fn drop_terminal_tasks(m: &mut HashMap<TaskID, Arc<Task>>, n: usize) {
 /// `verify_checksum` — shared checksum core: hash the file at path and
 /// compare against expect_hex.
 pub fn verify_checksum(path: &str, algo: &str, expect_hex: &str) -> Result<(), Error> {
-    use sha2::Digest;
-    use std::io::{Read, Write};
+    use std::io::Read;
 
     // Stream the file in 64 KiB blocks (Go's io.Copy) instead of loading the
-    // whole payload into RAM. Every hasher implements io::Write.
-    fn feed_file<H: Write>(path: &str, mut hasher: H) -> Result<H, Error> {
+    // whole payload into RAM.
+    fn feed_file(path: &str, mut consume: impl FnMut(&[u8])) -> Result<(), Error> {
         let mut file = std::fs::File::open(path).map_err(Error::from)?;
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -246,17 +245,29 @@ pub fn verify_checksum(path: &str, algo: &str, expect_hex: &str) -> Result<(), E
             if n == 0 {
                 break;
             }
-            hasher.write_all(&buf[..n]).map_err(Error::from)?;
+            consume(&buf[..n]);
         }
-        Ok(hasher)
+        Ok(())
     }
     fn hex_of(h: &[u8]) -> String {
         h.iter().map(|b| format!("{b:02x}")).collect()
     }
     let got = match algo.to_lowercase().as_str() {
-        "md5" => hex_of(&feed_file(path, md5::Context::new())?.compute().0),
-        "sha1" => hex_of(&feed_file(path, sha1::Sha1::new())?.finalize()),
-        "sha256" => hex_of(&feed_file(path, sha2::Sha256::new())?.finalize()),
+        "md5" => {
+            let mut h = md5::Context::new();
+            feed_file(path, |b| h.consume(b))?;
+            hex_of(&h.compute().0)
+        }
+        "sha1" => {
+            let mut h = <sha1::Sha1 as sha1::digest::Digest>::new();
+            feed_file(path, |b| sha1::digest::Digest::update(&mut h, b))?;
+            hex_of(&sha1::digest::Digest::finalize(h))
+        }
+        "sha256" => {
+            let mut h = <sha2::Sha256 as sha2::Digest>::new();
+            feed_file(path, |b| sha2::Digest::update(&mut h, b))?;
+            hex_of(&sha2::Digest::finalize(h))
+        }
         _ => return Err(Error::msg(format!("unsupported checksum algo {algo:?}"))),
     };
     // Go uses strings.EqualFold(got, strings.TrimSpace(expectHex)).
@@ -280,6 +291,7 @@ mod tests {
         let sha256 = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
         verify_checksum(p, "sha256", sha256).unwrap();
         verify_checksum(p, "SHA256", &sha256.to_uppercase()).unwrap();
+        verify_checksum(p, "sha1", "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed").unwrap();
         assert!(verify_checksum(p, "sha256", &"0".repeat(64)).is_err());
         let _ = std::fs::remove_file(path);
     }

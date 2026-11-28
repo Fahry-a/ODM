@@ -9,7 +9,7 @@ cc = "1"
 [dependencies]
 tokio = { version = "1", features = ["rt", "macros", "time", "sync", "io-util", "net"] }
 md5 = "0.8"
-sha1 = "0.10"
+sha1 = "0.11"
 # SHA-NI: Go's crypto/sha256 uses hardware SHA; software sha2 was ~2x slower.
 sha2 = { version = "0.10", features = ["asm"] }
 # Vendored so the musl release stays fully static. OpenSSL's assembly SHA-256
